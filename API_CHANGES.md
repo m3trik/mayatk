@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (823)
+## Moved out (836)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -284,6 +284,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/snap.py::SnapSlots.b002` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.b002_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.header_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.b000` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.list_template_modes` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.make_bridge` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.params_module` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.template_dir` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
 - `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
 - `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.analyze_hierarchies` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
 - `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.clear_ignored_paths` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
@@ -753,6 +759,13 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `ui_utils/calculator.py::CalculatorSlots.on_equal` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots.on_input` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots.sec_to_frames` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
+- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
+- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.b000` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
+- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.list_template_modes` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
+- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.make_bridge` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
+- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.open_uv_editor` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
+- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.params_module` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
+- `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.template_dir` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.align_u_avg` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.align_u_max` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
@@ -828,7 +841,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (257)
+## Added (263)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -889,6 +902,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/naming/_naming.py::Naming.select_by_name(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]`
 - `edit_utils/naming/_naming.py::Naming.select_link(cls, node: str) -> str`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `env_utils/blender_bridge/_blender_bridge.py::BlenderBridge.params_registry(cls)`
 - `env_utils/handoff_export.py::BridgeHost(class)`
 - `env_utils/handoff_export.py::BridgeHost.install_package(spec: str) -> None`
 - `env_utils/handoff_export.py::BridgeHost.resolve_scope(scope: str, bridge=None) -> List[str]`
@@ -1077,6 +1091,11 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/_uv_utils.py::UvUtils.rotate_uvs(cls, objects, angle: float) -> int`
 - `uv_utils/_uv_utils.py::UvUtils.straighten_uv_shells(cls, objects) -> int`
 - `uv_utils/_uv_utils.py::UvUtils.straighten_uvs(cls, objects, u: bool = True, v: bool = True, angle: float = 30.0) -> int`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.list_template_modes(self) -> 'list[tuple[str, str]]'`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.pack_into_existing(self, objects, params=None)`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.params_registry(cls)`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.referenced_keys(self, script_text: str) -> 'set[str]'`
+- `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.run_preset(self, objects, preset: str, params=None)`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.leaf_name(node) -> str`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.material_faces(inputs: CombineInputs, material) -> List[str]`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.select(nodes) -> int`

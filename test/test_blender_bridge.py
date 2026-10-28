@@ -87,6 +87,17 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
             ("round_trip",),
         )
 
+    def test_the_panel_reads_its_folder_and_registry_off_the_engine(self):
+        """tentacle's Blender Bridge lists ``TEMPLATE_DIR`` and builds its rows from
+        ``params_registry()``; the engine's defaults read the same registry."""
+        from mayatk.env_utils.blender_bridge import parameters as P
+
+        self.assertEqual(BlenderBridge.TEMPLATE_DIR, _TEMPLATE_DIR)
+        self.assertIs(BlenderBridge.params_registry(), P.Parameters)
+        defaults = BlenderBridge().params_defaults()
+        for key, value in P.Parameters.defaults().items():
+            self.assertEqual(defaults[key], value, key)
+
     def test_mode_vocabulary_comes_from_pythontk(self):
         """The bridge names no mode string of its own.
 

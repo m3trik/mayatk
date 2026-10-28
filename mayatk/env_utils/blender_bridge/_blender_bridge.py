@@ -35,9 +35,9 @@ no platform: FBX -> Unity and GLB -> web (``ptk.MeshConvert.apply_glb_lightmaps`
 committed state on their own, with no knowledge of the bake; the Maya viewport deliberately shows
 nothing (the commit builds no file node). Instances are first-class -- each copy is baked
 separately and its atlas rect rides per TRANSFORM as the engine's ``lightmapScaleOffset`` binding,
-so the scene's instancing survives untouched. Co-located with its panel
-(``blender_bridge_slots.BlenderBridgeSlots`` + ``blender_bridge.ui``) under ``env_utils``;
-discovered by :class:`mayatk.ui_utils.MayaUiHandler`. ``import maya.cmds`` is deferred so resolving
+so the scene's instancing survives untouched. Its panel is tentacle's Blender Bridge (a Maya
+tool, ``slots/tools/blender_bridge.py``), which reads :meth:`BlenderBridge.params_registry` and
+:attr:`BlenderBridge.TEMPLATE_DIR` off this engine. ``import maya.cmds`` is deferred so resolving
 the package surface never needs a running Maya.
 """
 
@@ -215,6 +215,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
     spec = _SPEC
     run_spec = _RUN_SPEC
+    #: The template folder (``templates/*.py``, both specs' ``template_dir``): what
+    #: tentacle's Blender Bridge lists, reads each template's rows from, and opens.
+    TEMPLATE_DIR = _TEMPLATE_DIR
     # Both carriers: Blender reads USD natively (the receiving templates route on
     # the payload's extension). FBX first -- the shipped default; USD is the
     # opt-in parallel, refused for an instanced selection (the mixin's
@@ -243,6 +246,17 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         self.app_path = value
 
     # ------------------------------------------------------------------ parameter bindings
+    @classmethod
+    def params_registry(cls):
+        """The parameter registry (``parameters.Parameters``, a
+        ``uitk.bridge.ParamRegistry``): what tentacle's Blender Bridge builds its rows
+        from, and :meth:`params_defaults` / :meth:`render_context` read. Imported on
+        use: the registry is uitk's, and the engine surface imports without it (a
+        headless run has no Qt, so both readers fall back without it)."""
+        from mayatk.env_utils.blender_bridge import parameters as _params
+
+        return _params.Parameters
+
     def params_defaults(self) -> Dict[str, Any]:
         # DEFAULTS is the render-context SSoT; the widget specs are the PANEL SUBSET of
         # it. API-only parameters (the bake's resolution/samples/denoise/device
@@ -250,16 +264,14 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         # no widget, so they still substitute into every template. The overlay keeps a
         # spec-side default authoritative for keys that have a widget.
         try:
-            from mayatk.env_utils.blender_bridge import parameters as _params
+            registry = self.params_registry()
         except ImportError:  # no Qt -- see DEFAULTS
             return dict(DEFAULTS)
-        return {**DEFAULTS, **_params.Parameters.defaults()}
+        return {**DEFAULTS, **registry.defaults()}
 
     def render_context(self, params: Dict[str, Any]) -> Dict[str, str]:
         try:
-            from mayatk.env_utils.blender_bridge import parameters as _params
-
-            context = _params.Parameters.render_context(params)
+            context = self.params_registry().render_context(params)
         except ImportError:  # no Qt -- pythontk's plain Python-literal formatting
             context = super().render_context(params)
         # Blender ignores PYTHONPATH, so the launched child cannot import blendertk

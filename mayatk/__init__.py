@@ -167,8 +167,8 @@ DEFAULT_INCLUDE = {
     # FbxUtils (mirrored by blendertk's ``env_utils.usd``: mtk.UsdUtils ↔
     # btk.UsdUtils). Zero-dep USDZ packaging composes pythontk's UsdzPackager.
     "env_utils.usd": "UsdUtils",
-    # Blender bridge engine — one-way send of the selection to a fresh Blender (the
-    # ``BlenderBridgeSlots`` panel class is discovered by MayaUiHandler, not registered).
+    # Blender bridge engine — one-way send of the selection to a fresh Blender (its panel
+    # is tentacle's Maya-only Blender Bridge tool).
     # Counterpart of blendertk's ``MayaBridge``.
     "env_utils.blender_bridge._blender_bridge": "BlenderBridge",
     # Pull direction — import a .blend into the CURRENT Maya scene via a headless
@@ -613,6 +613,14 @@ MOVED_NAMES = {
     ),
     "SubstanceBridgeSlots": (
         "tentacle.slots.tools.substance_bridge.SubstanceBridgeSlots",
+        "0.30.0",
+    ),
+    "RizomBridgeSlots": (
+        "tentacle.slots.tools.rizom_bridge.RizomBridgeSlots",
+        "0.30.0",
+    ),
+    "BlenderBridgeSlots": (
+        "tentacle.slots.tools.blender_bridge.BlenderBridgeSlots",
         "0.30.0",
     ),
 }

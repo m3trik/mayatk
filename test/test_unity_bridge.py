@@ -310,18 +310,6 @@ class TestUnityScopeResolution(MayaTkTestCase):
             scope, UnityBridge() if bridge is _MISSING else bridge
         )
 
-    def test_resolver_is_shared_not_per_bridge(self):
-        """Every Maya bridge slot not yet moved inherits the ONE resolver."""
-        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
-        from mayatk.env_utils.blender_bridge.blender_bridge_slots import (
-            BlenderBridgeSlots,
-        )
-        from mayatk.uv_utils.rizom_bridge.rizom_bridge_slots import RizomBridgeSlots
-
-        shared = MayaBridgeSlotsBase.resolve_scope_objects
-        for slots in (BlenderBridgeSlots, RizomBridgeSlots):
-            self.assertIs(slots.resolve_scope_objects, shared, slots.__name__)
-
     def test_unknown_scope_falls_back_to_selection(self):
         """An unrecognised scope must never silently widen the send."""
         cmds.polyCube()

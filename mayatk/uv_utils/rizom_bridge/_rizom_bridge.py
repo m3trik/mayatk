@@ -88,6 +88,17 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
     #: binds the module-level spec (class bodies fall back to globals on the RHS).
     APP = APP
 
+    #: The bundled Lua presets (``scripts/*.lua``): what tentacle's RizomUV Bridge
+    #: lists and opens as its templates. Not the ``templates/`` folder, which holds
+    #: what a preset is spliced into (the run wrappers and the shared includes).
+    SCRIPT_DIR = _SCRIPT_DIR
+    #: The preset that opens the selection in RizomUV one way
+    #: (:meth:`send_to_rizomuv`) instead of a round trip.
+    SEND_PRESET = "send"
+    #: The preset that packs the selection INTO the layout its material(s) define
+    #: (:meth:`pack_into_existing`).
+    PACK_INTO_EXISTING_PRESET = "pack_into_existing"
+
     # Namespace the round-trip FBX is imported into; created fresh per run
     # and removed again during cleanup.
     _IMPORT_NAMESPACE = "RizomUVImport"
@@ -1374,6 +1385,122 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                         cmds.delete(node)
                 except Exception as node_err:  # noqa: BLE001
                     self.logger.warning(f"Could not delete {label} {node}: {node_err}")
+
+    # ------------------------------------------------------------------
+    # The panel's surface (tentacle's RizomUV Bridge calls these)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def params_registry(cls):
+        """The parameter registry (``parameters.Parameters``, a
+        ``uitk.bridge.ParamRegistry``): what tentacle's RizomUV Bridge builds its
+        rows from. Imported on use, as the round trip always did: the registry is
+        uitk's."""
+        from mayatk.uv_utils.rizom_bridge import parameters as _params
+
+        return _params.Parameters
+
+    def referenced_keys(self, script_text: str) -> "set[str]":
+        """The parameter keys *script_text* exposes on the installed RizomUV.
+
+        Includes expand first, then what this version cannot run is stripped (the
+        send's own step), then the ``__KEY__`` scan: a token that lives only inside
+        an include (``__PACK_BLOCK__``) is not in the raw preset, so stripping first
+        left it for the scan to re-surface. The rows a preset shows in the panel
+        are these -- never a knob the send would silently drop.
+        """
+        registry = self.params_registry()
+        return registry.referenced_keys(
+            registry.strip_unsupported(
+                registry.expand_includes(script_text), self.rizom_version
+            )
+        )
+
+    def list_template_modes(self) -> "list[tuple[str, str]]":
+        """``[(preset, ""), ...]`` for every bundled preset the installed RizomUV runs.
+
+        Rizom has no per-template mode, so each mode is ``""`` (the panel's combo
+        shows the bare stem). A preset whose ``@min_rizom`` marker is above the
+        installed version is left out: the gate :meth:`process_with_rizomuv`
+        enforces (``unwrap_hybrid`` needs 2022's segmenter pair).
+        """
+        version = self.rizom_version
+        registry = self.params_registry()
+        pairs = []
+        for path in sorted(self.SCRIPT_DIR.glob("*.lua")):
+            required = registry.preset_min_version(path.read_text(encoding="utf-8"))
+            if required and version < required:
+                continue
+            pairs.append((path.stem, ""))
+        return pairs
+
+    def run_preset(self, objects, preset: str, params=None):
+        """Run *preset* on *objects*: what the RizomUV Bridge's Process does.
+
+        ``send`` opens them in RizomUV one way (:meth:`send_to_rizomuv`),
+        ``pack_into_existing`` packs them into their material's layout
+        (:meth:`pack_into_existing`), and any other preset is the headless round
+        trip (:meth:`process_with_rizomuv`).
+
+        Parameters:
+            objects: What to run on, as the panel's Scope resolved it
+                (components name the UV shells to move).
+            preset: A bundled preset's name (a ``scripts/*.lua`` stem).
+            params: Placeholder values (the panel's parameter rows).
+        """
+        count = self._object_count(objects)
+        self.logger.info(f"--- {preset} on {count} object(s) ---")
+        if preset == self.SEND_PRESET:
+            return self.send_to_rizomuv(objects, params=params)
+        if preset == self.PACK_INTO_EXISTING_PRESET:
+            return self.pack_into_existing(objects, params=params)
+        return self.process_with_rizomuv(objects, preset=preset, params=params)
+
+    def pack_into_existing(self, objects, params=None):
+        """Pack *objects* into the empty space of the layout their material(s) define.
+
+        The processed set widens to every mesh sharing those materials
+        (:meth:`expand_by_materials`: the material defines "the map"), and only
+        *objects* move: their islands, or just the shells a component selection
+        names. The layout's other shells stay where they are and are
+        packed around, at its texel density.
+
+        Logs a warning and runs nothing when there is no layout to pack into: no
+        other mesh shares the materials, and no shell selection leaves part of an
+        object behind.
+
+        Parameters:
+            objects: The meshes to pack in
+                (components name the UV shells to move).
+            params: Placeholder values (see :meth:`process_with_rizomuv`).
+        """
+        all_objects, new_objects = self.expand_by_materials(objects)
+        # A component selection leaves its meshes' other shells in the layout;
+        # process_with_rizomuv refuses one that leaves none.
+        partial = any("." in str(item) for item in ptk.make_iterable(objects))
+        if len(all_objects) <= len(new_objects) and not partial:
+            self.logger.warning(
+                "No other meshes share the selection's material(s) -- there is no "
+                "existing layout to pack into. Use the 'pack' preset instead."
+            )
+            return None
+        self.logger.info(
+            "Packing the selection into the layout of the "
+            f"{len(all_objects)} mesh(es) sharing its material(s)."
+        )
+        return self.process_with_rizomuv(
+            all_objects,
+            preset=self.PACK_INTO_EXISTING_PRESET,
+            params=params,
+            select_objects=objects,
+        )
+
+    @staticmethod
+    def _object_count(objects) -> int:
+        """Distinct nodes, not entries: a component selection arrives as several
+        range entries per object (``cube.map[0:3]``, ``cube.map[8:11]``)."""
+        names = {str(item).split(".", 1)[0] for item in ptk.make_iterable(objects)}
+        return len(names)
 
     @staticmethod
     def expand_by_materials(objects) -> "tuple[list[str], list[str]]":

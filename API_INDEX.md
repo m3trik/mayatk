@@ -454,16 +454,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - constants: DEFAULTS
 - `class BlenderBridge(MayaExportMixin, pythontk.ScriptLaunchBridge)`
-  - methods: blender_path, params_defaults, render_context, bake_lightmaps, default_output_path, reassemble_lightmaps, list_templates, template_modes, list_template_modes, template_path, template_output_ext, template_output_mode, template_timeout
+  - methods: blender_path, params_registry, params_defaults, render_context, bake_lightmaps, default_output_path, reassemble_lightmaps, list_templates, template_modes, list_template_modes, template_path, template_output_ext, template_output_mode, template_timeout
 
 ### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
 - constants: BAKE_CACHE_KIND, BAKE_INFO_SOURCE, BAKE_INFO_KEY, SUPPORTED_EXTENSIONS, GLTF_EXTENSIONS, CONVERTIBLE_EXTENSIONS, BAKE_SOURCE_EXTENSIONS, BAKE_SOURCE_SUFFIX, USD_EXTENSIONS
 - `class BlenderSceneImport(pythontk.LoggingMixin, _BlenderSceneImportInternal)`
   - methods: blender_path, require_blender, find_scenes, scene_has_complex_animation, render_script, convert, import_scene, import_payload, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_dir, bake_slot, bake_info, bake_source, stamp_bake_info, rehome_bake, purge_unused_bakes, collapse_nested_levels
-
-### `env_utils/blender_bridge/blender_bridge_slots.py` — Slots for the Blender bridge panel.
-- `class BlenderBridgeSlots(MayaBridgeSlotsBase)`
-  - methods: params_module, template_dir, make_bridge, list_template_modes, b000
 
 ### `env_utils/blender_bridge/parameters.py` — Registry of user-tunable Blender-bridge parameters exposed to the panel.
 - constants: PARAMS
@@ -1090,16 +1086,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP
 - `class RizomUVBridge(pythontk.LoggingMixin, _RizomUVBridgeInternal)`
-  - methods: rizom_path, rizom_version, export_path, script_path, process_with_rizomuv, expand_by_materials, send_to_rizomuv
+  - methods: rizom_path, rizom_version, export_path, script_path, process_with_rizomuv, params_registry, referenced_keys, list_template_modes, run_preset, pack_into_existing, expand_by_materials, send_to_rizomuv
 
 ### `uv_utils/rizom_bridge/parameters.py` — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 - constants: PARAMS, DERIVED_KEYS, HOST_TOKEN_DEFAULTS, MIN_VERSIONS, FBX_USE_UV_SET_NAMES_MIN_VERSION
 - `class Parameters(ParamRegistry)`
   - methods: expand_includes, preset_min_version, referenced_keys, derived_values, render_context, strip_unsupported
-
-### `uv_utils/rizom_bridge/rizom_bridge_slots.py` — Slots for the RizomUV bridge panel.
-- `class RizomBridgeSlots(MayaBridgeSlotsBase)`
-  - methods: params_module, template_dir, make_bridge, list_template_modes, b000, open_uv_editor
 
 ### `uv_utils/texture_combine/texture_combine.py` — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
 - `class CombineInputs`
