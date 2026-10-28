@@ -2061,5 +2061,40 @@ class TestConvertReferencesToAssemblies(unittest.TestCase):
         self.assertEqual(ref_engine.cmds.ls(type="reference"), [])
 
 
+class TestSelectedReferencePaths(unittest.TestCase):
+    """``selected_reference_paths``: the files behind the selected references -- what
+    the Mesh Converter's "From FBX references" toggle reads."""
+
+    def setUp(self):
+        self._store = ptk.TempArtifacts("mtk_rm_selected_refs", policy="scoped")
+        self.asset = os.path.join(self._store.dir_path(), "asset.ma")
+        TestImportReferencesNamespaceModes._author_asset(self.asset)
+        ref_engine.cmds.file(self.asset, reference=True, namespace="ASSET")
+
+    def tearDown(self):
+        ref_engine.cmds.file(new=True, force=True)
+        self._store.cleanup()
+
+    @staticmethod
+    def _norm(paths):
+        return [os.path.normcase(os.path.normpath(p)) for p in paths]
+
+    def test_a_selected_referenced_node_names_its_file(self):
+        ref_engine.cmds.select("ASSET:asset_child")
+        self.assertEqual(
+            self._norm(ref_mgr.ReferenceManager.selected_reference_paths()),
+            self._norm([self.asset]),
+        )
+        self.assertEqual(
+            ref_mgr.ReferenceManager.selected_reference_paths((".fbx",)), []
+        )
+
+    def test_local_nodes_and_an_empty_selection_name_nothing(self):
+        ref_engine.cmds.select(ref_engine.cmds.polyCube(name="local_cube")[0])
+        self.assertEqual(ref_mgr.ReferenceManager.selected_reference_paths(), [])
+        ref_engine.cmds.select(clear=True)
+        self.assertEqual(ref_mgr.ReferenceManager.selected_reference_paths(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

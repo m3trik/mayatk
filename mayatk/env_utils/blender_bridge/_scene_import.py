@@ -407,6 +407,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
     Scriptable and synchronous; async affordances belong to the calling UI layer.
     """
 
+    #: The scene files this engine converts (Blender's own): what an Import Blender
+    #: Scene browser offers. Twin of blendertk's ``MayaSceneImport.SCENE_EXTENSIONS``.
+    SCENE_EXTENSIONS = SUPPORTED_EXTENSIONS
+
     def __init__(
         self,
         blender_path: Optional[str] = None,

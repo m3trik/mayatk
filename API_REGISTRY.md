@@ -1213,6 +1213,7 @@ Transform diagnostics and repair helpers.
 
 - **[`class TransformDiagnostics(_TransformDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/transform_diag.py#L108)** — Operations for inspecting and fixing common transform issues.
   - `TransformDiagnostics.get_sheared(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None) -> List[str]` *(class)* — Return the transforms carrying their own shear.
+  - `TransformDiagnostics.transforms_in_scope(scope: str = 'selection') -> List[str]` *(static)* — The transforms a check covers, as long names: ``"selection"`` -- the
   - `TransformDiagnostics.get_non_orthogonal(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, detailed: bool = False) -> Union[List[str], Dict[str, dict]]` *(class)* — Return the transforms whose evaluated (world) axes are not perpendicular.
   - `TransformDiagnostics.get_non_orthogonal_local(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, frames: Optional[Sequence[float]] = None) -> Dict[str, float]` *(class)* — Return ``{transform: worst skew}`` for PARENT-RELATIVE axes that are
   - `TransformDiagnostics.fix_non_orthogonal_axes(cls, objects: Optional[NodeSeq] = None, dry_run: bool = False, tolerance: Optional[float] = None, quiet: bool = False, break_connections: bool = False, instance_strategy: str = 'preserve', delete_history: bool = False) -> List[str]` *(class)* — Fix non-orthogonal axes by freezing the offending transforms.
@@ -1739,6 +1740,13 @@ Target Weld: Maya's Merge Vertex Tool, set up to drag one vertex onto another.
   - `EnvUtils.list_references(cls, top_level: bool = True) -> list` *(class)* — The file behind each reference in the current Maya scene.
   - `EnvUtils.export_scene_as_fbx(file_path: str = None, *, selection_only: bool = False, **fbx_options: Any) -> None` *(static)* — Export the Maya scene as an FBX file with flexible MEL command options.
   - `EnvUtils.export_scene_as_obj(file_path: str = None, *, selection_only: bool = False, materials: bool = True, smoothing: bool = True, normals: bool = True, groups: bool = True) -> str` *(static)* — Export the Maya scene as a Wavefront OBJ.
+  - `EnvUtils.open_scene(path: str) -> bool` *(static)* — Open *path* in place of the current scene, its unsaved changes discarded
+  - `EnvUtils.foreign_scene_bridge()` *(static)* — The hand-off bridge CLASS that writes the other DCC's native scene:
+  - `EnvUtils.foreign_scene_import()` *(static)* — The engine CLASS that pulls a file into this scene through the other DCC:
+  - `EnvUtils.get_file_commands(cls, direction: str = 'import') -> List[str]` *(class)* — The names of Maya's own import (*direction* ``"import"``) or export
+  - `EnvUtils.run_file_command(cls, name: str) -> None` *(class)* — Run Maya's own import / export command *name* (:meth:`get_file_commands`):
+  - `EnvUtils.scene_triangle_count(selection_only: bool = False) -> int` *(static)* — Triangles in the scene's meshes -- or, *selection_only*, in the selected
+  - `EnvUtils.export_scene(cls, file_path: str, file_format: str = 'fbx', *, selection_only: bool = False, include_cameras: bool = False, include_lights: bool = False, include_skins: bool = False, include_tangents: bool = True, embed_textures: bool = True, progress=None) -> str` *(class)* — Write the scene, or the selection, to *file_path* in *file_format*: the
   - `EnvUtils.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `EnvUtils.resolve_file_path_in_workspaces(selected_file: str, workspace_files: dict) -> Optional[str]` *(static)* — Resolve a file name to its full path by searching in workspace files.
   - `EnvUtils.get_workspace_file_cache(cls, workspaces: list, recursive: bool = True) -> dict` *(class)* — Build a cache of workspace files for multiple workspaces.
@@ -2240,6 +2248,7 @@ Reference Manager engine — Maya file references, assemblies and workspaces.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
 - **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L393)** — Maya's Reference Manager engine: the workspace's scene files, the scene's
+  - `ReferenceManager.selected_reference_paths(cls, extensions=None) -> List[str]` *(class)* — The files behind the selected objects' references, each once, in selection
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool` — Reference *file_path* under *namespace* (sanitized;

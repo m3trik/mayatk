@@ -437,6 +437,41 @@ class ReferenceManager(
     _progress = None
     _report = None
 
+    @classmethod
+    def selected_reference_paths(cls, extensions=None) -> List[str]:
+        """The files behind the selected objects' references, each once, in selection
+        order -- what the Mesh Converter's "From FBX references" toggle reads. A
+        reference reading a bake (a foreign row's, a multi-take FBX's) answers its
+        bake's source (:meth:`bake_source`). Twin of blendertk's (linked libraries).
+
+        Parameters:
+            extensions (tuple): Keep only files with these extensions
+                (``(".fbx",)``); None keeps every one.
+
+        Returns:
+            (list): Paths; ``[]`` when nothing selected is referenced.
+        """
+        wanted = tuple(ext.lower() for ext in extensions) if extensions else None
+        paths = []
+        for node in cmds.ls(selection=True, long=True, objectsOnly=True) or []:
+            try:  # a component, a non-DAG node: referenceQuery raises
+                if not cmds.referenceQuery(node, isNodeReferenced=True):
+                    continue
+                path = (
+                    cmds.referenceQuery(node, filename=True, withoutCopyNumber=True)
+                    or ""
+                )
+            except RuntimeError:
+                continue
+            path = cls.bake_source(path) or path
+            if (
+                path
+                and (wanted is None or path.lower().endswith(wanted))
+                and path not in paths
+            ):
+                paths.append(path)
+        return paths
+
     def __init__(
         self,
         log_level="WARNING",

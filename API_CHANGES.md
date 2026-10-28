@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (454)
+## Added (463)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1057,6 +1057,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `core_utils/components.py::Components.toggle_normal_lock(objects) -> Optional[bool]`
 - `core_utils/components.py::Components.transfer(cls, objects, transfer_type: str)`
 - `core_utils/diagnostics/mesh_diag.py::MeshDiagnostics.cleanup_meshes(cls, scope: str = 'selected', repair: bool = False, *, checks=(), area_tolerance: float = 1e-05, edge_length_tolerance: float = 1e-05, uv_area_tolerance: float = 1e-05, merge_vertices: bool = False, merge_distance: float = 0.0001, delete_history: bool = False, delete_loose: bool = False, dissolve_degenerate: bool = False, recalculate_normals: bool = False, fill_holes: bool = False, overlapping_faces: bool = False, overlapping_objects: bool = False, omit_selected: bool = False) -> dict`
+- `core_utils/diagnostics/transform_diag.py::TransformDiagnostics.transforms_in_scope(scope: str = 'selection') -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.clear_xray(cls) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_component_ids() -> Optional[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_normals_display() -> Optional[str]`
@@ -1122,11 +1123,18 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/target_weld.py::TargetWeld(class)`
 - `edit_utils/target_weld.py::TargetWeld.activate(merge_to_center: bool = False) -> bool`
 - `env_utils/_env_utils.py::EnvUtils.autosave_settings() -> Dict[str, float]`
+- `env_utils/_env_utils.py::EnvUtils.export_scene(cls, file_path: str, file_format: str = 'fbx', *, selection_only: bool = False, include_cameras: bool = False, include_lights: bool = False, include_skins: bool = False, include_tangents: bool = True, embed_textures: bool = True, progress=None) -> str`
+- `env_utils/_env_utils.py::EnvUtils.foreign_scene_bridge()`
+- `env_utils/_env_utils.py::EnvUtils.foreign_scene_import()`
 - `env_utils/_env_utils.py::EnvUtils.frame_rates() -> Dict[str, float]`
+- `env_utils/_env_utils.py::EnvUtils.get_file_commands(cls, direction: str = 'import') -> List[str]`
 - `env_utils/_env_utils.py::EnvUtils.get_linear_unit() -> str`
 - `env_utils/_env_utils.py::EnvUtils.is_workspace(path: str) -> bool`
+- `env_utils/_env_utils.py::EnvUtils.open_scene(path: str) -> bool`
 - `env_utils/_env_utils.py::EnvUtils.python_executable() -> Optional[str]`
+- `env_utils/_env_utils.py::EnvUtils.run_file_command(cls, name: str) -> None`
 - `env_utils/_env_utils.py::EnvUtils.scene_status() -> Dict[str, Any]`
+- `env_utils/_env_utils.py::EnvUtils.scene_triangle_count(selection_only: bool = False) -> int`
 - `env_utils/_env_utils.py::EnvUtils.set_autosave_settings(max_backups: Optional[int] = None, interval: Optional[float] = None) -> None`
 - `env_utils/_env_utils.py::EnvUtils.set_linear_unit(unit: str) -> str`
 - `env_utils/blender_bridge/_blender_bridge.py::BlenderBridge.params_registry(cls)`
@@ -1180,6 +1188,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `env_utils/reference_manager/_reference_manager.py::ReferenceManager.save_scene(self, path: str) -> str`
 - `env_utils/reference_manager/_reference_manager.py::ReferenceManager.scene_has_complex_animation(path: str) -> bool`
 - `env_utils/reference_manager/_reference_manager.py::ReferenceManager.scene_modified(self) -> bool`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.selected_reference_paths(cls, extensions=None) -> List[str]`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.edit_fbx_preset(self, preset: Optional[str] = None) -> None`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.fbx_preset_dir(self) -> Optional[str]`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.fbx_preset_metadata(self, preset: Optional[str]) -> Dict[str, str]`

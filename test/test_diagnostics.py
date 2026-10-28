@@ -916,5 +916,39 @@ class TestCleanupMeshes(MayaTkTestCase):
         )
 
 
+class TestTransformsInScope(MayaTkTestCase):
+    """``transforms_in_scope``: what the Scene panel's Fix Non-Orthogonal Axes checks."""
+
+    def test_a_component_selection_checks_its_object(self):
+        cube = cmds.polyCube(name="scope_cube")[0]
+        other = cmds.polyCube(name="scope_other")[0]
+        cmds.select(f"{cube}.f[0]")
+        self.assertEqual(
+            TransformDiagnostics.transforms_in_scope("selection"),
+            cmds.ls(cube, long=True),
+        )
+        everything = TransformDiagnostics.transforms_in_scope("all")
+        self.assertTrue(set(cmds.ls([cube, other], long=True)) <= set(everything))
+
+    def test_nothing_selected_is_empty_and_a_bad_scope_raises(self):
+        cmds.select(clear=True)
+        self.assertEqual(TransformDiagnostics.transforms_in_scope("selection"), [])
+        with self.assertRaises(ValueError):
+            TransformDiagnostics.transforms_in_scope("visible")
+
+
+class TestFixNonOrthogonalAxesUndo(MayaTkTestCase):
+    """``fix_non_orthogonal_axes`` is ONE undo step: one Ctrl+Z puts the shear back."""
+
+    def test_one_undo_restores_the_shear(self):
+        cube = cmds.polyCube(name="undo_sheared")[0]
+        cmds.setAttr(f"{cube}.shearXY", 0.5)
+        cmds.undoInfo(state=True, infinity=True)
+        TransformDiagnostics.fix_non_orthogonal_axes([cube], quiet=True)
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal([cube]), [])
+        cmds.undo()
+        self.assertTrue(TransformDiagnostics.get_non_orthogonal(cmds.ls(cube)))
+
+
 if __name__ == "__main__":
     unittest.main()

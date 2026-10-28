@@ -257,7 +257,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `core_utils/diagnostics/transform_diag.py` — Transform diagnostics and repair helpers.
 - `class TransformDiagnostics(_TransformDiagnosticsInternal)`
-  - methods: get_sheared, get_non_orthogonal, get_non_orthogonal_local, fix_non_orthogonal_axes
+  - methods: get_sheared, transforms_in_scope, get_non_orthogonal, get_non_orthogonal_local, fix_non_orthogonal_axes
 
 ### `core_utils/diagnostics/uv_diag.py` — UV diagnostics and repair helpers.
 - `class UvSetCleanupResult`
@@ -399,7 +399,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, get_linear_unit, set_linear_unit, frame_rates, autosave_settings, set_autosave_settings, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, python_executable, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_status, scene_settings, apply_scene_settings, find_workspace_using_path, is_workspace, current_workspace, set_current_workspace, workspace_root, set_scene_source, twin_save_target, scene_source, scene_project_root, scene_workspace, scene_source_images_dir, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, clear_orphan_foster_parents, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, get_linear_unit, set_linear_unit, frame_rates, autosave_settings, set_autosave_settings, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, python_executable, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_status, scene_settings, apply_scene_settings, find_workspace_using_path, is_workspace, current_workspace, set_current_workspace, workspace_root, set_scene_source, twin_save_target, scene_source, scene_project_root, scene_workspace, scene_source_images_dir, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, clear_orphan_foster_parents, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, open_scene, foreign_scene_bridge, foreign_scene_import, get_file_commands, run_file_command, scene_triangle_count, export_scene, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - constants: DEFAULTS
@@ -553,7 +553,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class AssemblyManager`
   - methods: current_references, create_assembly_definition, set_active_representation, convert_references_to_assemblies
 - `class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`
-  - methods: current_references, sanitize_namespace, add_reference, follow_bake_sources, purge_unused_bakes, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references, is_foreign, needs_conversion, scene_has_complex_animation, find_foreign_scenes, bake_scene, import_scene, bake_project_root, foreign_scratch_path, discard_stale_scratches, current_scene, scene_modified, save_open_scene, save_scene, new_scene, is_current, open_scene, rename_scene_file, remove_scene_file, bake_source, row_key
+  - methods: selected_reference_paths, current_references, sanitize_namespace, add_reference, follow_bake_sources, purge_unused_bakes, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references, is_foreign, needs_conversion, scene_has_complex_animation, find_foreign_scenes, bake_scene, import_scene, bake_project_root, foreign_scratch_path, discard_stale_scratches, current_scene, scene_modified, save_open_scene, save_scene, new_scene, is_current, open_scene, rename_scene_file, remove_scene_file, bake_source, row_key
 
 ### `env_utils/scene_exporter/_scene_exporter.py`
 - `class SceneExporter(pythontk.SceneExporterBase)`

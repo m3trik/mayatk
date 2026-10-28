@@ -153,6 +153,25 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
             return ""
         return " — baked scale ({:.4g}, {:.4g}, {:.4g})".format(*scale)
 
+    @staticmethod
+    def transforms_in_scope(scope: str = "selection") -> List[str]:
+        """The transforms a check covers, as long names: ``"selection"`` -- the
+        selected objects, a component or shape standing for its transform (so a
+        component selection checks the object it is on); ``"all"`` -- every
+        transform in the scene, what FBX export sees. Twin of blendertk's.
+
+        Raises:
+            ValueError: Any other *scope*.
+        """
+        if scope == "all":
+            return cmds.ls(transforms=True, long=True) or []
+        if scope == "selection":
+            selected = cmds.ls(selection=True, objectsOnly=True, long=True) or []
+            if not selected:
+                return []
+            return cmds.ls(NodeUtils.list_transforms(selected), long=True) or []
+        raise ValueError(f"Unknown scope {scope!r}: expected 'selection' or 'all'.")
+
     @classmethod
     def get_non_orthogonal(
         cls,

@@ -1307,5 +1307,203 @@ class TestPythonExecutable(MayaTkTestCase):
         self.assertTrue(os.path.isfile(path), path)
 
 
+class TestOpenScene(MayaTkTestCase):
+    """``open_scene``: the open the Scene panel's Recent Files and Autosave rows run."""
+
+    def test_a_saved_scene_opens_and_a_missing_one_does_not(self):
+        import pythontk as ptk
+
+        store = ptk.TempArtifacts.scoped("mtk_open_scene_test")
+        self.addCleanup(store.cleanup)
+        path = os.path.join(store.dir_path(), "opened.ma")
+        cmds.polyCube(name="open_scene_cube")
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        self.assertTrue(EnvUtils.open_scene(path))
+        self.assertTrue(cmds.objExists("open_scene_cube"))
+        self.assertFalse(EnvUtils.open_scene(os.path.join(store.dir_path(), "gone.ma")))
+        self.assertFalse(EnvUtils.open_scene(""))
+
+
+class TestSceneFileCommands(MayaTkTestCase):
+    """``get_file_commands`` / ``run_file_command``: Maya's own import / export
+    commands, by the names the Scene panel lists them under."""
+
+    def test_maya_s_lists_and_the_windows_only_sends(self):
+        self.assertEqual(
+            EnvUtils.get_file_commands("import")[:2], ["Import File", "Import Options"]
+        )
+        with unittest.mock.patch.object(sys, "platform", "linux"):
+            linux = EnvUtils.get_file_commands("export")
+        with unittest.mock.patch.object(sys, "platform", "win32"):
+            windows = EnvUtils.get_file_commands("export")
+        self.assertIn("Export Selection", linux)
+        self.assertNotIn("GoZ", linux)
+        self.assertIn("GoZ", windows)
+
+    def test_an_unknown_direction_or_name_is_a_value_error(self):
+        with self.assertRaises(ValueError):
+            EnvUtils.get_file_commands("sideways")
+        with self.assertRaises(ValueError):
+            EnvUtils.run_file_command("Import Nothing")
+
+    def test_a_command_runs_its_mel(self):
+        with unittest.mock.patch("mayatk.env_utils._env_utils.mel") as mel:
+            EnvUtils.run_file_command("Export All")
+        mel.eval.assert_called_once_with("Export")
+
+    def test_a_preset_editor_whose_plugin_will_not_load_says_so(self):
+        with unittest.mock.patch(
+            "mayatk.env_utils._env_utils.Plugins.load",
+            side_effect=RuntimeError("not installed"),
+        ), unittest.mock.patch("mayatk.env_utils._env_utils.mel") as mel:
+            with self.assertRaises(RuntimeError) as caught:
+                EnvUtils.run_file_command("FBX Import Presets")
+            mel.eval.assert_not_called()
+        self.assertIn("fbxmaya", str(caught.exception))
+
+    def test_export_selection_opens_without_the_fbx_plugin(self):
+        with unittest.mock.patch(
+            "mayatk.env_utils._env_utils.Plugins.load",
+            side_effect=RuntimeError("not installed"),
+        ), unittest.mock.patch("mayatk.env_utils._env_utils.mel") as mel:
+            EnvUtils.run_file_command("Export Selection")
+        mel.eval.assert_called_once_with("ExportSelection")
+
+
+class TestSceneTriangleCount(MayaTkTestCase):
+    """``scene_triangle_count``: what the Scene panel's dense-export warning weighs."""
+
+    def test_the_scene_and_the_selection(self):
+        cube = cmds.polyCube(name="tri_cube")[0]
+        cmds.polyCube(name="tri_other")
+        cmds.select(cube)
+        self.assertEqual(EnvUtils.scene_triangle_count(selection_only=True), 12)
+        self.assertEqual(EnvUtils.scene_triangle_count(), 24)
+        cmds.select(clear=True)
+        self.assertEqual(EnvUtils.scene_triangle_count(selection_only=True), 0)
+
+
+class TestForeignScene(MayaTkTestCase):
+    """``foreign_scene_bridge`` / ``foreign_scene_import``: the other DCC is Blender."""
+
+    def test_the_bridge_and_the_pull_engine(self):
+        from mayatk.env_utils.blender_bridge._blender_bridge import BlenderBridge
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        self.assertIs(EnvUtils.foreign_scene_bridge(), BlenderBridge)
+        self.assertEqual(BlenderBridge.spec.app.name, "Blender")
+        self.assertIs(EnvUtils.foreign_scene_import(), BlenderSceneImport)
+        self.assertEqual(BlenderSceneImport.SCENE_EXTENSIONS, (".blend",))
+
+
+class TestExportScene(MayaTkTestCase):
+    """``export_scene``: Export Scene's writer, one route per format."""
+
+    OPTIONS = dict(
+        include_cameras=True,
+        include_lights=True,
+        include_skins=True,
+        include_tangents=True,
+        embed_textures=False,
+    )
+
+    def setUp(self):
+        super().setUp()
+        import pythontk as ptk
+
+        self.ptk = ptk
+        self.store = ptk.TempArtifacts.scoped("mtk_export_scene_test")
+        self.addCleanup(self.store.cleanup)
+        self.out = os.path.join(self.store.dir_path(), "asset.glb")
+        self.fbx = []
+
+    def _write_fbx(self, file_path, **_):
+        self.fbx.append(file_path)
+        with open(file_path, "w") as fh:
+            fh.write("fbx")
+
+    @staticmethod
+    def _convert(src, **_):
+        glb = os.path.splitext(src)[0] + ".glb"
+        with open(glb, "w") as fh:
+            fh.write("glb")
+        return glb
+
+    def _glb_patches(self, stack, write=None):
+        """Stand in for the FBX write, the conversion and the record staging."""
+        import contextlib
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        stack.enter_context(
+            unittest.mock.patch.object(
+                EnvUtils, "export_scene_as_fbx", new=write or self._write_fbx
+            )
+        )
+        stack.enter_context(
+            unittest.mock.patch.object(
+                self.ptk.MeshConvert, "fbx_to_glb", new=self._convert
+            )
+        )
+        return stack.enter_context(
+            unittest.mock.patch.object(
+                FbxUtils,
+                "export_prepared",
+                return_value=contextlib.nullcontext(),
+            )
+        )
+
+    def test_an_unknown_format_is_a_value_error(self):
+        with self.assertRaises(ValueError):
+            EnvUtils.export_scene(self.out, "abc")
+
+    def test_obj_writes_the_file(self):
+        cmds.polyCube(name="obj_scene_cube")
+        out = os.path.join(self.store.dir_path(), "scene.obj")
+        self.assertEqual(EnvUtils.export_scene(out, "obj"), out)
+        self.assertTrue(os.path.isfile(out))
+
+    def test_the_glb_intermediate_fbx_folder_is_gone_after_a_good_export(self):
+        """Regression (2026-10-13): the intermediate came from a detached store that
+        nothing released, so every GLB export left a full-scene FBX in temp."""
+        import contextlib
+
+        with contextlib.ExitStack() as stack:
+            prepared = self._glb_patches(stack)
+            EnvUtils.export_scene(self.out, "glb", **self.OPTIONS)
+        prepared.assert_called_once_with(only=[self.ptk.SceneRecords.MATERIALS])
+        self.assertTrue(os.path.isfile(self.out))
+        self.assertEqual(len(self.fbx), 1)
+        self.assertNotEqual(os.path.dirname(self.fbx[0]), os.path.dirname(self.out))
+        self.assertFalse(os.path.exists(os.path.dirname(self.fbx[0])))
+
+    def test_a_selection_glb_gives_the_selection_back(self):
+        """The carrier rides the write, then the user's selection is theirs again.
+        Regression (2026-10-24): ``data_export`` stayed selected after the export."""
+        import contextlib
+
+        cube = cmds.polyCube(name="glb_sel_geo")[0]
+        carrier = cmds.createNode("transform", name="glb_sel_carrier")
+        cmds.select(cube, replace=True)
+        selected_at_write = []
+
+        def write(file_path, **_):
+            selected_at_write.extend(cmds.ls(selection=True))
+            self._write_fbx(file_path)
+
+        with contextlib.ExitStack() as stack:
+            self._glb_patches(stack, write=write)
+            stack.enter_context(
+                unittest.mock.patch.object(
+                    DataNodes, "get_export_nodes", return_value=[carrier]
+                )
+            )
+            EnvUtils.export_scene(self.out, "glb", selection_only=True, **self.OPTIONS)
+        self.assertEqual(sorted(selected_at_write), sorted([cube, carrier]))
+        self.assertEqual(cmds.ls(selection=True), [cube])
+
+
 if __name__ == "__main__":
     unittest.main()
