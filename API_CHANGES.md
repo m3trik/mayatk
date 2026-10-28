@@ -2,8 +2,17 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (222)
+## Moved out (237)
 
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.b000` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.b001` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.b003` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.chk001` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.header_init` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.refresh` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.refresh_from_scene` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.store` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin.export` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/header_menu.py::HeaderMenuMixin` → `tentacle.slots.tools._shot_manifest.header_menu.HeaderMenuMixin` (from 0.30.0)
@@ -76,6 +85,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_extra` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_missing` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/view_combos.py::ViewCombosMixin` → `tentacle.slots.tools._shot_manifest.view_combos.ViewCombosMixin` (from 0.30.0)
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.b000` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.b001` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.cmb_backup_init` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.cmb_scope_init` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.header_init` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots.b000` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots.b001` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
@@ -227,10 +242,15 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008_init` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 
-## Added (54)
+## Added (59)
 
+- `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.select_clip_objects(self, clip_id: int) -> List[str]`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.stash_from(self, source: str) -> Optional[StashedClip]`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.watch_undo(cls, owner, widget=None) -> List[int]`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.behaviors_cls()`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.range_resolver_cls()`
+- `anim_utils/smart_bake/_smart_bake.py::BakeResult.describe(self) -> List[str]`
 - `core_utils/_core_utils.py::CoreUtils.selected_objects() -> List[str]`
 - `core_utils/components.py::Components.reverse_normals(cls, objects, mode: int = 0) -> None`
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`

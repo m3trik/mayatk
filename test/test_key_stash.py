@@ -11,6 +11,7 @@ persistence channel never touches the shot store's.
 """
 
 import unittest
+from unittest import mock
 
 import maya.cmds as cmds
 import maya.mel as mel
@@ -21,6 +22,7 @@ from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.anim_utils.key_stash._key_stash import KeyStash
 from mayatk.anim_utils.shots._shots import MayaScenePersistence, ShotStore
 from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.node_utils.data_nodes import DataNodes
 
 KEYS = [(1, 0.0), (10, 5.0), (20, 10.0), (30, 15.0), (40, 20.0)]
@@ -630,6 +632,79 @@ class KeyStashTestCase(MayaTkTestCase):
             AnimUtils.get_selected_key_times(), {self.curve: [10.0, 20.0, 30.0]}
         )
         self.assertEqual(AnimUtils.get_selected_key_times(curves=[]), {})
+
+    # ---- the Key Stash panel's API -----------------------------------------
+
+    def test_stash_from_the_playback_range_takes_the_selected_objects_keys(self):
+        cmds.select(self.cube)
+        cmds.playbackOptions(minTime=10, maxTime=30)
+        clip = KeyStash.active().stash_from("playback_range")
+        self.assertEqual((clip.start, clip.end, clip.key_count), (10.0, 30.0, 3))
+        self.assertEqual(self._times(), [1.0, 40.0])
+
+    def test_stash_from_the_selected_keys(self):
+        cmds.selectKey(clear=True)
+        cmds.selectKey(self.curve, time=(10, 20), add=True)
+        clip = KeyStash.active().stash_from("selected_keys")
+        self.assertEqual(clip.key_count, 2)
+        self.assertEqual(self._times(), [1.0, 30.0, 40.0])
+
+    def test_stash_from_refuses_what_the_scene_cannot_answer_yet(self):
+        store = KeyStash.active()
+        cmds.select(clear=True)
+        with self.assertRaisesRegex(ValueError, "Select the object"):
+            store.stash_from("playback_range")
+        # No drag-selected range on the time slider (no slider at all in mayapy).
+        cmds.select(self.cube)
+        with self.assertRaisesRegex(ValueError, "Drag-select a range"):
+            store.stash_from("timeline_selection")
+        with self.assertRaisesRegex(ValueError, "source must be one of"):
+            store.stash_from("everything")
+        self.assertEqual(store.clips, [])
+        self.assertEqual(len(self._times()), len(KEYS))
+
+    def test_select_clip_objects_selects_what_still_exists(self):
+        clip = self._stash_range()
+        cmds.select(clear=True)
+        self.assertEqual(
+            KeyStash.active().select_clip_objects(clip.clip_id), clip.objects
+        )
+        self.assertEqual(cmds.ls(selection=True), [self.cube])
+        sphere = cmds.polySphere(name="other")[0]
+        cmds.select(sphere)
+        cmds.delete(self.cube)
+        self.assertEqual(KeyStash.active().select_clip_objects(clip.clip_id), [])
+        self.assertEqual(cmds.ls(selection=True), [sphere], "selection untouched")
+        with self.assertRaises(KeyError):
+            KeyStash.active().select_clip_objects(999)
+
+    def test_watch_undo_subscribes_the_store_to_undo_and_redo(self):
+        """The subscriptions re-ask for the store, which re-reads a record an
+        undo moved (test_undoing_* above); an event a build lacks is skipped."""
+        owner, widget = object(), object()
+        jobs = mock.MagicMock()
+        jobs.subscribe.side_effect = [11, 12]
+        with mock.patch.object(ScriptJobManager, "instance", return_value=jobs):
+            tokens = KeyStash.watch_undo(owner=owner, widget=widget)
+        self.assertEqual(tokens, [11, 12])
+        self.assertEqual(
+            [c.args for c in jobs.subscribe.call_args_list],
+            [("Undo", KeyStash.active), ("Redo", KeyStash.active)],
+        )
+        self.assertTrue(
+            all(c.kwargs["owner"] is owner for c in jobs.subscribe.call_args_list)
+        )
+        jobs.connect_cleanup.assert_called_once_with(widget, owner=owner)
+
+        jobs = mock.MagicMock()
+        jobs.subscribe.side_effect = [RuntimeError("no such event"), 12]
+        with mock.patch.object(ScriptJobManager, "instance", return_value=jobs):
+            self.assertEqual(KeyStash.watch_undo(owner=owner), [12])
+        jobs.connect_cleanup.assert_not_called()
+
+    def test_get_current_frame_reads_the_time_slider(self):
+        cmds.currentTime(12)
+        self.assertEqual(AnimUtils.get_current_frame(), 12.0)
 
 
 if __name__ == "__main__":

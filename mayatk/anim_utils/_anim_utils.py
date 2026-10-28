@@ -1022,6 +1022,16 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         )
 
     @staticmethod
+    def get_current_frame() -> float:
+        """The time slider's current frame: the read :meth:`set_current_frame`
+        pairs with. Twin of blendertk's ``AnimUtils.get_current_frame``.
+
+        Returns:
+            float: The current time, in frames.
+        """
+        return AnimUtils._get_current_frame()
+
+    @staticmethod
     def set_current_frame(
         time: Optional[float] = None,
         update: bool = True,

@@ -3,8 +3,9 @@
 """Structural + file-scope test for the Naming panel (naming.ui + NamingSlots).
 
 Mocked ``maya.cmds`` (this dir's conftest) + a real ``Switchboard`` /
-``MayaUiHandler`` load through real (offscreen) Qt — the convention of
-test_smart_bake_panel.py. Exercises the header Scope combo (Selection / Scene /
+``MayaUiHandler`` load through real (offscreen) Qt — this directory's
+convention: real Maya and real Qt widgets in one process crash natively.
+Exercises the header Scope combo (Selection / Scene /
 Directory / Files) + Dry Run / Base Names toggles, the output pane wiring (the
 engine's report lands in ``txt002``), the suffix-by-type option box (19 fields
 from the shared table), the footer Apply button a dry run arms, and the

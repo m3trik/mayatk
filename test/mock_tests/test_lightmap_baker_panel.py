@@ -3,9 +3,8 @@
 """Structural load test for the Lightmap Baker panel (lightmap_baker.ui + slots).
 
 Mocked ``maya.cmds`` (this dir's conftest) + a real ``Switchboard`` /
-``MayaUiHandler`` load through real (offscreen) Qt -- the convention
-``test_smart_bake_panel.py`` documents: real Maya and real Qt widgets in one
-process crash natively.
+``MayaUiHandler`` load through real (offscreen) Qt -- this directory's
+convention: real Maya and real Qt widgets in one process crash natively.
 
 What it is here for: the panel's four booleans are option-box switches
 (``LightmapBakerSlots._TOGGLES``), and hanging one WRAPS its field -- the

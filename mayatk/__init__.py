@@ -52,8 +52,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.shots._detection": "Detection",
     "anim_utils.shots.shot_manifest.manifest_host": "ManifestHost",
     # Key stash — key clips parked out of the working animation (Maya adapter
-    # over ``ptk.KeyStash``). The co-located ``KeyStashSlots`` panel is
-    # discovered by ``MayaUiHandler``, not registered here.
+    # over ``ptk.KeyStash``); its panel is tentacle's shared Key Stash tool.
     "anim_utils.key_stash._key_stash": "KeyStash",
     "anim_utils.blendshape_animator._blendshape_animator": "BlendshapeAnimator",
     # Playblast exporter engine + its result records. Class-only (no "*"): the
@@ -427,6 +426,14 @@ MOVED_NAMES = {
     ),
     "ImageToPlaneSlots": (
         "tentacle.slots.tools.image_to_plane.ImageToPlaneSlots",
+        "0.30.0",
+    ),
+    "KeyStashSlots": (
+        "tentacle.slots.tools.key_stash.KeyStashSlots",
+        "0.30.0",
+    ),
+    "SmartBakeSlots": (
+        "tentacle.slots.tools.smart_bake.SmartBakeSlots",
         "0.30.0",
     ),
 }

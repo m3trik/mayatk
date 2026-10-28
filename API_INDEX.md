@@ -8,7 +8,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `anim_utils/_anim_utils.py` — ``AnimUtils`` -- the public index of mayatk's key and curve operations.
 - constants: STANDARD_TRANSFORM_ATTRS
 - `class AnimUtils(_AnimUtilsInternal, pythontk.HelpMixin)`
-  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_key_curves, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, euler_filter, shift_key_values, clear_key_selection, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer, resolve_keys, tangent_half, exact_scale, move_curve_keys, hold_segments
+  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_key_curves, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, get_current_frame, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, euler_filter, shift_key_values, clear_key_selection, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer, resolve_keys, tangent_half, exact_scale, move_curve_keys, hold_segments
 
 ### `anim_utils/_tied_keys.py` — Bookend (tied) keys behind :class:`mayatk.AnimUtils`.
 - constants: TIED_KEYS_ATTR
@@ -55,11 +55,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/key_stash/_key_stash.py` — Key Stash — park keyframes outside the working animation, retrieve later (Maya).
 - `class KeyStash(pythontk.core_utils.engines.key_stash.key_stash_model.KeyStash, _KeyStashInternal)`
-  - methods: active, reconcile, merge_carrier, discard_carrier, stash, retrieve, drop, preview, end_preview
-
-### `anim_utils/key_stash/key_stash_slots.py` — Slots for the Key Stash panel (key_stash.ui).
-- `class KeyStashSlots(pythontk.LoggingMixin)`
-  - methods: header_init, store, refresh, refresh_from_scene, b000, b001, chk001, b003
+  - methods: active, watch_undo, reconcile, merge_carrier, discard_carrier, stash, retrieve, drop, stash_from, select_clip_objects, preview, end_preview
 
 ### `anim_utils/playblast_exporter.py` — Playblast capture, encoding, and preview-render exports for Maya.
 - `class PlayblastExporter(pythontk.SequenceExporter)`
@@ -191,7 +187,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BakeAnalysis`
   - methods: requires_bake, all_driven_channels
 - `class BakeResult`
-  - methods: skip, declined, baked_count, success
+  - methods: skip, declined, baked_count, success, describe
 - `class SmartBake(_SmartBakeInternal)`
   - methods: analyze, get_time_range, get_object_time_ranges, bake, execute, list_sessions, restore, restore_matrix_wiring, fold_offsets, session, run
 
@@ -199,10 +195,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BakeSessionStore(_BakeSessionStoreInternal)`
   - methods: load, save, push, peek, pop, list_ids, merge_carrier, discard_carrier, new_session_id, node_ref, resolve_ref, plug_ref, resolve_plug, stash_curve, unstash_curve, discard_stash, collect_upstream_curves, trace_source, reconnect, snapshot_connections, snapshot_conversions, remove_override_layer, restore_session
 - `class RestoreResult`
-
-### `anim_utils/smart_bake/smart_bake_slots.py` — Slots for the Smart Bake tool panel (smart_bake.ui).
-- `class SmartBakeSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: cmb_scope_init, cmb_backup_init, header_init, b000, b001
 
 ### `anim_utils/stagger_keys.py` — Dedicated stagger-keys module to keep AnimUtils lean and testable.
 - `class StaggerKeys`

@@ -28,6 +28,11 @@ class _TimelineInternal:
         )
 
     @staticmethod
+    def _get_current_frame():
+        """Body of :meth:`AnimUtils.get_current_frame`."""
+        return float(cmds.currentTime(query=True))
+
+    @staticmethod
     def _set_current_frame(time, update, relative, snap_mode, invert_snap):
         """Body of :meth:`AnimUtils.set_current_frame`."""
         current_time = cmds.currentTime(query=True)

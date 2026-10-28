@@ -177,10 +177,6 @@ GUI_REQUIRED = {
         "drives the shadow_rig panel's Preview (Qt) end to end; the Preview "
         "class itself native-crashes mayapy (see test_preview)"
     ),
-    "test_key_stash_panel": (
-        "loads the key_stash panel through MayaUiHandler, whose construction "
-        "needs a GUI Maya (see test_maya_ui_handler)"
-    ),
     "test_articulated_rig_panel": (
         "loads the articulated_rig panel; its uitk TableWidget hard-crashes "
         "mayapy (see test_texture_combine_panel)"

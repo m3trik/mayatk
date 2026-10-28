@@ -17,7 +17,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/blendshape_animator/target.py`](#anim_utils--blendshape_animator--target) — Tween mesh wrappers and registry for blendShape in-between targets.
 - [`anim_utils/blendshape_animator/validator.py`](#anim_utils--blendshape_animator--validator) — Mesh and blendShape validation for blendShape animation setup.
 - [`anim_utils/key_stash/_key_stash.py`](#anim_utils--key_stash--_key_stash) — Key Stash — park keyframes outside the working animation, retrieve later (Maya).
-- [`anim_utils/key_stash/key_stash_slots.py`](#anim_utils--key_stash--key_stash_slots) — Slots for the Key Stash panel (key_stash.ui).
 - [`anim_utils/playblast_exporter.py`](#anim_utils--playblast_exporter) — Playblast capture, encoding, and preview-render exports for Maya.
 - [`anim_utils/scale_keys.py`](#anim_utils--scale_keys) — Dedicated scale-keys module to keep AnimUtils lean and testable.
 - [`anim_utils/segment_keys.py`](#anim_utils--segment_keys)
@@ -48,7 +47,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/shots/shots_slots.py`](#anim_utils--shots--shots_slots) — Switchboard slots for the Shots settings UI.
 - [`anim_utils/smart_bake/_smart_bake.py`](#anim_utils--smart_bake--_smart_bake) — Smart bake module for intelligent pre-bake animation processing.
 - [`anim_utils/smart_bake/bake_session.py`](#anim_utils--smart_bake--bake_session) — Persistence and restore engine for SmartBake's nondestructive manifest.
-- [`anim_utils/smart_bake/smart_bake_slots.py`](#anim_utils--smart_bake--smart_bake_slots) — Slots for the Smart Bake tool panel (smart_bake.ui).
 - [`anim_utils/stagger_keys.py`](#anim_utils--stagger_keys) — Dedicated stagger-keys module to keep AnimUtils lean and testable.
 - [`anim_utils/world_fit_bake.py`](#anim_utils--world_fit_bake) — World-fitted transform bake: reparent nodes under a chosen target and key the
 - [`audio_utils/_audio_utils.py`](#audio_utils--_audio_utils) — Unified audio system for Maya scenes.
@@ -260,7 +258,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L256) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L255) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -293,6 +291,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
   - `AnimUtils.get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]` *(static)* — Get tangent information (types, angles, weights and lock) for a given attribute at a specific time.
   - `AnimUtils.set_tangent_info(attr_name: str, time: float, tangent_info: Dict[str, Any]) -> None` *(static)* — Restore tangent information on a keyframe.
   - `AnimUtils.step_keys(objects=None, keys=None, tangent: str = 'out', resolution_order: Optional[Tuple[str, ...]] = None) -> dict` *(static)* — Set stepped tangents on animation keys.
+  - `AnimUtils.get_current_frame() -> float` *(static)* — The time slider's current frame: the read :meth:`set_current_frame`
   - `AnimUtils.set_current_frame(time: Optional[float] = None, update: bool = True, relative: bool = False, snap_mode: Optional[str] = None, invert_snap: bool = False) -> float` *(static)* — Set the current frame on the timeslider with optional snapping.
   - `AnimUtils.move_keys_to_frame(objects=None, frame=None, time_range=None, selected_keys_only=False, retain_spacing=False, channel_box_attrs_only=False, align: str = 'auto', on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None)` *(static)* — Move keyframes to the given frame with comprehensive control options.
   - `AnimUtils.set_keys_for_attributes(objects, target_times=None, refresh_channel_box=False, **kwargs)` *(static)* — Sets keyframes for the specified attributes on given objects at given times.
@@ -471,31 +470,19 @@ Mesh and blendShape validation for blendShape animation setup.
 
 Key Stash — park keyframes outside the working animation, retrieve later (Maya).
 
-- **[`class KeyStash(pythontk.core_utils.engines.key_stash.key_stash_model.KeyStash, _KeyStashInternal)`](mayatk/mayatk/anim_utils/key_stash/_key_stash.py#L237)** — :class:`pythontk.KeyStash` with the scene side bound to Maya.
+- **[`class KeyStash(pythontk.core_utils.engines.key_stash.key_stash_model.KeyStash, _KeyStashInternal)`](mayatk/mayatk/anim_utils/key_stash/_key_stash.py#L238)** — :class:`pythontk.KeyStash` with the scene side bound to Maya.
   - `KeyStash.active(cls) -> 'KeyStash'` *(class)* — The active store, auto-installing the Maya backend once.
+  - `KeyStash.watch_undo(cls, owner, widget=None) -> List[int]` *(class)* — Keep the loaded store in step with undo and redo, for *owner*.
   - `KeyStash.reconcile(self) -> List[int]` — Bring the record in line with the scene.
   - `KeyStash.merge_carrier(cls, carriers, other, ctx) -> None` *(class)* — Another scene's parked clips merged into the record: reload the
   - `KeyStash.discard_carrier(cls, carriers, other, ctx) -> None` *(class)* — Another scene's parked clips were dropped: delete their parked
   - `KeyStash.stash(self, objects: Optional[Sequence[str]] = None, time_range: Optional[Tuple[float, float]] = None, selected_keys: bool = False, attributes: Optional[Sequence[str]] = None, label: Optional[str] = None, source_shot_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None, targets: Optional[Sequence[Tuple[str, Any, float, float]]] = None) -> Optional[StashedClip]` — Move keys off the working animation into a stored clip.
   - `KeyStash.retrieve(self, clip_id: int, at: Optional[float] = None, mode: str = 'merge', target: Optional[str] = None) -> int` — Put a stored clip's keys back and forget the clip.
   - `KeyStash.drop(self, clip_id: int) -> None` — Discard a stored clip and delete its stash nodes.
+  - `KeyStash.stash_from(self, source: str) -> Optional[StashedClip]` — :meth:`stash` the keys one of :attr:`STASH_SOURCES` names, read
+  - `KeyStash.select_clip_objects(self, clip_id: int) -> List[str]` — Select a stored clip's objects that still exist, replacing the
   - `KeyStash.preview(self, clip_id: int, in_context: bool = True, set_playback_range: bool = True) -> str` — Play a stored clip on its objects without retrieving it.
   - `KeyStash.end_preview(self) -> bool` — Tear the preview layer down and restore the time slider.
-
-<a id="anim_utils--key_stash--key_stash_slots"></a>
-### `anim_utils/key_stash/key_stash_slots.py`
-
-Slots for the Key Stash panel (key_stash.ui).
-
-- **[`class KeyStashSlots(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/key_stash/key_stash_slots.py#L19)** — Controller wiring key_stash.ui to the :class:`KeyStash` store.
-  - `KeyStashSlots.header_init(self, widget) -> None` — Configure header buttons, the refresh action and the help text.
-  - `KeyStashSlots.store(self) -> KeyStash` *(property)* — The active store, (re)bound to this panel's change listener.
-  - `KeyStashSlots.refresh(self) -> None` — Repaint the clip list from the store.
-  - `KeyStashSlots.refresh_from_scene(self) -> None` — Header refresh: prune clips whose stash nodes are gone, then repaint.
-  - `KeyStashSlots.b000(self) -> None` — Store Keys
-  - `KeyStashSlots.b001(self) -> None` — Retrieve
-  - `KeyStashSlots.chk001(self, checked: bool) -> None` — Preview (toggle)
-  - `KeyStashSlots.b003(self) -> None` — Drop
 
 <a id="anim_utils--playblast_exporter"></a>
 ### `anim_utils/playblast_exporter.py`
@@ -943,7 +930,8 @@ Smart bake module for intelligent pre-bake animation processing.
   - `BakeResult.declined(self) -> Dict[str, str]` *(property)* — ``{object: reason}`` for the objects SmartBake REFUSED or failed to
   - `BakeResult.baked_count(self) -> int` *(property)* — Number of objects successfully baked.
   - `BakeResult.success(self) -> bool` *(property)* — Return True if any objects were baked.
-- **[`class SmartBake(_SmartBakeInternal)`](mayatk/mayatk/anim_utils/smart_bake/_smart_bake.py#L1042)** — Intelligent baking with automatic detection of what needs to be baked.
+  - `BakeResult.describe(self) -> List[str]` — What the bake did, one line per fact, for a report (the Smart Bake
+- **[`class SmartBake(_SmartBakeInternal)`](mayatk/mayatk/anim_utils/smart_bake/_smart_bake.py#L1081)** — Intelligent baking with automatic detection of what needs to be baked.
   - `SmartBake.analyze(self) -> Dict[str, BakeAnalysis]` — Analyze objects to determine what needs baking.
   - `SmartBake.get_time_range(self, analysis: Optional[Dict[str, BakeAnalysis]] = None) -> Tuple[int, int]` — Determine optimal bake time range from driver animation.
   - `SmartBake.get_object_time_ranges(self, analysis: Dict[str, BakeAnalysis], fallback: Tuple[int, int]) -> Dict[str, Tuple[int, int]]` — The frames each driven object in *analysis* actually needs sampled.
@@ -986,18 +974,6 @@ Persistence and restore engine for SmartBake's nondestructive manifest.
   - `BakeSessionStore.remove_override_layer(session: dict, layer: Optional[str] = None, warnings: Optional[List[str]] = None) -> Optional[str]` *(static)* — Delete a bake's override layer and put back the conversions it hid.
   - `BakeSessionStore.restore_session(session: dict) -> 'RestoreResult'` *(static)* — Reverse everything recorded in *session*.
 - **[`class RestoreResult`](mayatk/mayatk/anim_utils/smart_bake/bake_session.py#L1110)** — Result container for ``SmartBake.restore()``.
-
-<a id="anim_utils--smart_bake--smart_bake_slots"></a>
-### `anim_utils/smart_bake/smart_bake_slots.py`
-
-Slots for the Smart Bake tool panel (smart_bake.ui).
-
-- **[`class SmartBakeSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/anim_utils/smart_bake/smart_bake_slots.py#L18)** — Controller wiring smart_bake.ui to the SmartBake engine.
-  - `SmartBakeSlots.cmb_scope_init(self, widget) -> None`
-  - `SmartBakeSlots.cmb_backup_init(self, widget) -> None`
-  - `SmartBakeSlots.header_init(self, widget) -> None` — Configure header menu, refresh button, and help text.
-  - `SmartBakeSlots.b000(self, widget) -> None` — Bake.
-  - `SmartBakeSlots.b001(self, widget) -> None` — Unbake.
 
 <a id="anim_utils--stagger_keys"></a>
 ### `anim_utils/stagger_keys.py`

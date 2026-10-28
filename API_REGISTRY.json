@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 256,
+          "line": 255,
           "deprecated": false
         }
       ]
@@ -259,12 +259,21 @@
               "deprecated": false
             },
             {
+              "name": "get_current_frame",
+              "qualname": "AnimUtils.get_current_frame",
+              "kind": "staticmethod",
+              "signature": "() -> float",
+              "summary": "The time slider's current frame: the read :meth:`set_current_frame`",
+              "line": 1025,
+              "deprecated": false
+            },
+            {
               "name": "set_current_frame",
               "qualname": "AnimUtils.set_current_frame",
               "kind": "staticmethod",
               "signature": "(time: Optional[float] = None, update: bool = True, relative: bool = False, snap_mode: Optional[str] = None, invert_snap: bool = False) -> float",
               "summary": "Set the current frame on the timeslider with optional snapping.",
-              "line": 1025,
+              "line": 1035,
               "deprecated": false
             },
             {
@@ -273,7 +282,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, frame=None, time_range=None, selected_keys_only=False, retain_spacing=False, channel_box_attrs_only=False, align: str = 'auto', on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None)",
               "summary": "Move keyframes to the given frame with comprehensive control options.",
-              "line": 1056,
+              "line": 1066,
               "deprecated": false
             },
             {
@@ -282,7 +291,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_times=None, refresh_channel_box=False, **kwargs)",
               "summary": "Sets keyframes for the specified attributes on given objects at given times.",
-              "line": 1111,
+              "line": 1121,
               "deprecated": false
             },
             {
@@ -291,7 +300,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[Union[str, List[str]]] = None, keys: Optional[List[str]] = None) -> List[str]",
               "summary": "Filter the given objects for those with specific keys set.",
-              "line": 1153,
+              "line": 1163,
               "deprecated": false
             },
             {
@@ -300,7 +309,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the scene contains any time-based animation a playblast would capture.",
-              "line": 1169,
+              "line": 1179,
               "deprecated": false
             },
             {
@@ -309,7 +318,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, spacing: int = 1, time: Optional[int] = 0, relative: bool = True, preserve_keys: bool = False, selected_keys_only: bool = False, exact_gap: bool = False, prevent_collisions: bool = True, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None)",
               "summary": "Adjusts the spacing between keyframes for specified objects at a given time,",
-              "line": 1190,
+              "line": 1200,
               "deprecated": false
             },
             {
@@ -318,7 +327,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, percent: Optional[float] = None, include_flat: bool = False, ignore: Union[str, List[str], None] = None) -> None",
               "summary": "Keys selected or animated attributes on given object(s) within a time range.",
-              "line": 1258,
+              "line": 1268,
               "deprecated": false
             },
             {
@@ -327,7 +336,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], time_range: Optional[Union[int, Tuple[int, int]]] = None, ignore: Union[str, List[str], None] = None, attributes: Union[str, List[str], None] = None, on_delete: Optional[Callable[[str, List[float]], Any]] = None) -> int",
               "summary": "Removes all intermediate keyframes, keeping only the first and last key on each attribute.",
-              "line": 1291,
+              "line": 1301,
               "deprecated": false
             },
             {
@@ -336,7 +345,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, time=None, relative=True, delete_original=False, mode='horizontal', value_pivot=0.0, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None)",
               "summary": "Invert keyframes, preferring selected keys over all keys.",
-              "line": 1346,
+              "line": 1356,
               "deprecated": false
             },
             {
@@ -345,7 +354,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, target_frame: Optional[float] = None, use_earliest: bool = True, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None) -> bool",
               "summary": "Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.",
-              "line": 1416,
+              "line": 1426,
               "deprecated": false
             },
             {
@@ -354,7 +363,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, visible: bool = True, when: str = 'start', offset: int = 0, group_overlapping: bool = False, on_replace: Optional[Callable[[str, List[float]], Any]] = None) -> int",
               "summary": "Sets visibility keyframes for objects with options for timing and grouping.",
-              "line": 1471,
+              "line": 1481,
               "deprecated": false
             },
             {
@@ -363,7 +372,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, method: str = 'nearest', selected_only: bool = False, time_range: Optional[Tuple[float, float]] = None, include_driven: bool = False, through_blends: bool = True, on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None) -> int",
               "summary": "Snaps keyframes with decimal time values to whole frame numbers.",
-              "line": 1529,
+              "line": 1539,
               "deprecated": false
             },
             {
@@ -372,7 +381,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None)",
               "summary": "Transfer keyframes from the first selected object to the subsequent objects.",
-              "line": 1599,
+              "line": 1609,
               "deprecated": false
             },
             {
@@ -381,7 +390,7 @@
               "kind": "staticmethod",
               "signature": "(time: Union[None, int, str, Tuple, List]) -> Union[Tuple[float, float], None, List]",
               "summary": "Parse time specification into a time range tuple for keyframe operations.",
-              "line": 1635,
+              "line": 1645,
               "deprecated": false
             },
             {
@@ -390,7 +399,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, *attributes, time=None, channel_box_only=False, on_delete: Optional[Callable[[str, List[float]], Any]] = None)",
               "summary": "Deletes keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 1686,
+              "line": 1696,
               "deprecated": false
             },
             {
@@ -399,7 +408,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, *attributes: str, time: Union[None, int, str, Tuple, List] = None, channel_box_only: bool = False, add_to_selection: bool = False) -> int",
               "summary": "Selects keyframes for specified attributes on given objects, optionally within a time range.",
-              "line": 1748,
+              "line": 1758,
               "deprecated": false
             },
             {
@@ -408,7 +417,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], precision: Optional[int] = None, gap: Optional[int] = None) -> Dict[str, List[Tuple[int, int]]]",
               "summary": "Calculate frame ranges for a list of objects based on their keyframes.",
-              "line": 1813,
+              "line": 1823,
               "deprecated": false
             },
             {
@@ -417,7 +426,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List[str]] = None, tolerance: float = 1e-05) -> Dict[str, Dict[str, List[float]]]",
               "summary": "Detects tied (bookend) keyframes for given objects.",
-              "line": 1846,
+              "line": 1856,
               "deprecated": false
             },
             {
@@ -426,7 +435,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]], times: Iterable[float], tolerance: float = 0.0001, report: bool = False)",
               "summary": "Insert keys at *times* WITHOUT changing what any curve evaluates to.",
-              "line": 1896,
+              "line": 1906,
               "deprecated": false
             },
             {
@@ -435,7 +444,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None, absolute: bool = False, padding: int = 0, custom_range: Optional[Tuple[float, float]] = None)",
               "summary": "Ties the keyframes of all given objects (or all keyed objects in the scene if none are provided)",
-              "line": 1973,
+              "line": 1983,
               "deprecated": false
             },
             {
@@ -444,7 +453,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str] = None, on_delete: Optional[Callable[[str, List[float]], Any]] = None) -> Dict[str, Dict[str, List[float]]]",
               "summary": "Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.",
-              "line": 2028,
+              "line": 2038,
               "deprecated": false
             },
             {
@@ -453,7 +462,7 @@
               "kind": "staticmethod",
               "signature": "(name: str = 'AnimLayer', override: bool = True, additive: bool = False, attributes: Optional[List[str]] = None, objects: Optional[List[str]] = None, weight: float = 1.0, mute: bool = False, solo: bool = False, lock: bool = False, preferred: bool = True, parent: Optional[str] = None, unique_name: bool = True, timestamp_suffix: bool = False, color: Optional[Tuple[float, float, float]] = None) -> str",
               "summary": "Create an animation layer with flexible configuration options.",
-              "line": 2064,
+              "line": 2074,
               "deprecated": false
             },
             {
@@ -462,7 +471,7 @@
               "kind": "staticmethod",
               "signature": "(include_base: bool = False, muted_only: bool = False, active_only: bool = False) -> List[str]",
               "summary": "Get all animation layers in the scene.",
-              "line": 2161,
+              "line": 2171,
               "deprecated": false
             },
             {
@@ -471,7 +480,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None, tangent_detail: bool = False) -> Dict[str, Dict[str, Any]]",
               "summary": "Copy attribute values from objects for later pasting as keys.",
-              "line": 2181,
+              "line": 2191,
               "deprecated": false
             },
             {
@@ -480,7 +489,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, copied_data: Optional[Dict[str, Dict[str, Any]]] = None, target_time=None, match_source: bool = True, refresh_channel_box: bool = True, on_replace: Optional[Callable[[str, List[float]], Any]] = None, **kwargs) -> int",
               "summary": "Paste previously copied attribute values as keyframes.",
-              "line": 2242,
+              "line": 2252,
               "deprecated": false
             },
             {
@@ -489,7 +498,7 @@
               "kind": "staticmethod",
               "signature": "(layer: str, merge_to_base: bool = False) -> bool",
               "summary": "Delete an animation layer.",
-              "line": 2299,
+              "line": 2309,
               "deprecated": false
             },
             {
@@ -498,7 +507,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, padding: float = 0) -> bool",
               "summary": "Set the playback range to encompass keyframes on all (or given) scene objects.",
-              "line": 2318,
+              "line": 2328,
               "deprecated": false
             },
             {
@@ -507,7 +516,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Union[str, List[str]]) -> List[str]",
               "summary": "Unflip rotation curves: Maya's Euler filter, as the Graph Editor's",
-              "line": 2342,
+              "line": 2352,
               "deprecated": false
             },
             {
@@ -516,7 +525,7 @@
               "kind": "staticmethod",
               "signature": "(edits: Dict[str, List[Tuple[float, float]]]) -> int",
               "summary": "Offset key VALUES in place: ``{curve: [(time, delta), ...]}``.",
-              "line": 2359,
+              "line": 2369,
               "deprecated": false
             },
             {
@@ -525,7 +534,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Deselect every key, whatever is or is not selected.",
-              "line": 2377,
+              "line": 2387,
               "deprecated": false
             },
             {
@@ -534,7 +543,7 @@
               "kind": "staticmethod",
               "signature": "(curves: Optional[List[str]] = None) -> Dict[str, List[float]]",
               "summary": "Graph Editor key selection as ``{curve: [times]}``.",
-              "line": 2388,
+              "line": 2398,
               "deprecated": false
             },
             {
@@ -543,7 +552,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The time slider's drag-selected range, or ``None`` when nothing is selected.",
-              "line": 2408,
+              "line": 2418,
               "deprecated": false
             },
             {
@@ -552,7 +561,7 @@
               "kind": "staticmethod",
               "signature": "(sources: Dict[str, str], gate: Optional[Tuple[float, float]] = None, name: str = 'previewLayer') -> str",
               "summary": "Play foreign curves on an object's plugs through a throwaway override layer.",
-              "line": 2419,
+              "line": 2429,
               "deprecated": false
             },
             {
@@ -561,7 +570,7 @@
               "kind": "staticmethod",
               "signature": "(layer: Optional[str]) -> bool",
               "summary": "Delete a layer made by :meth:`create_preview_layer`;",
-              "line": 2451,
+              "line": 2461,
               "deprecated": false
             },
             {
@@ -1376,7 +1385,7 @@
         {
           "name": "KeyStash",
           "summary": ":class:`pythontk.KeyStash` with the scene side bound to Maya.",
-          "line": 237,
+          "line": 238,
           "bases": [
             "pythontk.core_utils.engines.key_stash.key_stash_model.KeyStash",
             "_KeyStashInternal"
@@ -1388,7 +1397,16 @@
               "kind": "classmethod",
               "signature": "(cls) -> 'KeyStash'",
               "summary": "The active store, auto-installing the Maya backend once.",
-              "line": 256,
+              "line": 262,
+              "deprecated": false
+            },
+            {
+              "name": "watch_undo",
+              "qualname": "KeyStash.watch_undo",
+              "kind": "classmethod",
+              "signature": "(cls, owner, widget=None) -> List[int]",
+              "summary": "Keep the loaded store in step with undo and redo, for *owner*.",
+              "line": 271,
               "deprecated": false
             },
             {
@@ -1397,7 +1415,7 @@
               "kind": "method",
               "signature": "(self) -> List[int]",
               "summary": "Bring the record in line with the scene.",
-              "line": 301,
+              "line": 341,
               "deprecated": false
             },
             {
@@ -1406,7 +1424,7 @@
               "kind": "classmethod",
               "signature": "(cls, carriers, other, ctx) -> None",
               "summary": "Another scene's parked clips merged into the record: reload the",
-              "line": 339,
+              "line": 379,
               "deprecated": false
             },
             {
@@ -1415,7 +1433,7 @@
               "kind": "classmethod",
               "signature": "(cls, carriers, other, ctx) -> None",
               "summary": "Another scene's parked clips were dropped: delete their parked",
-              "line": 346,
+              "line": 386,
               "deprecated": false
             },
             {
@@ -1424,7 +1442,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[Sequence[str]] = None, time_range: Optional[Tuple[float, float]] = None, selected_keys: bool = False, attributes: Optional[Sequence[str]] = None, label: Optional[str] = None, source_shot_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None, targets: Optional[Sequence[Tuple[str, Any, float, float]]] = None) -> Optional[StashedClip]",
               "summary": "Move keys off the working animation into a stored clip.",
-              "line": 368,
+              "line": 408,
               "deprecated": false
             },
             {
@@ -1433,7 +1451,7 @@
               "kind": "method",
               "signature": "(self, clip_id: int, at: Optional[float] = None, mode: str = 'merge', target: Optional[str] = None) -> int",
               "summary": "Put a stored clip's keys back and forget the clip.",
-              "line": 484,
+              "line": 524,
               "deprecated": false
             },
             {
@@ -1442,7 +1460,25 @@
               "kind": "method",
               "signature": "(self, clip_id: int) -> None",
               "summary": "Discard a stored clip and delete its stash nodes.",
-              "line": 568,
+              "line": 608,
+              "deprecated": false
+            },
+            {
+              "name": "stash_from",
+              "qualname": "KeyStash.stash_from",
+              "kind": "method",
+              "signature": "(self, source: str) -> Optional[StashedClip]",
+              "summary": ":meth:`stash` the keys one of :attr:`STASH_SOURCES` names, read",
+              "line": 624,
+              "deprecated": false
+            },
+            {
+              "name": "select_clip_objects",
+              "qualname": "KeyStash.select_clip_objects",
+              "kind": "method",
+              "signature": "(self, clip_id: int) -> List[str]",
+              "summary": "Select a stored clip's objects that still exist, replacing the",
+              "line": 660,
               "deprecated": false
             },
             {
@@ -1451,7 +1487,7 @@
               "kind": "method",
               "signature": "(self, clip_id: int, in_context: bool = True, set_playback_range: bool = True) -> str",
               "summary": "Play a stored clip on its objects without retrieving it.",
-              "line": 586,
+              "line": 681,
               "deprecated": false
             },
             {
@@ -1460,97 +1496,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Tear the preview layer down and restore the time slider.",
-              "line": 640,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/key_stash/key_stash_slots.py",
-      "summary": "Slots for the Key Stash panel (key_stash.ui).",
-      "functions": [],
-      "classes": [
-        {
-          "name": "KeyStashSlots",
-          "summary": "Controller wiring key_stash.ui to the :class:`KeyStash` store.",
-          "line": 19,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "KeyStashSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Configure header buttons, the refresh action and the help text.",
-              "line": 45,
-              "deprecated": false
-            },
-            {
-              "name": "store",
-              "qualname": "KeyStashSlots.store",
-              "kind": "property",
-              "signature": "(self) -> KeyStash",
-              "summary": "The active store, (re)bound to this panel's change listener.",
-              "line": 105,
-              "deprecated": false
-            },
-            {
-              "name": "refresh",
-              "qualname": "KeyStashSlots.refresh",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Repaint the clip list from the store.",
-              "line": 124,
-              "deprecated": false
-            },
-            {
-              "name": "refresh_from_scene",
-              "qualname": "KeyStashSlots.refresh_from_scene",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Header refresh: prune clips whose stash nodes are gone, then repaint.",
-              "line": 161,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "KeyStashSlots.b000",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Store Keys",
-              "line": 221,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "KeyStashSlots.b001",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Retrieve",
-              "line": 257,
-              "deprecated": false
-            },
-            {
-              "name": "chk001",
-              "qualname": "KeyStashSlots.chk001",
-              "kind": "method",
-              "signature": "(self, checked: bool) -> None",
-              "summary": "Preview (toggle)",
-              "line": 281,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "KeyStashSlots.b003",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Drop",
-              "line": 301,
+              "line": 735,
               "deprecated": false
             }
           ]
@@ -4246,7 +4192,7 @@
               "kind": "method",
               "signature": "(self, obj: str, reason: str, declined: bool = True) -> None",
               "summary": "Record *obj* as skipped, and why -- the one way into ``skipped``.",
-              "line": 159,
+              "line": 165,
               "deprecated": false
             },
             {
@@ -4255,7 +4201,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, str]",
               "summary": "``{object: reason}`` for the objects SmartBake REFUSED or failed to",
-              "line": 176,
+              "line": 182,
               "deprecated": false
             },
             {
@@ -4264,7 +4210,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "Number of objects successfully baked.",
-              "line": 188,
+              "line": 194,
               "deprecated": false
             },
             {
@@ -4273,7 +4219,16 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "Return True if any objects were baked.",
-              "line": 193,
+              "line": 199,
+              "deprecated": false
+            },
+            {
+              "name": "describe",
+              "qualname": "BakeResult.describe",
+              "kind": "method",
+              "signature": "(self) -> List[str]",
+              "summary": "What the bake did, one line per fact, for a report (the Smart Bake",
+              "line": 203,
               "deprecated": false
             }
           ]
@@ -4281,7 +4236,7 @@
         {
           "name": "SmartBake",
           "summary": "Intelligent baking with automatic detection of what needs to be baked.",
-          "line": 1042,
+          "line": 1081,
           "bases": [
             "_SmartBakeInternal"
           ],
@@ -4292,7 +4247,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, BakeAnalysis]",
               "summary": "Analyze objects to determine what needs baking.",
-              "line": 1274,
+              "line": 1313,
               "deprecated": false
             },
             {
@@ -4301,7 +4256,7 @@
               "kind": "method",
               "signature": "(self, analysis: Optional[Dict[str, BakeAnalysis]] = None) -> Tuple[int, int]",
               "summary": "Determine optimal bake time range from driver animation.",
-              "line": 1679,
+              "line": 1718,
               "deprecated": false
             },
             {
@@ -4310,7 +4265,7 @@
               "kind": "method",
               "signature": "(self, analysis: Dict[str, BakeAnalysis], fallback: Tuple[int, int]) -> Dict[str, Tuple[int, int]]",
               "summary": "The frames each driven object in *analysis* actually needs sampled.",
-              "line": 1723,
+              "line": 1762,
               "deprecated": false
             },
             {
@@ -4319,7 +4274,7 @@
               "kind": "method",
               "signature": "(self, analysis: Optional[Dict[str, BakeAnalysis]] = None, time_range: Optional[Tuple[int, int]] = None) -> BakeResult",
               "summary": "Execute baking on analyzed objects.",
-              "line": 2899,
+              "line": 2938,
               "deprecated": false
             },
             {
@@ -4328,7 +4283,7 @@
               "kind": "method",
               "signature": "(self) -> BakeResult",
               "summary": "High-level entry point: analyze and bake in one call.",
-              "line": 3578,
+              "line": 3618,
               "deprecated": false
             },
             {
@@ -4337,7 +4292,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return ids of restorable bake sessions recorded in this scene,",
-              "line": 3592,
+              "line": 3632,
               "deprecated": false
             },
             {
@@ -4346,7 +4301,7 @@
               "kind": "classmethod",
               "signature": "(cls, session_id: Optional[str] = None) -> 'RestoreResult'",
               "summary": "Reverse a bake session recorded by ``bake(restorable=True)``.",
-              "line": 3601,
+              "line": 3641,
               "deprecated": false
             },
             {
@@ -4355,7 +4310,7 @@
               "kind": "classmethod",
               "signature": "(cls, session_id: Optional[str] = None) -> 'RestoreResult'",
               "summary": "Restore ONLY the matrix (offsetParentMatrix) bakes of a session.",
-              "line": 3662,
+              "line": 3702,
               "deprecated": false
             },
             {
@@ -4364,7 +4319,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], bake_range: Optional[Tuple[float, float]] = None) -> Tuple[BakeResult, Callable[[], List[str]]]",
               "summary": "Put each node among *objects* where an FBX write would not, for",
-              "line": 3722,
+              "line": 3762,
               "deprecated": false
             },
             {
@@ -4373,7 +4328,7 @@
               "kind": "classmethod",
               "signature": "(cls, **kwargs)",
               "summary": "Context manager: bake on enter, restore on exit.",
-              "line": 4060,
+              "line": 4100,
               "deprecated": false
             },
             {
@@ -4382,7 +4337,7 @@
               "kind": "classmethod",
               "signature": "(cls, **kwargs) -> BakeResult",
               "summary": "Class method for quick smart baking without explicit instantiation.",
-              "line": 4086,
+              "line": 4126,
               "deprecated": false
             }
           ]
@@ -4618,70 +4573,6 @@
           "line": 1110,
           "bases": [],
           "members": []
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/smart_bake/smart_bake_slots.py",
-      "summary": "Slots for the Smart Bake tool panel (smart_bake.ui).",
-      "functions": [],
-      "classes": [
-        {
-          "name": "SmartBakeSlots",
-          "summary": "Controller wiring smart_bake.ui to the SmartBake engine.",
-          "line": 18,
-          "bases": [
-            "pythontk.LoggingMixin",
-            "pythontk.HelpMixin"
-          ],
-          "members": [
-            {
-              "name": "cmb_scope_init",
-              "qualname": "SmartBakeSlots.cmb_scope_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 108,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_backup_init",
-              "qualname": "SmartBakeSlots.cmb_backup_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 114,
-              "deprecated": false
-            },
-            {
-              "name": "header_init",
-              "qualname": "SmartBakeSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Configure header menu, refresh button, and help text.",
-              "line": 117,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "SmartBakeSlots.b000",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Bake.",
-              "line": 178,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "SmartBakeSlots.b001",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Unbake.",
-              "line": 273,
-              "deprecated": false
-            }
-          ]
         }
       ],
       "constants": []
