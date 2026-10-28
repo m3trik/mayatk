@@ -86,7 +86,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`display_utils/exploded_view.py`](#display_utils--exploded_view)
 - [`edit_utils/_edit_utils.py`](#edit_utils--_edit_utils)
 - [`edit_utils/bevel.py`](#edit_utils--bevel)
-- [`edit_utils/bridge.py`](#edit_utils--bridge)
+- [`edit_utils/bridge.py`](#edit_utils--bridge) — Bridge: connect open edge loops with new faces (``polyBridgeEdge``).
 - [`edit_utils/curtain/_curtain.py`](#edit_utils--curtain--_curtain) — Procedural draped-cloth (curtain) generator for Maya.
 - [`edit_utils/curtain/_curtain_drape.py`](#edit_utils--curtain--_curtain_drape) — Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
 - [`edit_utils/curtain/curtain_slots.py`](#edit_utils--curtain--curtain_slots) — Curtain panel — the Switchboard slots for ``curtain.ui``.
@@ -248,7 +248,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`uv_utils/rizom_bridge/_rizom_bridge.py`](#uv_utils--rizom_bridge--_rizom_bridge)
 - [`uv_utils/rizom_bridge/parameters.py`](#uv_utils--rizom_bridge--parameters) — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 - [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots) — Slots for the RizomUV bridge panel.
-- [`uv_utils/shell_xform.py`](#uv_utils--shell_xform) — Dedicated UV shell-transform panel.
 - [`uv_utils/texture_combine/texture_combine.py`](#uv_utils--texture_combine--texture_combine) — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
 - [`uv_utils/texture_combine/texture_combine_slots.py`](#uv_utils--texture_combine--texture_combine_slots) — The Texture Combine panel: Switchboard slots for ``texture_combine.ui``.
 - [`uv_utils/texture_transfer.py`](#uv_utils--texture_transfer) — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
@@ -1654,13 +1653,12 @@ Maya's lengths and angles, converted by the kind of query that read them.
 <a id="edit_utils--bridge"></a>
 ### `edit_utils/bridge.py`
 
-- **[`class Bridge`](mayatk/mayatk/edit_utils/bridge.py#L14)**
-  - `Bridge.bridge(edges, **kwargs)` *(static)* — Bridge open edge loops, grouped per owning mesh.
+Bridge: connect open edge loops with new faces (``polyBridgeEdge``).
+
+- **[`class Bridge`](mayatk/mayatk/edit_utils/bridge.py#L20)** — Bridge open edge loops with new faces: the API tentacle's Bridge panel
+  - `Bridge.bridge(edges, *, curve_type=None, divisions=None, smoothing_angle=None, offset=None, taper=None, twist=None, cleanup_curves=False, **kwargs)` *(static)* — Bridge open edge loops, grouped per owning mesh.
   - `Bridge.get_child_curves_from_bridge(mesh_nodes)` *(static)* — Find child curves created by polyBridgeEdge operations on mesh nodes.
   - `Bridge.cleanup_bridge_curves_and_history(mesh_nodes)` *(static)* — Clean up child curves and deformer history from mesh nodes.
-- **[`class BridgeSlots`](mayatk/mayatk/edit_utils/bridge.py#L173)**
-  - `BridgeSlots.header_init(self, widget)` — Configure header help text.
-  - `BridgeSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--curtain--_curtain"></a>
 ### `edit_utils/curtain/_curtain.py`
@@ -4821,11 +4819,18 @@ The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
 <a id="uv_utils--_uv_utils"></a>
 ### `uv_utils/_uv_utils.py`
 
-- **[`class UvUtils(pythontk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L23)**
+- **[`class UvUtils(pythontk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L24)**
   - `UvUtils.calculate_uv_padding(map_size: int, normalize: bool = False, factor: int = 256) -> float` *(static)* — The texture gutter for a given map size — Maya-side name for the ecosystem rule.
   - `UvUtils.udim_to_tile(udim: int) -> Tuple[int, int]` *(static)* — UDIM tile number to its (u, v) tile offset — Maya-side name for the
-  - `UvUtils.orient_shells(objects)` *(static)* — Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
+  - `UvUtils.orient_shells(objects, to_edge: bool = False) -> int` *(static)* — Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
   - `UvUtils.move_to_uv_space(objects, u, v, relative=True)` *(static)* — Move objects to the given u and v coordinates.
+  - `UvUtils.rotate_uvs(cls, objects, angle: float) -> int` *(class)* — Rotate the UVs of *objects* by *angle* degrees, counter-clockwise, about
+  - `UvUtils.straighten_uvs(cls, objects, u: bool = True, v: bool = True, angle: float = 30.0) -> int` *(class)* — Straighten the UV edges of *objects* lying within *angle* degrees of
+  - `UvUtils.straighten_uv_shells(cls, objects) -> int` *(class)* — Straighten each UV shell of *objects* into a grid by unfolding it around
+  - `UvUtils.distribute_uv_shells(cls, objects, axis: str = 'u', spacing: float = 0.0) -> int` *(class)* — Lay the UV shells of *objects* out in a row -- Maya's
+  - `UvUtils.align_uvs(cls, objects, axis: str = 'u', mode: str = 'avg') -> int` *(class)* — Align the UVs of *objects* -- Maya's Align UVs: ``"min"`` / ``"max"`` /
+  - `UvUtils.gather_uv_shells(cls, objects) -> int` *(class)* — Gather the UV shells of *objects* back into the 0-1 tile -- Maya's
+  - `UvUtils.randomize_uv_shells(cls, objects, seed: Optional[int] = None) -> int` *(class)* — Randomly offset the UV shells of *objects* -- Maya's Randomize Shells,
   - `UvUtils.get_uv_bounds(objects) -> Optional[Tuple[float, float, float, float]]` *(static)* — The UV-space bounding box of *objects*, as one box over the whole input.
   - `UvUtils.get_uv_triangles(shape: str, uv_set: Optional[str] = None)` *(static)* — ``(N, 3, 2)`` array of *shape*'s UV-space triangles for *uv_set*.
   - `UvUtils.get_uv_world_triangles(shape: str, uv_set: Optional[str] = None)` *(static)* — *shape*'s UV-space triangles paired with the world-space corners they map.
@@ -4906,43 +4911,6 @@ Slots for the RizomUV bridge panel.
   - `RizomBridgeSlots.list_template_modes(self)` — Return ``[(stem, ""), ...]`` for every bundled ``.lua`` script.
   - `RizomBridgeSlots.b000(self)` — Run the chosen preset: round-trip, or one-way send when ``send`` is picked.
   - `RizomBridgeSlots.open_uv_editor(self)` — Open Maya's UV Editor (TextureViewWindow).
-
-<a id="uv_utils--shell_xform"></a>
-### `uv_utils/shell_xform.py`
-
-Dedicated UV shell-transform panel.
-
-- **[`class ShellXformSlots(pythontk.LoggingMixin)`](mayatk/mayatk/uv_utils/shell_xform.py#L36)** — Switchboard slots for the Shell Xform panel (``shell_xform.ui``).
-  - `ShellXformSlots.header_init(self, widget)` — Header menu — Open UV Editor + panel help.
-  - `ShellXformSlots.cmb_move_scope_init(self, widget)` — Move scope — how far one arrow press travels, plus the snap button.
-  - `ShellXformSlots.b023(self)` — Move To UV Space: Left
-  - `ShellXformSlots.b024(self)` — Move To UV Space: Down
-  - `ShellXformSlots.b025(self)` — Move To UV Space: Up
-  - `ShellXformSlots.b026(self)` — Move To UV Space: Right
-  - `ShellXformSlots.gather_to_udim(self)` — Move shells sitting outside the selection's UDIM tile into it.
-  - `ShellXformSlots.b034(self)` — Flip U: mirror the selected UVs horizontally about each shell's center.
-  - `ShellXformSlots.b035(self)` — Flip V: mirror the selected UVs vertically about each shell's center.
-  - `ShellXformSlots.b036(self)` — Rotate the selected UVs counter-clockwise by the s041 angle.
-  - `ShellXformSlots.b037(self)` — Rotate the selected UVs clockwise by the s041 angle.
-  - `ShellXformSlots.s041(self, value, widget)` — Rotate Angle — passive input; read by the Rotate buttons (b036/b037).
-  - `ShellXformSlots.tb005_init(self, widget)` — Initialize Straighten UV
-  - `ShellXformSlots.tb005(self, widget)` — Straighten UV
-  - `ShellXformSlots.tb006_init(self, widget)` — Initialize Distribute
-  - `ShellXformSlots.tb006(self, widget)` — Distribute: evenly space the selected UV shells horizontally or vertically.
-  - `ShellXformSlots.tb008_init(self, widget)` — Initialize Mirror UVs.
-  - `ShellXformSlots.tb008(self, widget)` — Mirror UVs (footprint-preserving by default).
-  - `ShellXformSlots.align_u_min(self)` — Align the selected UVs to their minimum U (left).
-  - `ShellXformSlots.align_u_avg(self)` — Align the selected UVs to their average U (center).
-  - `ShellXformSlots.align_u_max(self)` — Align the selected UVs to their maximum U (right).
-  - `ShellXformSlots.align_v_min(self)` — Align the selected UVs to their minimum V (bottom).
-  - `ShellXformSlots.align_v_avg(self)` — Align the selected UVs to their average V (center).
-  - `ShellXformSlots.align_v_max(self)` — Align the selected UVs to their maximum V (top).
-  - `ShellXformSlots.linear_align(self)` — Linearly align the selected UVs between their two end points.
-  - `ShellXformSlots.orient_shells(self)` — Orient each shell to run parallel with its nearest U/V axis.
-  - `ShellXformSlots.orient_edges(self)` — Orient the shell so its selected edge runs along U or V.
-  - `ShellXformSlots.gather_shells(self)` — Gather the selected shells together toward the 0-1 UV space.
-  - `ShellXformSlots.randomize_shells(self)` — Randomly offset the selected shells.
-  - `ShellXformSlots.open_uv_editor(self)` — Open Maya's UV Editor (TextureViewWindow).
 
 <a id="uv_utils--texture_combine--texture_combine"></a>
 ### `uv_utils/texture_combine/texture_combine.py`

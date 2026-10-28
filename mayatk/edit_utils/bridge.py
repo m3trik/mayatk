@@ -1,35 +1,113 @@
 # !/usr/bin/python
 # coding=utf-8
-# From this package:
+"""Bridge: connect open edge loops with new faces (``polyBridgeEdge``).
+
+``Bridge`` is the API tentacle's Bridge panel calls, and blendertk's ``Bridge``
+mirrors it: one host-neutral keyword set, the curve types it builds, and the
+options it cannot honor (none in Maya).
+"""
+
 try:
     import maya.cmds as cmds
 except ImportError:
     cmds = None
 
-from mayatk.core_utils.preview import Preview, OperationError
+from mayatk.core_utils.preview import OperationError
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 
 
 class Bridge:
+    """Bridge open edge loops with new faces: the API tentacle's Bridge panel
+    calls, mirrored by blendertk's ``Bridge``."""
+
+    #: The curve types :meth:`bridge` builds, in ``curve_type`` order: the index
+    #: is ``polyBridgeEdge``'s ``curveType`` (and the panel's Type combo order).
+    CURVE_TYPES = ("linear", "blend", "curve")
+
+    #: :meth:`bridge` options (or curve types) this host cannot honor, by name,
+    #: with the reason; the panel disables their controls. Maya honors every one.
+    UNSUPPORTED_OPTIONS = {}
+
     @staticmethod
-    def bridge(edges, **kwargs):
+    def bridge(
+        edges,
+        *,
+        curve_type=None,
+        divisions=None,
+        smoothing_angle=None,
+        offset=None,
+        taper=None,
+        twist=None,
+        cleanup_curves=False,
+        **kwargs,
+    ):
         """Bridge open edge loops, grouped per owning mesh.
 
         On failure, raises :class:`OperationError` with a specific,
         human-readable reason instead of Maya's raw multi-line wall.
-        """
-        mapped_edges = Components.map_components_to_objects(edges)
 
-        for edges in mapped_edges.values():
+        Parameters:
+            edges (str/list): The open border edges: two loops per mesh.
+            curve_type (str): ``"linear"``, ``"blend"`` or ``"curve"``
+                (:attr:`CURVE_TYPES`); a curve bridge leaves a NURBS handle to
+                shape. ``None`` keeps Maya's default (linear).
+            divisions (int): Edge loops added across the bridge.
+            smoothing_angle (float): Degrees; new edges below it are smoothed.
+            offset (int): Shifts which vertices of the two loops pair up.
+            taper (float): Scale along the bridge (1.0: none).
+            twist (float): Rotation along the bridge, in degrees.
+            cleanup_curves (bool): After a ``"curve"`` bridge, delete the control
+                curve it leaves and the meshes' construction history
+                (:meth:`cleanup_bridge_curves_and_history`).
+            **kwargs: Further ``polyBridgeEdge`` flags, passed through as given
+                (a raw flag wins over its keyword above).
+
+        Raises:
+            ValueError: An unknown *curve_type*.
+            OperationError: ``polyBridgeEdge`` rejected the edges.
+        """
+        if curve_type is not None and curve_type not in Bridge.CURVE_TYPES:
+            raise ValueError(
+                f"curve_type must be one of {Bridge.CURVE_TYPES}, not {curve_type!r}."
+            )
+        flags = {
+            flag: value
+            for flag, value in (
+                (
+                    "curveType",
+                    None if curve_type is None else Bridge.CURVE_TYPES.index(curve_type),
+                ),
+                ("divisions", divisions),
+                ("smoothingAngle", smoothing_angle),
+                ("bridgeOffset", offset),
+                ("taper", taper),
+                ("twist", twist),
+            )
+            if value is not None
+        }
+        flags.update(kwargs)
+
+        mapped_edges = Components.map_components_to_objects(edges)
+        # The meshes a curve bridge parents its control curve under, by long
+        # name, read before the bridge: the cleanup addresses them after it.
+        cleanup = cleanup_curves and flags.get("curveType") == Bridge.CURVE_TYPES.index(
+            "curve"
+        )
+        meshes = [cmds.ls(node, long=True)[0] for node in mapped_edges] if cleanup else []
+
+        for mesh_edges in mapped_edges.values():
             try:
-                cmds.polyBridgeEdge(edges, **kwargs)
+                cmds.polyBridgeEdge(mesh_edges, **flags)
             except RuntimeError as e:
                 # polyBridgeEdge rejected the selection. Diagnose *why* and
                 # raise a short, specific popup instead of Maya's multi-line
                 # wall + help URLs. The original error is chained (``from e``)
                 # so the console still gets the full traceback.
-                raise Bridge._diagnose_failure(edges) from e
+                raise Bridge._diagnose_failure(mesh_edges) from e
+
+        if meshes:
+            Bridge.cleanup_bridge_curves_and_history(meshes)
 
     @staticmethod
     def _diagnose_failure(edges) -> OperationError:
@@ -170,103 +248,8 @@ class Bridge:
             print("No child curves found to delete.")
 
 
-class BridgeSlots:
-    # polyBridgeEdge mutates the mesh in place with construction history. On a
-    # historyless mesh (e.g. a freshly combined cylinder) the preview rollback
-    # would bake the bridge in when it deletes the auto-created orig-shape,
-    # closing the border so the next refresh/commit fails. PRESERVE_GEOMETRY
-    # makes Preview snapshot the owning mesh and restore it on rollback.
-    PRESERVE_GEOMETRY = True
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.bridge
-
-        # Per-field reset buttons (uitk option-box): click resets a field to its
-        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
-        # Must precede connect_multi/Preview — wrapping reparents the widgets and
-        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
-        self.sb.add_reset_buttons(self.ui)
-
-        self.preview = Preview(
-            self,
-            self.ui.chk000,
-            self.ui.b000,
-            message_func=self.sb.message_box,
-            enable_on_show=True,
-        )
-
-        self.sb.connect_multi(
-            self.ui, "cmb000", "currentIndexChanged", self.preview.refresh
-        )
-        self.sb.connect_multi(self.ui, "s000-4", "valueChanged", self.preview.refresh)
-        self.sb.connect_multi(self.ui, "chk001", "toggled", self.preview.refresh)
-
-    def header_init(self, widget):
-        """Configure header help text."""
-        # Gesture-scoped window: pin button + auto-hide on key_show release.
-        widget.config_buttons("menu", "collapse", "pin")
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Bridge",
-                body="Connect two open edge loops with new polygon faces.",
-                steps=[
-                    "Select two open edge loops on the same mesh.",
-                    "Pick a <b>Curve Type</b> — Linear / Blend / Curve. "
-                    "Curve mode creates a NURBS handle you can shape, then "
-                    "rebuilds the bridge each preview/apply.",
-                    "Adjust <b>Divisions</b>, <b>Smoothing Angle</b>, "
-                    "<b>Offset</b>, <b>Taper</b>, and <b>Twist</b>.",
-                    "Toggle <b>Preview</b> to iterate, or press <b>Bridge</b> "
-                    "to commit.",
-                ],
-                notes=[
-                    "Enable <b>Cleanup curves</b> to delete the temporary "
-                    "control curve and construction history left behind by "
-                    "Curve-mode bridges on commit.",
-                ],
-            )
-        )
-
-    def perform_operation(self, objects, contract):
-        kwargs = {
-            "curveType": self.ui.cmb000.currentIndex(),
-            "divisions": self.ui.s000.value(),
-            "smoothingAngle": self.ui.s001.value(),
-            "bridgeOffset": self.ui.s002.value(),
-            "taper": self.ui.s003.value(),
-            "twist": self.ui.s004.value(),
-        }
-
-        # Get mesh nodes before operation for curve cleanup
-        mesh_nodes = []
-        if self.ui.chk001.isChecked() and kwargs["curveType"] == 2:
-            # Get mesh nodes from the selected edges
-            selected_edges = cmds.ls(sl=True, flatten=True)
-            if selected_edges:
-                # Strip component suffix ("pCube1.e[12]" -> "pCube1")
-                mesh_nodes = list(
-                    {
-                        cmds.ls(edge.split(".")[0], long=True)[0]
-                        for edge in selected_edges
-                    }
-                )
-
-        # Perform the bridge operation
-        Bridge.bridge(objects, **kwargs)
-
-        # Clean up child curves if option is enabled and curve type is selected
-        if self.ui.chk001.isChecked() and kwargs["curveType"] == 2 and mesh_nodes:
-            Bridge.cleanup_bridge_curves_and_history(mesh_nodes)
-
-
 # -----------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("bridge", reload=True)
-    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -401,11 +401,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class Bevel`
   - methods: bevel
 
-### `edit_utils/bridge.py`
+### `edit_utils/bridge.py` — Bridge: connect open edge loops with new faces (``polyBridgeEdge``).
 - `class Bridge`
   - methods: bridge, get_child_curves_from_bridge, cleanup_bridge_curves_and_history
-- `class BridgeSlots`
-  - methods: header_init, perform_operation
 
 ### `edit_utils/curtain/_curtain.py` — Procedural draped-cloth (curtain) generator for Maya.
 - `class Rail(pythontk.Polyline)`
@@ -1207,7 +1205,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(pythontk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, get_uv_world_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, uv_snapshot, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, export_uv_layout, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, rotate_uvs, straighten_uvs, straighten_uv_shells, distribute_uv_shells, align_uvs, gather_uv_shells, randomize_uv_shells, get_uv_bounds, get_uv_triangles, get_uv_world_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, uv_snapshot, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, export_uv_layout, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP
@@ -1222,10 +1220,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `uv_utils/rizom_bridge/rizom_bridge_slots.py` — Slots for the RizomUV bridge panel.
 - `class RizomBridgeSlots(MayaBridgeSlotsBase)`
   - methods: params_module, template_dir, make_bridge, list_template_modes, b000, open_uv_editor
-
-### `uv_utils/shell_xform.py` — Dedicated UV shell-transform panel.
-- `class ShellXformSlots(pythontk.LoggingMixin)`
-  - methods: header_init, cmb_move_scope_init, b023, b024, b025, b026, gather_to_udim, b034, b035, b036, b037, s041, tb005_init, tb005, tb006_init, tb006, tb008_init, tb008, align_u_min, align_u_avg, align_u_max, align_v_min, align_v_avg, align_v_max, linear_align, orient_shells, orient_edges, gather_shells, randomize_shells, open_uv_editor
 
 ### `uv_utils/texture_combine/texture_combine.py` — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
 - `class CombineInputs`

@@ -6,6 +6,7 @@ from typing import Iterator, List, Optional, Sequence, Tuple, Union
 
 try:
     import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError:
     pass
 import pythontk as ptk
@@ -81,15 +82,29 @@ class UvUtils(ptk.HelpMixin):
         return ptk.MathUtils.udim_to_tile(udim)
 
     @staticmethod
-    def orient_shells(objects):
+    @CoreUtils.undoable
+    def orient_shells(objects, to_edge: bool = False) -> int:
         """Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
 
         Parameters:
             objects (str/obj/list): Polygon mesh objects and/or components.
-        """
+            to_edge (bool): Orient each shell so its selected edge runs along U or
+                V instead (Maya's ``texOrientEdge``); *objects* must hold edges.
 
+        Returns:
+            int: The meshes oriented (``to_edge``: the edges oriented to); 0 when
+            the input holds none.
+        """
         objects = CoreUtils.as_strings(objects)
-        for obj in cmds.ls(objects, objectsOnly=True, long=True) or []:
+        if not objects:
+            return 0
+        if to_edge:
+            edges = cmds.filterExpand(objects, selectionMask=32) or []
+            if edges:
+                UvUtils._run_on_selection(edges, "texOrientEdge")
+            return len(edges)
+        meshes = cmds.ls(objects, objectsOnly=True, long=True) or []
+        for obj in meshes:
             # filter components for only this object.
             obj_compts = [
                 i
@@ -106,6 +121,7 @@ class UvUtils(ptk.HelpMixin):
                 scale=0,
                 separate=0,
             )
+        return len(meshes)
 
     @staticmethod
     def move_to_uv_space(objects, u, v, relative=True):
@@ -128,6 +144,165 @@ class UvUtils(ptk.HelpMixin):
 
         # Move the UVs to the given u and v coordinates
         cmds.polyEditUV(uvs, u=u, v=v, relative=relative)
+
+    @staticmethod
+    def _flat_uvs(objects) -> List[str]:
+        """*objects* (objects and/or components) as their flattened UV components."""
+        objects = CoreUtils.as_strings(objects)
+        if not objects:
+            return []
+        uvs = cmds.polyListComponentConversion(objects, toUV=True) or []
+        return cmds.ls(uvs, flatten=True) or []
+
+    @staticmethod
+    def _run_on_selection(items, command: str) -> None:
+        """Run the MEL *command* with *items* as the selection, then restore the
+        user's: Maya's UV-toolkit procedures (``texStraightenUVs``, ``alignUV``,
+        ...) read their input off the selection."""
+        with CoreUtils.preserved_selection():
+            cmds.select(items, replace=True)
+            mel.eval(command)
+
+    @classmethod
+    def _uv_tool(cls, objects, command: str) -> int:
+        """Run the UV-toolkit MEL *command* on *objects*, selected as given.
+
+        Returns:
+            int: The UVs *objects* hold; 0 when none (nothing ran).
+        """
+        uvs = cls._flat_uvs(objects)
+        if uvs:
+            cls._run_on_selection(CoreUtils.as_strings(objects), command)
+        return len(uvs)
+
+    @classmethod
+    @CoreUtils.undoable
+    def rotate_uvs(cls, objects, angle: float) -> int:
+        """Rotate the UVs of *objects* by *angle* degrees, counter-clockwise, about
+        their shared centroid (the mean of their positions), as one undo step.
+
+        Parameters:
+            objects (str/obj/list): Object(s), faces, or UVs.
+            angle (float): Degrees; a negative angle turns clockwise.
+
+        Returns:
+            int: The UVs rotated; 0 when the input resolves to none.
+        """
+        uvs = cls._flat_uvs(objects)
+        if not uvs:
+            return 0
+        coords = [cmds.polyEditUV(uv, query=True, uValue=True, vValue=True) for uv in uvs]
+        pivot_u = sum(c[0] for c in coords) / len(coords)
+        pivot_v = sum(c[1] for c in coords) / len(coords)
+        for uv in uvs:
+            cmds.polyEditUV(
+                uv, pivotU=pivot_u, pivotV=pivot_v, angle=angle, relative=True
+            )
+        return len(uvs)
+
+    @classmethod
+    @CoreUtils.undoable
+    def straighten_uvs(
+        cls, objects, u: bool = True, v: bool = True, angle: float = 30.0
+    ) -> int:
+        """Straighten the UV edges of *objects* lying within *angle* degrees of
+        horizontal (*u*) and/or vertical (*v*) -- Maya's ``texStraightenUVs``.
+
+        Parameters:
+            objects (str/obj/list): UV edges, UVs, faces or meshes.
+            u (bool): Straighten the near-horizontal edges.
+            v (bool): Straighten the near-vertical edges.
+            angle (float): The tolerance, in degrees.
+
+        Returns:
+            int: The UVs it ran on; 0 when neither axis is on or the input
+            holds no UVs.
+        """
+        axis = "UV" if u and v else "U" if u else "V" if v else ""
+        if not axis:
+            return 0
+        return cls._uv_tool(objects, f'texStraightenUVs "{axis}" {float(angle)}')
+
+    @classmethod
+    @CoreUtils.undoable
+    def straighten_uv_shells(cls, objects) -> int:
+        """Straighten each UV shell of *objects* into a grid by unfolding it around
+        a selected UV's edge loop -- Maya's ``texStraightenShell``.
+
+        Returns:
+            int: The UVs it ran on; 0 when the input holds none.
+        """
+        return cls._uv_tool(objects, "texStraightenShell")
+
+    @classmethod
+    @CoreUtils.undoable
+    def distribute_uv_shells(
+        cls, objects, axis: str = "u", spacing: float = 0.0
+    ) -> int:
+        """Lay the UV shells of *objects* out in a row -- Maya's
+        ``texDistributeShells``: rightward along U, downward along V, *spacing*
+        (UV units) between neighbours, from the selection's center.
+
+        Returns:
+            int: The UVs it ran on; 0 when the input holds none.
+        """
+        direction = "right" if str(axis).lower() == "u" else "down"
+        # Fixed notation, not repr: MEL parses the literal, and a small enough
+        # float would reach it as `1.9e-06`.
+        return cls._uv_tool(
+            objects, f'texDistributeShells 0 {float(spacing):.9f} "{direction}" {{}}'
+        )
+
+    @classmethod
+    @CoreUtils.undoable
+    def align_uvs(cls, objects, axis: str = "u", mode: str = "avg") -> int:
+        """Align the UVs of *objects* -- Maya's Align UVs: ``"min"`` / ``"max"`` /
+        ``"avg"`` set every UV's U (*axis* ``"u"``) or V to the selection's min /
+        max / center; ``"linear"`` lines them up between their two end points
+        (*axis* ignored). With the UV Shell selection type active, whole shells
+        align instead (``texAlignShells``), as Maya's own buttons do.
+
+        Returns:
+            int: The UVs aligned; 0 when the input holds none.
+        """
+        uvs = cls._flat_uvs(objects)
+        if not uvs:
+            return 0
+        action = "linear" if mode == "linear" else f"{mode}{str(axis).upper()}"
+        if cmds.selectType(query=True, meshUVShell=True):
+            command = f'texAlignShells {action} {{}} ""'
+        elif mode == "linear":
+            command = "texLinearAlignUVs"
+        else:
+            command = f'alignUV "{action}"'
+        cls._run_on_selection(uvs, command)
+        return len(uvs)
+
+    @classmethod
+    @CoreUtils.undoable
+    def gather_uv_shells(cls, objects) -> int:
+        """Gather the UV shells of *objects* back into the 0-1 tile -- Maya's
+        ``texGatherShells`` (the UV Editor's Gather Shells).
+
+        Returns:
+            int: The UVs it ran on; 0 when the input holds none.
+        """
+        return cls._uv_tool(objects, "texGatherShells")
+
+    @classmethod
+    @CoreUtils.undoable
+    def randomize_uv_shells(cls, objects, seed: Optional[int] = None) -> int:
+        """Randomly offset the UV shells of *objects* -- Maya's Randomize Shells,
+        with the user's Randomize options. An int *seed* seeds MEL's ``rand``
+        first, so a seed repeats its result; ``None`` leaves it unseeded.
+
+        Returns:
+            int: The UVs it ran on; 0 when the input holds none.
+        """
+        command = "performTextureViewRandomizeShellsOptions 0"
+        if seed is not None:
+            command = f"seed {int(seed)}; {command}"
+        return cls._uv_tool(objects, command)
 
     @staticmethod
     def get_uv_bounds(objects) -> Optional[Tuple[float, float, float, float]]:

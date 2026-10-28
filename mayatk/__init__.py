@@ -413,6 +413,14 @@ MOVED_NAMES = {
         "tentacle.slots.tools.wheel_rig.WheelRigSlots",
         "0.30.0",
     ),
+    "BridgeSlots": (
+        "tentacle.slots.tools.bridge.BridgeSlots",
+        "0.30.0",
+    ),
+    "ShellXformSlots": (
+        "tentacle.slots.tools.shell_xform.ShellXformSlots",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

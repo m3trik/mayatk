@@ -3467,5 +3467,99 @@ class TestUvWorldTriangles(MayaTkTestCase):
         self.assertAlmostEqual(sv, 3.0 / (v1 - v0), places=3)
 
 
+class TestUvShellTools(MayaTkTestCase):
+    """The UV-shell tools tentacle's Shell Xform panel calls, as ``UvUtils``
+    methods (the panel's wiring is ``tentacle/test/test_shell_xform_panel.py``)."""
+
+    @staticmethod
+    def plane(u=0.0, v=0.0):
+        """A 0-1 UV plane, optionally nudged off the origin."""
+        plane = cmds.polyPlane(width=1, height=1, sx=1, sy=1)[0]
+        if u or v:
+            UvUtils.move_to_uv_space(plane, u, v)
+        return plane
+
+    def test_rotate_turns_about_the_centroid_and_back(self):
+        plane = self.plane()
+        corner = f"{plane}.map[0]"
+        start = cmds.polyEditUV(corner, query=True)
+        self.assertEqual(UvUtils.rotate_uvs(plane, 90.0), 4)
+        turned = cmds.polyEditUV(corner, query=True)
+        self.assertGreater(sum(abs(a - b) for a, b in zip(turned, start)), 0.5)
+        # A square turned about its own center keeps its box.
+        for a, b in zip(UvUtils.get_uv_bounds(plane), (0.0, 0.0, 1.0, 1.0)):
+            self.assertAlmostEqual(a, b, places=5)
+        UvUtils.rotate_uvs(plane, -90.0)
+        for a, b in zip(cmds.polyEditUV(corner, query=True), start):
+            self.assertAlmostEqual(a, b, places=5)
+
+    def test_rotate_with_nothing_is_nothing(self):
+        self.assertEqual(UvUtils.rotate_uvs([], 45.0), 0)
+
+    def spread_planes(self, axis, count=3):
+        """*count* separated 1x1 UV shells strung out along *axis*, as faces."""
+        planes = [
+            self.plane(i * 3.0 if axis == "u" else 0.0, i * 3.0 if axis == "v" else 0.0)
+            for i in range(count)
+        ]
+        return planes, cmds.ls([f"{p}.f[*]" for p in planes])
+
+    @staticmethod
+    def gaps(planes, axis):
+        """Inter-shell gaps along *axis*, in layout order."""
+        lo, hi = (0, 2) if axis == "u" else (1, 3)
+        spans = sorted(
+            (bounds[lo], bounds[hi])
+            for bounds in (UvUtils.get_uv_bounds(p) for p in planes)
+        )
+        return [spans[i + 1][0] - spans[i][1] for i in range(len(spans) - 1)]
+
+    def assert_gaps(self, axis, spacing):
+        """Distribute along *axis*; every resulting gap is *spacing*.
+
+        A hardcoded 0 butted every shell against its neighbour, so the row
+        bled across its own seams at render time.
+        """
+        planes, faces = self.spread_planes(axis)
+        self.assertTrue(UvUtils.distribute_uv_shells(faces, axis=axis, spacing=spacing))
+        gaps = self.gaps(planes, axis)
+        self.assertEqual(len(gaps), len(planes) - 1)
+        for gap in gaps:
+            self.assertAlmostEqual(gap, spacing, places=6)
+
+    def test_distribute_u_leaves_the_spacing_between_shells(self):
+        self.assert_gaps("u", ptk.MathUtils.uv_tile_margin(4096))
+
+    def test_distribute_v_leaves_the_spacing_between_shells(self):
+        self.assert_gaps("v", ptk.MathUtils.uv_tile_margin(4096))
+
+    def test_distribute_honors_the_spacing_given(self):
+        self.assert_gaps("u", 0.05)
+
+    def test_align_min_u_lines_every_uv_up_on_the_minimum(self):
+        plane = self.plane(0.2)  # U 0.2 .. 1.2
+        self.assertEqual(UvUtils.align_uvs(plane, axis="u", mode="min"), 4)
+        u_min, v_min, u_max, v_max = UvUtils.get_uv_bounds(plane)
+        self.assertAlmostEqual(u_min, 0.2, places=5)
+        self.assertAlmostEqual(u_max, 0.2, places=5)
+        self.assertAlmostEqual(v_max - v_min, 1.0, places=5)  # V untouched
+
+    def test_a_tool_leaves_the_selection_as_it_was(self):
+        """The UV-toolkit procedures read the selection; the user's comes back."""
+        plane, other = self.plane(), self.plane()
+        cmds.select(other)
+        UvUtils.align_uvs(plane, axis="v", mode="max")
+        self.assertEqual(cmds.ls(selection=True, long=True), cmds.ls(other, long=True))
+
+    def test_orient_shells_counts_the_meshes(self):
+        self.assertEqual(UvUtils.orient_shells([self.plane(), self.plane()]), 2)
+
+    def test_orient_to_edge_needs_an_edge(self):
+        self.assertEqual(UvUtils.orient_shells([self.plane()], to_edge=True), 0)
+
+    def test_straighten_with_no_axis_runs_nothing(self):
+        self.assertEqual(UvUtils.straighten_uvs(self.plane(), u=False, v=False), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

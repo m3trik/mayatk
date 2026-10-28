@@ -20,12 +20,18 @@ import unittest
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
 
-from mayatk.edit_utils.bridge import Bridge, BridgeSlots
+from mayatk.edit_utils.bridge import Bridge
 from mayatk.core_utils.preview import Preview, OperationError
 
-# Matches what BridgeSlots.perform_operation sends.
+# Matches what tentacle's BridgeSlots.perform_operation sends.
 BRIDGE_KW = dict(
-    curveType=0, divisions=0, smoothingAngle=30, bridgeOffset=0, taper=1.0, twist=0
+    curve_type="linear",
+    divisions=0,
+    smoothing_angle=30,
+    offset=0,
+    taper=1.0,
+    twist=0,
+    cleanup_curves=False,
 )
 
 
@@ -76,6 +82,25 @@ class TestBridge(MayaTkTestCase):
         before = cmds.polyEvaluate(comb, face=True)
         Bridge.bridge(self._facing_loops(comb), **BRIDGE_KW)
         self.assertGreater(cmds.polyEvaluate(comb, face=True), before)
+
+    def test_raw_polyBridgeEdge_flags_still_pass_through(self):
+        comb = self._combined()
+        before = cmds.polyEvaluate(comb, face=True)
+        Bridge.bridge(
+            self._facing_loops(comb), curveType=0, divisions=1, smoothingAngle=30
+        )
+        self.assertGreater(cmds.polyEvaluate(comb, face=True), before)
+
+    def test_an_unknown_curve_type_is_refused_before_maya_runs(self):
+        comb = self._combined()
+        before = cmds.polyEvaluate(comb, face=True)
+        with self.assertRaises(ValueError):
+            Bridge.bridge(self._facing_loops(comb), curve_type="spline")
+        self.assertEqual(cmds.polyEvaluate(comb, face=True), before)
+
+    def test_maya_builds_every_curve_type_the_panel_lists(self):
+        self.assertEqual(Bridge.CURVE_TYPES, ("linear", "blend", "curve"))
+        self.assertEqual(Bridge.UNSUPPORTED_OPTIONS, {})
 
     # -- specific failure diagnostics -----------------------------------------
 
@@ -177,7 +202,7 @@ class _MockWidget:
 
 
 class _BridgePreviewOp:
-    """Stand-in for BridgeSlots: mutable params (like the UI spinboxes) that
+    """Stand-in for tentacle's BridgeSlots: mutable params (like the UI spinboxes) that
     forward to Bridge.bridge. Mirrors the real slots' PRESERVE_GEOMETRY opt-in."""
 
     PRESERVE_GEOMETRY = True
@@ -199,7 +224,7 @@ class TestBridgePreviewRollback(MayaTkTestCase):
     orig-shape; the hermetic preview's node-diff rollback deleted it along with
     the bridge node, BAKING the bridge in and closing the border. The next
     refresh/commit then failed with "edges aren't on an open border". Fixed by
-    BridgeSlots.PRESERVE_GEOMETRY=True plus Preview resolving the captured edge
+    tentacle's BridgeSlots.PRESERVE_GEOMETRY=True plus Preview resolving the captured edge
     components to their owning transform for the snapshot. Verified in Maya.
     """
 
@@ -267,12 +292,6 @@ class TestBridgePreviewRollback(MayaTkTestCase):
                 pass
         Preview.cleanup_all_instances()
         super().tearDown()
-
-    def test_slots_class_opts_into_geometry_preservation(self):
-        self.assertTrue(
-            getattr(BridgeSlots, "PRESERVE_GEOMETRY", False),
-            "BridgeSlots must set PRESERVE_GEOMETRY = True",
-        )
 
     def test_refresh_does_not_break_bridge_on_historyless_mesh(self):
         comb = self._historyless_bridge_mesh()

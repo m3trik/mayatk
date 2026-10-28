@@ -74,8 +74,7 @@ def main():
     check("bridge builds", slots.peek_bridge() is not None)
 
     combo = ui.cmb000
-    # cmb000 populates lazily on first show; drive its init directly (the
-    # same pattern shell_xform_ui_check uses for its combo).
+    # cmb000 populates lazily on first show; drive its init directly.
     slots._populate_template_combo(combo)
     labels = [combo.itemText(i) for i in range(combo.count())]
     check(

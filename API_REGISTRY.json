@@ -8955,22 +8955,22 @@
     },
     {
       "relpath": "edit_utils/bridge.py",
-      "summary": "",
+      "summary": "Bridge: connect open edge loops with new faces (``polyBridgeEdge``).",
       "functions": [],
       "classes": [
         {
           "name": "Bridge",
-          "summary": "",
-          "line": 14,
+          "summary": "Bridge open edge loops with new faces: the API tentacle's Bridge panel",
+          "line": 20,
           "bases": [],
           "members": [
             {
               "name": "bridge",
               "qualname": "Bridge.bridge",
               "kind": "staticmethod",
-              "signature": "(edges, **kwargs)",
+              "signature": "(edges, *, curve_type=None, divisions=None, smoothing_angle=None, offset=None, taper=None, twist=None, cleanup_curves=False, **kwargs)",
               "summary": "Bridge open edge loops, grouped per owning mesh.",
-              "line": 16,
+              "line": 33,
               "deprecated": false
             },
             {
@@ -8979,7 +8979,7 @@
               "kind": "staticmethod",
               "signature": "(mesh_nodes)",
               "summary": "Find child curves created by polyBridgeEdge operations on mesh nodes.",
-              "line": 110,
+              "line": 188,
               "deprecated": false
             },
             {
@@ -8988,33 +8988,7 @@
               "kind": "staticmethod",
               "signature": "(mesh_nodes)",
               "summary": "Clean up child curves and deformer history from mesh nodes.",
-              "line": 139,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "BridgeSlots",
-          "summary": "",
-          "line": 173,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "BridgeSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 205,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "BridgeSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "",
-              "line": 231,
+              "line": 217,
               "deprecated": false
             }
           ]
@@ -31050,7 +31024,7 @@
         {
           "name": "UvUtils",
           "summary": "",
-          "line": 23,
+          "line": 24,
           "bases": [
             "pythontk.HelpMixin"
           ],
@@ -31061,7 +31035,7 @@
               "kind": "staticmethod",
               "signature": "(map_size: int, normalize: bool = False, factor: int = 256) -> float",
               "summary": "The texture gutter for a given map size — Maya-side name for the ecosystem rule.",
-              "line": 30,
+              "line": 31,
               "deprecated": false
             },
             {
@@ -31070,16 +31044,16 @@
               "kind": "staticmethod",
               "signature": "(udim: int) -> Tuple[int, int]",
               "summary": "UDIM tile number to its (u, v) tile offset — Maya-side name for the",
-              "line": 65,
+              "line": 66,
               "deprecated": false
             },
             {
               "name": "orient_shells",
               "qualname": "UvUtils.orient_shells",
               "kind": "staticmethod",
-              "signature": "(objects)",
+              "signature": "(objects, to_edge: bool = False) -> int",
               "summary": "Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.",
-              "line": 84,
+              "line": 86,
               "deprecated": false
             },
             {
@@ -31088,7 +31062,70 @@
               "kind": "staticmethod",
               "signature": "(objects, u, v, relative=True)",
               "summary": "Move objects to the given u and v coordinates.",
-              "line": 111,
+              "line": 127,
+              "deprecated": false
+            },
+            {
+              "name": "rotate_uvs",
+              "qualname": "UvUtils.rotate_uvs",
+              "kind": "classmethod",
+              "signature": "(cls, objects, angle: float) -> int",
+              "summary": "Rotate the UVs of *objects* by *angle* degrees, counter-clockwise, about",
+              "line": 180,
+              "deprecated": false
+            },
+            {
+              "name": "straighten_uvs",
+              "qualname": "UvUtils.straighten_uvs",
+              "kind": "classmethod",
+              "signature": "(cls, objects, u: bool = True, v: bool = True, angle: float = 30.0) -> int",
+              "summary": "Straighten the UV edges of *objects* lying within *angle* degrees of",
+              "line": 205,
+              "deprecated": false
+            },
+            {
+              "name": "straighten_uv_shells",
+              "qualname": "UvUtils.straighten_uv_shells",
+              "kind": "classmethod",
+              "signature": "(cls, objects) -> int",
+              "summary": "Straighten each UV shell of *objects* into a grid by unfolding it around",
+              "line": 228,
+              "deprecated": false
+            },
+            {
+              "name": "distribute_uv_shells",
+              "qualname": "UvUtils.distribute_uv_shells",
+              "kind": "classmethod",
+              "signature": "(cls, objects, axis: str = 'u', spacing: float = 0.0) -> int",
+              "summary": "Lay the UV shells of *objects* out in a row -- Maya's",
+              "line": 239,
+              "deprecated": false
+            },
+            {
+              "name": "align_uvs",
+              "qualname": "UvUtils.align_uvs",
+              "kind": "classmethod",
+              "signature": "(cls, objects, axis: str = 'u', mode: str = 'avg') -> int",
+              "summary": "Align the UVs of *objects* -- Maya's Align UVs: ``\"min\"`` / ``\"max\"`` /",
+              "line": 258,
+              "deprecated": false
+            },
+            {
+              "name": "gather_uv_shells",
+              "qualname": "UvUtils.gather_uv_shells",
+              "kind": "classmethod",
+              "signature": "(cls, objects) -> int",
+              "summary": "Gather the UV shells of *objects* back into the 0-1 tile -- Maya's",
+              "line": 283,
+              "deprecated": false
+            },
+            {
+              "name": "randomize_uv_shells",
+              "qualname": "UvUtils.randomize_uv_shells",
+              "kind": "classmethod",
+              "signature": "(cls, objects, seed: Optional[int] = None) -> int",
+              "summary": "Randomly offset the UV shells of *objects* -- Maya's Randomize Shells,",
+              "line": 294,
               "deprecated": false
             },
             {
@@ -31097,7 +31134,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> Optional[Tuple[float, float, float, float]]",
               "summary": "The UV-space bounding box of *objects*, as one box over the whole input.",
-              "line": 133,
+              "line": 308,
               "deprecated": false
             },
             {
@@ -31106,7 +31143,7 @@
               "kind": "staticmethod",
               "signature": "(shape: str, uv_set: Optional[str] = None)",
               "summary": "``(N, 3, 2)`` array of *shape*'s UV-space triangles for *uv_set*.",
-              "line": 159,
+              "line": 334,
               "deprecated": false
             },
             {
@@ -31115,7 +31152,7 @@
               "kind": "staticmethod",
               "signature": "(shape: str, uv_set: Optional[str] = None)",
               "summary": "*shape*'s UV-space triangles paired with the world-space corners they map.",
-              "line": 209,
+              "line": 384,
               "deprecated": false
             },
             {
@@ -31124,7 +31161,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, udim: Optional[int] = None, map_size: int = 4096) -> Optional[int]",
               "summary": "Move UV shells sitting outside the target UDIM tile into it.",
-              "line": 293,
+              "line": 468,
               "deprecated": false
             },
             {
@@ -31133,7 +31170,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> List[Tuple[float, float, float, float]]",
               "summary": "Per-shell UV boxes that share *objects*' UV space, excluding their own.",
-              "line": 356,
+              "line": 531,
               "deprecated": false
             },
             {
@@ -31142,7 +31179,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)",
               "summary": "Mirror UVs across U or V.",
-              "line": 444,
+              "line": 619,
               "deprecated": false
             },
             {
@@ -31151,7 +31188,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, returned_type='shell', whole_shells=False)",
               "summary": "Get UV shells and their corresponding sets of faces.",
-              "line": 572,
+              "line": 747,
               "deprecated": false
             },
             {
@@ -31160,7 +31197,7 @@
               "kind": "staticmethod",
               "signature": "(uvs) -> List[float]",
               "summary": "Pin weight of each UV in *uvs* (flat component names), in argument order.",
-              "line": 703,
+              "line": 878,
               "deprecated": false
             },
             {
@@ -31169,7 +31206,7 @@
               "kind": "staticmethod",
               "signature": "(uvs, weights) -> None",
               "summary": "Set per-UV pin weights (``zip(uvs, weights)``) with one ``polyPinUV``",
-              "line": 723,
+              "line": 898,
               "deprecated": false
             },
             {
@@ -31178,7 +31215,7 @@
               "kind": "staticmethod",
               "signature": "(uvs)",
               "summary": "Zero the pin weights of *uvs* inside the block, then put each one back.",
-              "line": 736,
+              "line": 911,
               "deprecated": false
             },
             {
@@ -31187,7 +31224,7 @@
               "kind": "staticmethod",
               "signature": "(items, tolerance: float = 1.0) -> List[str]",
               "summary": "Stack shells of the same topology and shape onto the first matching",
-              "line": 778,
+              "line": 953,
               "deprecated": false
             },
             {
@@ -31196,7 +31233,7 @@
               "kind": "staticmethod",
               "signature": "(reference, candidates=None, tolerance: float = 1.0, include_reference: bool = False) -> List[List[str]]",
               "summary": "The UV shells that Stack Similar would stack together with *reference*'s",
-              "line": 803,
+              "line": 978,
               "deprecated": false
             },
             {
@@ -31205,7 +31242,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Get the edges that make up any UV islands of the given objects.",
-              "line": 917,
+              "line": 1092,
               "deprecated": false
             },
             {
@@ -31214,7 +31251,7 @@
               "kind": "classmethod",
               "signature": "(cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None)",
               "summary": "Identify the UV seam edges for unwrapping a smooth cylinder / tube.",
-              "line": 997,
+              "line": 1172,
               "deprecated": false
             },
             {
@@ -31223,7 +31260,7 @@
               "kind": "classmethod",
               "signature": "(cls, mesh, angle: float = 45.0, invert_seam: bool = False, taper_angle: float = 20.0, camera=None, flat_angle: float = 60.0, trim_ratio: float = 0.12)",
               "summary": "Seam edges that auto-unwrap a cylinder / tube / turned mesh -- clean",
-              "line": 1118,
+              "line": 1293,
               "deprecated": false
             },
             {
@@ -31232,7 +31269,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)",
               "summary": "Cut auto UV seams for cylinder / tube unwrapping on each mesh.",
-              "line": 1299,
+              "line": 1474,
               "deprecated": false
             },
             {
@@ -31241,7 +31278,7 @@
               "kind": "staticmethod",
               "signature": "(edges, history: bool = True)",
               "summary": "Cut (split) UV shells along the given edges, spanning any number of objects.",
-              "line": 1356,
+              "line": 1531,
               "deprecated": false
             },
             {
@@ -31250,7 +31287,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, method: str = 'hard', map_size: int = 4096, pack: Optional[bool] = None, orient: bool = True, engine_params: Optional[dict] = None)",
               "summary": "Automatically unwrap meshes with an external unwrapping engine.",
-              "line": 1376,
+              "line": 1551,
               "deprecated": false
             },
             {
@@ -31259,7 +31296,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1))",
               "summary": "Pack existing UV shells into a UDIM tile (or a grid of tiles).",
-              "line": 1442,
+              "line": 1617,
               "deprecated": false
             },
             {
@@ -31268,7 +31305,7 @@
               "kind": "staticmethod",
               "signature": "(error) -> str",
               "summary": "A short, human-readable reason for an Unfold3D failure.",
-              "line": 1572,
+              "line": 1747,
               "deprecated": false
             },
             {
@@ -31277,7 +31314,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, map_size: int = 4096, density: Optional[float] = None, scale: Optional[float] = None, pages: Optional[int] = None, density_from: str = 'preserve', group_by: str = 'mesh', collapse_stacked: bool = True, read_textures: bool = True, mip_levels: int = 0, padding_factor: int = 256, fill: Optional[float] = None, level: bool = False, alternates: bool = True)",
               "summary": "How many texture maps these surfaces need, and at what texel density.",
-              "line": 1591,
+              "line": 1766,
               "deprecated": false
             },
             {
@@ -31286,7 +31323,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)",
               "summary": "Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.",
-              "line": 1863,
+              "line": 2038,
               "deprecated": false
             },
             {
@@ -31295,7 +31332,7 @@
               "kind": "staticmethod",
               "signature": "(objects, map_size)",
               "summary": "Calculate the texel density for the given objects' faces.",
-              "line": 1980,
+              "line": 2155,
               "deprecated": false
             },
             {
@@ -31304,7 +31341,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, density=1.0, map_size=4096)",
               "summary": "Set the texel density for the given objects.",
-              "line": 2022,
+              "line": 2197,
               "deprecated": false
             },
             {
@@ -31313,7 +31350,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]",
               "summary": "Copy each object's active UV set into a uniquely-named backup set.",
-              "line": 2142,
+              "line": 2317,
               "deprecated": false
             },
             {
@@ -31322,7 +31359,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> Iterator[List[UvSnapshot]]",
               "summary": "Back up each object's active UV set for the length of a block.",
-              "line": 2204,
+              "line": 2379,
               "deprecated": false
             },
             {
@@ -31331,7 +31368,7 @@
               "kind": "staticmethod",
               "signature": "(snapshots: Sequence[UvSnapshot]) -> None",
               "summary": "Restore UVs captured by ``snapshot_uv_sets``.",
-              "line": 2233,
+              "line": 2408,
               "deprecated": false
             },
             {
@@ -31340,7 +31377,7 @@
               "kind": "staticmethod",
               "signature": "(snapshots: Sequence[UvSnapshot]) -> None",
               "summary": "Delete the snapshot UV sets without restoring them.",
-              "line": 2264,
+              "line": 2439,
               "deprecated": false
             },
             {
@@ -31349,7 +31386,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap', stale_only: bool = False) -> List[UvSnapshot]",
               "summary": "The snapshot UV sets ``snapshot_uv_sets`` left on *objects*.",
-              "line": 2284,
+              "line": 2459,
               "deprecated": false
             },
             {
@@ -31358,7 +31395,7 @@
               "kind": "classmethod",
               "signature": "(cls, source: Union[str, object, List[Union[str, object]]], target: Union[str, object, List[Union[str, object]]], tolerance: float = 0.1, match_by_similarity: bool = True, sample_space: str = 'auto', preserve_uv_ids: bool = False) -> List[Tuple[str, str, str]]",
               "summary": "Transfers UVs from source meshes to target meshes.",
-              "line": 2544,
+              "line": 2719,
               "deprecated": false
             },
             {
@@ -31367,7 +31404,7 @@
               "kind": "classmethod",
               "signature": "(cls, source: Union[str, object], candidates: Optional[List[Union[str, object]]] = None, tolerance: float = 0.9) -> List[str]",
               "summary": "Transfer UVs from one source mesh to every geometrically similar mesh.",
-              "line": 2676,
+              "line": 2851,
               "deprecated": false
             },
             {
@@ -31376,7 +31413,7 @@
               "kind": "staticmethod",
               "signature": "(obj: str, new_order: list[str]) -> None",
               "summary": "Reorder UV sets of the given object to match the specified new order.",
-              "line": 2748,
+              "line": 2923,
               "deprecated": false
             },
             {
@@ -31385,7 +31422,7 @@
               "kind": "staticmethod",
               "signature": "(objects, uv_set: str = None) -> dict",
               "summary": "Read each mesh's *uv_set* as a per-loop layout, for :meth:`apply_uv_layout`.",
-              "line": 2953,
+              "line": 3128,
               "deprecated": false
             },
             {
@@ -31394,7 +31431,7 @@
               "kind": "staticmethod",
               "signature": "(layouts: dict, uv_set: str = None, quiet: bool = False) -> dict",
               "summary": "Write UV layouts authored in ANOTHER application onto these meshes.",
-              "line": 3022,
+              "line": 3197,
               "deprecated": false
             },
             {
@@ -31403,7 +31440,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, uv_set: str = None, map_size: int = 1024, planes: int = 6, force: bool = False, freeze_history: bool = False, quiet: bool = False) -> dict",
               "summary": "Ensure each mesh has a packed, non-overlapping lightmap UV set.",
-              "line": 3195,
+              "line": 3370,
               "deprecated": false
             },
             {
@@ -31412,7 +31449,7 @@
               "kind": "staticmethod",
               "signature": "(objects, quiet: bool = False) -> None",
               "summary": "Remove empty UV sets from the given objects.",
-              "line": 3433,
+              "line": 3608,
               "deprecated": false
             }
           ]
@@ -31695,294 +31732,6 @@
               "signature": "(self)",
               "summary": "Open Maya's UV Editor (TextureViewWindow).",
               "line": 350,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "uv_utils/shell_xform.py",
-      "summary": "Dedicated UV shell-transform panel.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShellXformSlots",
-          "summary": "Switchboard slots for the Shell Xform panel (``shell_xform.ui``).",
-          "line": 36,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ShellXformSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Header menu — Open UV Editor + panel help.",
-              "line": 100,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_move_scope_init",
-              "qualname": "ShellXformSlots.cmb_move_scope_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Move scope — how far one arrow press travels, plus the snap button.",
-              "line": 163,
-              "deprecated": false
-            },
-            {
-              "name": "b023",
-              "qualname": "ShellXformSlots.b023",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Move To UV Space: Left",
-              "line": 303,
-              "deprecated": false
-            },
-            {
-              "name": "b024",
-              "qualname": "ShellXformSlots.b024",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Move To UV Space: Down",
-              "line": 307,
-              "deprecated": false
-            },
-            {
-              "name": "b025",
-              "qualname": "ShellXformSlots.b025",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Move To UV Space: Up",
-              "line": 311,
-              "deprecated": false
-            },
-            {
-              "name": "b026",
-              "qualname": "ShellXformSlots.b026",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Move To UV Space: Right",
-              "line": 315,
-              "deprecated": false
-            },
-            {
-              "name": "gather_to_udim",
-              "qualname": "ShellXformSlots.gather_to_udim",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Move shells sitting outside the selection's UDIM tile into it.",
-              "line": 319,
-              "deprecated": false
-            },
-            {
-              "name": "b034",
-              "qualname": "ShellXformSlots.b034",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Flip U: mirror the selected UVs horizontally about each shell's center.",
-              "line": 357,
-              "deprecated": false
-            },
-            {
-              "name": "b035",
-              "qualname": "ShellXformSlots.b035",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Flip V: mirror the selected UVs vertically about each shell's center.",
-              "line": 361,
-              "deprecated": false
-            },
-            {
-              "name": "b036",
-              "qualname": "ShellXformSlots.b036",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Rotate the selected UVs counter-clockwise by the s041 angle.",
-              "line": 398,
-              "deprecated": false
-            },
-            {
-              "name": "b037",
-              "qualname": "ShellXformSlots.b037",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Rotate the selected UVs clockwise by the s041 angle.",
-              "line": 402,
-              "deprecated": false
-            },
-            {
-              "name": "s041",
-              "qualname": "ShellXformSlots.s041",
-              "kind": "method",
-              "signature": "(self, value, widget)",
-              "summary": "Rotate Angle — passive input; read by the Rotate buttons (b036/b037).",
-              "line": 406,
-              "deprecated": false
-            },
-            {
-              "name": "tb005_init",
-              "qualname": "ShellXformSlots.tb005_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Straighten UV",
-              "line": 410,
-              "deprecated": false
-            },
-            {
-              "name": "tb005",
-              "qualname": "ShellXformSlots.tb005",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Straighten UV",
-              "line": 443,
-              "deprecated": false
-            },
-            {
-              "name": "tb006_init",
-              "qualname": "ShellXformSlots.tb006_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Distribute",
-              "line": 466,
-              "deprecated": false
-            },
-            {
-              "name": "tb006",
-              "qualname": "ShellXformSlots.tb006",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Distribute: evenly space the selected UV shells horizontally or vertically.",
-              "line": 486,
-              "deprecated": false
-            },
-            {
-              "name": "tb008_init",
-              "qualname": "ShellXformSlots.tb008_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Mirror UVs.",
-              "line": 507,
-              "deprecated": false
-            },
-            {
-              "name": "tb008",
-              "qualname": "ShellXformSlots.tb008",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Mirror UVs (footprint-preserving by default).",
-              "line": 548,
-              "deprecated": false
-            },
-            {
-              "name": "align_u_min",
-              "qualname": "ShellXformSlots.align_u_min",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Align the selected UVs to their minimum U (left).",
-              "line": 571,
-              "deprecated": false
-            },
-            {
-              "name": "align_u_avg",
-              "qualname": "ShellXformSlots.align_u_avg",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Align the selected UVs to their average U (center).",
-              "line": 575,
-              "deprecated": false
-            },
-            {
-              "name": "align_u_max",
-              "qualname": "ShellXformSlots.align_u_max",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Align the selected UVs to their maximum U (right).",
-              "line": 579,
-              "deprecated": false
-            },
-            {
-              "name": "align_v_min",
-              "qualname": "ShellXformSlots.align_v_min",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Align the selected UVs to their minimum V (bottom).",
-              "line": 583,
-              "deprecated": false
-            },
-            {
-              "name": "align_v_avg",
-              "qualname": "ShellXformSlots.align_v_avg",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Align the selected UVs to their average V (center).",
-              "line": 587,
-              "deprecated": false
-            },
-            {
-              "name": "align_v_max",
-              "qualname": "ShellXformSlots.align_v_max",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Align the selected UVs to their maximum V (top).",
-              "line": 591,
-              "deprecated": false
-            },
-            {
-              "name": "linear_align",
-              "qualname": "ShellXformSlots.linear_align",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Linearly align the selected UVs between their two end points.",
-              "line": 595,
-              "deprecated": false
-            },
-            {
-              "name": "orient_shells",
-              "qualname": "ShellXformSlots.orient_shells",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Orient each shell to run parallel with its nearest U/V axis.",
-              "line": 600,
-              "deprecated": false
-            },
-            {
-              "name": "orient_edges",
-              "qualname": "ShellXformSlots.orient_edges",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Orient the shell so its selected edge runs along U or V.",
-              "line": 608,
-              "deprecated": false
-            },
-            {
-              "name": "gather_shells",
-              "qualname": "ShellXformSlots.gather_shells",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Gather the selected shells together toward the 0-1 UV space.",
-              "line": 620,
-              "deprecated": false
-            },
-            {
-              "name": "randomize_shells",
-              "qualname": "ShellXformSlots.randomize_shells",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Randomly offset the selected shells.",
-              "line": 624,
-              "deprecated": false
-            },
-            {
-              "name": "open_uv_editor",
-              "qualname": "ShellXformSlots.open_uv_editor",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open Maya's UV Editor (TextureViewWindow).",
-              "line": 629,
               "deprecated": false
             }
           ]
