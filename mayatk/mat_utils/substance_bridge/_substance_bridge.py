@@ -37,7 +37,7 @@ from mayatk.mat_utils.mat_manifest import MatManifest
 # the same set), so the class lives in the shared :mod:`mayatk.mat_utils.bake_sets`.
 from mayatk.mat_utils.bake_sets import BakeSourceSet
 
-# The DCC-free engine, plus the names the slots and tests import from this module.
+# The DCC-free engine, plus the names the tests import from this module.
 import mayatk.mat_utils.substance_bridge._substance_engine as _engine
 from mayatk.mat_utils.substance_bridge._substance_engine import (  # noqa: F401
     SubstanceEngine,
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 # The mode / target vocabulary is the engine's. Bound here as assignments (not a
 # bare import) because it is this module's public surface too: the subpackage
-# ``__init__``, the slots and the tests import it from here.
+# ``__init__`` and the tests import it from here.
 SEND_TO = _engine.SEND_TO
 ROUND_TRIP = _engine.ROUND_TRIP
 TARGET_AUTO = _engine.TARGET_AUTO
@@ -147,6 +147,20 @@ class SubstanceBridge(SubstanceEngine):
     #: Sourced from the shared set class so every bridge derives the same
     #: companion filename (see :meth:`BakeSourceSet.companion_path`).
     HIGH_POLY_SUFFIX = BakeSourceSet.FILE_SUFFIX
+
+    #: The bundled ``templates/`` folder: what a panel lists and describes
+    #: (:meth:`list_template_modes` / :meth:`parse_template` read the same one).
+    TEMPLATE_DIR = _TEMPLATE_DIR
+
+    @classmethod
+    def params_registry(cls):
+        """The panel's parameter registry (``parameters.Parameters``, a
+        ``uitk.bridge.ParamRegistry``): what tentacle's Substance Bridge builds
+        its rows from. Imported on use: the registry is uitk's, and the engine
+        surface imports without it."""
+        from . import parameters as _params
+
+        return _params.Parameters
 
     # -- Public API -------------------------------------------------------
 

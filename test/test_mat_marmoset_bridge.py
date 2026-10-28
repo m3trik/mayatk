@@ -2,11 +2,11 @@
 # coding=utf-8
 """Test Suite for mayatk.mat_utils.marmoset_bridge.
 
-Regression coverage for the Maya-side of the bridge -- export, manifest,
-template rendering, and the UI's resize-on-template-switch behavior. The
-Toolbag invocation itself is intentionally not exercised here (it needs the
-external executable); ``test/mock_tests/test_marmoset_bridge.py`` covers the
-pure-Python layers.
+Regression coverage for the Maya-side of the bridge -- export, manifest and
+template rendering. The Toolbag invocation itself is intentionally not
+exercised here (it needs the external executable);
+``test/mock_tests/test_marmoset_bridge.py`` covers the pure-Python layers. The
+panel is tentacle's shared Marmoset Bridge (its ``test_marmoset_bridge_panel.py``).
 
 Tests run inside a live Maya session via ``run_tests.py`` and catch:
 
@@ -14,8 +14,6 @@ Tests run inside a live Maya session via ``run_tests.py`` and catch:
 - A real shading graph survives the MatManifest -> JSON round-trip.
 - Every bundled template renders to valid Python with no placeholder tokens
   surviving.
-- The UI window shrinks/grows when the selected template's parameter
-  references change.
 """
 
 import ast
@@ -372,18 +370,6 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
             [p for p in os.listdir(self.out_dir) if p.endswith((".png", ".tga"))], []
         )
 
-    def test_holding_esc_cancels_the_panels_send_button(self):
-        """The panel's Send (``b000``) runs inside the dispatcher's CancelScope
-        (``@Cancelable``) -- the scope a hidden roundtrip polls. Without it
-        nothing activates one, and Esc held over a stuck bake did nothing.
-        Added: 2026-10-19"""
-        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
-            MarmosetBridgeSlots,
-        )
-
-        meta = getattr(MarmosetBridgeSlots.b000, "_cancelable_meta", None) or {}
-        self.assertGreater(meta.get("timeout") or 0, 0)
-
     def test_bake_maps_land_in_the_project_texture_folder(self):
         """Baked maps go to ``sourceimages/baked``, not beside the handoff files.
 
@@ -667,20 +653,19 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
             os.path.normcase(os.path.join(other, "sourceimages", "baked")),
         )
 
-    def test_the_panel_leaves_every_mode_to_the_bridge_when_blank(self):
-        """Blank Output Dir means the bridge's own rule in every mode (scratch
-        for the hand-off, project folders for what is kept) -- not the scene
-        folder for a send_to, where the hand-off silted up the project.
-        Added: 2026-10-13"""
-        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
-            MarmosetBridgeSlots,
-        )
-        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
-
+    def test_the_panel_reads_its_registry_templates_and_modes_off_the_engine(self):
+        """tentacle's shared Marmoset Bridge builds its rows from
+        ``MarmosetBridge.params_registry()``, describes templates from
+        ``TEMPLATE_DIR`` and fills its combo from ``list_template_modes()``, all
+        off the class; the engine's defaults read the same registry."""
+        self.assertIs(MarmosetBridge.params_registry(), _params.Parameters)
         self.assertEqual(
-            set(MarmosetBridgeSlots.TRANSIENT_OUTPUT_MODES), {SEND_TO, ROUND_TRIP}
+            MarmosetBridge().params_defaults(), _params.Parameters.defaults()
         )
-        self.assertEqual(MayaBridgeSlotsBase.default_output_dir(None), "")
+        self.assertTrue((MarmosetBridge.TEMPLATE_DIR / "bake.py").is_file())
+        modes = MarmosetBridge.list_template_modes()
+        self.assertEqual(modes, MarmosetEngine.list_template_modes())
+        self.assertIn(("bake", ROUND_TRIP), modes)
 
     def test_roundtrip_keeps_the_scratch_when_the_maps_land_in_it(self):
         """No project texture folder -> the maps ARE the scratch dir; keep it.
@@ -794,80 +779,6 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         )
 
 
-class TestMarmosetBridgeUiResize(MayaTkTestCase):
-    """The window must shrink/grow when the active template's parameters change."""
-
-    def test_window_height_tracks_visible_param_rows(self):
-        """Switching templates hides/shows rows and the window follows."""
-        from qtpy import QtWidgets
-        from uitk import Switchboard
-        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
-            MarmosetBridgeSlots,
-        )
-        from mayatk.mat_utils.marmoset_bridge import _marmoset_bridge as bridge_mod
-        from mayatk.mat_utils.marmoset_bridge import _marmoset_engine as engine_mod
-        from mayatk.mat_utils.marmoset_bridge import parameters as _p
-
-        sb = Switchboard(
-            ui_source=str(engine_mod._PKG_DIR),
-            slot_source=MarmosetBridgeSlots,
-        )
-        ui = sb.loaded_ui.marmoset_bridge
-        ui.restore_window_size = False
-        ui.show()
-        QtWidgets.QApplication.processEvents()
-        ui.is_initialized = True
-
-        # Enumerate via the production discovery helper (not a raw *.py glob) so
-        # the test applies the same "_"-prefixed filter the combo does — else the
-        # templates/ package's __init__.py is picked up as a bogus "__init__"
-        # template and has no combo entry.
-        templates = sorted(p.stem for p in bridge_mod.MarmosetEngine.list_templates())
-        if len(templates) < 2:
-            self.skipTest("Need at least two bundled templates to compare heights.")
-
-        def row_count(stem):
-            path = bridge_mod._TEMPLATE_DIR / f"{stem}.py"
-            return len(_p.Parameters.referenced_keys(path.read_text(encoding="utf-8")))
-
-        sorted_by_rows = sorted(templates, key=row_count)
-        few, many = sorted_by_rows[0], sorted_by_rows[-1]
-        if row_count(few) == row_count(many):
-            self.skipTest("All bundled templates reference the same param count.")
-
-        cmb = ui.cmb000
-
-        def index_for_stem(stem):
-            """First combo index whose itemData = (stem, <any mode>)."""
-            for i in range(cmb.count()):
-                data = cmb.itemData(i)
-                if isinstance(data, tuple) and data[0] == stem:
-                    return i
-            raise AssertionError(f"No combo entry for template stem '{stem}'.")
-
-        cmb.setCurrentIndex(index_for_stem(many))
-        QtWidgets.QApplication.processEvents()
-        ui.resize(ui.width(), 800)
-        QtWidgets.QApplication.processEvents()
-        height_many = ui.height()
-
-        cmb.setCurrentIndex(index_for_stem(few))
-        for _ in range(5):
-            QtWidgets.QApplication.processEvents()
-        height_few = ui.height()
-
-        ui.close()
-        ui.deleteLater()
-
-        self.assertLess(
-            height_few,
-            height_many,
-            f"Window did not shrink: '{many}' ({row_count(many)} rows) "
-            f"@ {height_many}px -> '{few}' ({row_count(few)} rows) "
-            f"@ {height_few}px.",
-        )
-
-
 class TestBakeClassification(MayaTkTestCase):
     """High Poly set splitting + pairs-sidecar collision handling.
 
@@ -921,20 +832,23 @@ class TestBakeClassification(MayaTkTestCase):
         pairs = MarmosetBridge.build_bake_pairs_manifest([src, tgt], "_source", "")
         self.assertEqual(pairs, {"pairs3_a": "source"})
 
-    def test_suffix_fallback_keys_are_registered_params(self):
-        """Every key the panel greys must actually exist in the registry.
-
-        ``set_param_enabled`` ignores unknown keys by design (a shared base
-        may offer a row no panel registers), so a typo here would silently
-        leave the row live instead of raising -- exactly the failure mode a
-        greyed-out control is supposed to prevent.
-        """
-        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
-            MarmosetBridgeSlots,
-        )
-
-        for key in MarmosetBridgeSlots.SUFFIX_FALLBACK_KEYS:
+    def test_the_suffix_fallback_and_bake_source_rows_are_registered(self):
+        """The rows tentacle's Marmoset Bridge greys while a Bake Source set
+        exists (its ``SUFFIX_FALLBACK_KEYS``), and the Bake Source row whose
+        three buttons its bridge base answers by name. ``set_param_enabled``
+        ignores an unknown key, so a row renamed here would silently stay live
+        there."""
+        for key in ("HIGH_SUFFIX", "LOW_SUFFIX", "SUFFIX_INCLUDE_CHILDREN"):
             self.assertIn(key, _params.Parameters.PARAMS)
+        actions = [c[1] for c in _params.PARAMS["BAKE_SOURCE_SET"].choices]
+        self.assertEqual(
+            actions,
+            [
+                "set_bake_source_from_selection",
+                "select_bake_source",
+                "clear_bake_source",
+            ],
+        )
 
     def test_pairs_manifest_include_children_off_needs_own_suffix(self):
         """With the flag off, a suffixed group no longer adopts its meshes."""

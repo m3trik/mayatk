@@ -316,21 +316,10 @@ class TestUnityScopeResolution(MayaTkTestCase):
         from mayatk.env_utils.blender_bridge.blender_bridge_slots import (
             BlenderBridgeSlots,
         )
-        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
-            MarmosetBridgeSlots,
-        )
-        from mayatk.mat_utils.substance_bridge.substance_bridge_slots import (
-            SubstanceBridgeSlots,
-        )
         from mayatk.uv_utils.rizom_bridge.rizom_bridge_slots import RizomBridgeSlots
 
         shared = MayaBridgeSlotsBase.resolve_scope_objects
-        for slots in (
-            BlenderBridgeSlots,
-            MarmosetBridgeSlots,
-            SubstanceBridgeSlots,
-            RizomBridgeSlots,
-        ):
+        for slots in (BlenderBridgeSlots, RizomBridgeSlots):
             self.assertIs(slots.resolve_scope_objects, shared, slots.__name__)
 
     def test_unknown_scope_falls_back_to_selection(self):

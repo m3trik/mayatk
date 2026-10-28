@@ -17,7 +17,9 @@ The bridge mirrors :mod:`mayatk.mat_utils.marmoset_bridge`:
 * :mod:`connection` -- live process I/O: stdio capture, log tail.
 * :mod:`substance_rpc` -- RPC client + installer + Painter-side plugin
   (``plugin_src/substance_rpc``) for a running Painter.
-* :mod:`parameters` -- registry of tunable knobs surfaced in the UI.
+* :mod:`parameters` -- registry of tunable knobs
+  (``SubstanceBridge.params_registry()``): the rows of tentacle's shared
+  Substance Bridge panel (``slots/tools/substance_bridge.py``).
 * :mod:`manifest` -- ``MatManifest`` re-export shim.
 * ``templates/`` -- declarative Painter handoffs (``__KEY__`` placeholders).
 """

@@ -6,7 +6,7 @@ Thin subclass of :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsB
 uitk's :class:`BridgeSlotsBase`) -- the panel machinery (template combo, dynamic parameter widgets,
 user presets, log routing, per-template description) lives upstream. This file owns only the
 Blender-specific bits: the bridge factory, the ``(template, mode)`` listing, the header menu, and
-the ``b000`` send action. Mirrors ``marmoset_bridge_slots`` / the blendertk ``maya_bridge`` slots.
+the ``b000`` send action. Mirrors the blendertk ``maya_bridge`` slots.
 
 ``REQUIRE_OUTPUT_DIR = False`` -- the bridge round-trips through a temp FBX it manages internally;
 there's no user-visible artifact to point at, so the base skips the Output Dir row.

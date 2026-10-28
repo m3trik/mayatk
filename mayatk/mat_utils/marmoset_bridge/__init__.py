@@ -25,8 +25,8 @@ Toolbag SDK glue, not a generic utility, so it lives with its consumer
 * :mod:`marmoset_rpc` -- JSON-RPC client + installer for a *running*
   Toolbag (the in-Toolbag plugin lives under ``marmoset_rpc/plugin_src``).
 * :mod:`parameters` -- ``AttributeSpec`` registry of tunable knobs
-  surfaced in the Maya panel (Qt/uitk-coupled, so it stays here).
-* :mod:`marmoset_bridge_slots` + ``marmoset_bridge.ui`` -- Switchboard UI.
+  (``MarmosetBridge.params_registry()``): the rows of tentacle's shared
+  Marmoset Bridge panel (``slots/tools/marmoset_bridge.py``).
 
 To talk to an already-running Toolbag, import the RPC client directly::
 

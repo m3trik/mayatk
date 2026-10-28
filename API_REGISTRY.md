@@ -142,7 +142,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/marmoset_bridge/_marmoset_bridge.py`](#mat_utils--marmoset_bridge--_marmoset_bridge) — Maya-side glue for the Marmoset Toolbag engine.
 - [`mat_utils/marmoset_bridge/_marmoset_engine.py`](#mat_utils--marmoset_bridge--_marmoset_engine) — Drive Marmoset Toolbag from the outside -- launch + templated automation.
 - [`mat_utils/marmoset_bridge/_toolbag_helpers.py`](#mat_utils--marmoset_bridge--_toolbag_helpers) — Shared helpers for Marmoset Toolbag template scripts.
-- [`mat_utils/marmoset_bridge/marmoset_bridge_slots.py`](#mat_utils--marmoset_bridge--marmoset_bridge_slots) — Slots for the Marmoset Toolbag bridge panel.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/connection.py`](#mat_utils--marmoset_bridge--marmoset_rpc--connection) — JSON-RPC client bound to the marmoset_rpc Toolbag plugin.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/installer.py`](#mat_utils--marmoset_bridge--marmoset_rpc--installer) — Install the marmoset_rpc plugin into Toolbag's user plugin folder.
 - [`mat_utils/marmoset_bridge/marmoset_rpc/job.py`](#mat_utils--marmoset_bridge--marmoset_rpc--job) — One-shot batch pipeline for the marmoset_rpc bridge.
@@ -170,7 +169,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/substance_bridge/_substance_engine.py`](#mat_utils--substance_bridge--_substance_engine) — Drive Substance 3D Painter from the outside -- the DCC-free half of the bridge.
 - [`mat_utils/substance_bridge/connection.py`](#mat_utils--substance_bridge--connection) — Substance 3D Painter connection module.
 - [`mat_utils/substance_bridge/parameters.py`](#mat_utils--substance_bridge--parameters) — Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
-- [`mat_utils/substance_bridge/substance_bridge_slots.py`](#mat_utils--substance_bridge--substance_bridge_slots) — Slots for the Substance Painter bridge panel.
 - [`mat_utils/substance_bridge/substance_rpc/client.py`](#mat_utils--substance_bridge--substance_rpc--client) — HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
 - [`mat_utils/substance_bridge/substance_rpc/installer.py`](#mat_utils--substance_bridge--substance_rpc--installer) — Install the substance_rpc plugin into Painter's user plugin folder.
 - [`mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/__init__.py`](#mat_utils--substance_bridge--substance_rpc--plugin_src--substance_rpc--__init__) — Substance 3D Painter RPC plugin -- entry point.
@@ -2823,6 +2821,8 @@ Maya-side glue for the Marmoset Toolbag engine.
 
 - **[`class MarmosetBridge(pythontk.HandoffBridge, _MarmosetBridgeInternal)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L243)** — Export the Maya selection to Marmoset Toolbag with templated automation.
   - `MarmosetBridge.toolbag_path(self) -> Optional[str]` *(property)*
+  - `MarmosetBridge.params_registry(cls)` *(class)* — The panel's parameter registry (``parameters.Parameters``, a
+  - `MarmosetBridge.list_template_modes() -> List[Tuple[str, str]]` *(static)* — ``[(template, mode), ...]`` for every bundled template, off the class
   - `MarmosetBridge.params_defaults(self) -> Dict[str, Any]`
   - `MarmosetBridge.render_template(self, *args, **kwargs) -> Optional[str]` — Render a Toolbag script body (delegates to the engine deliverer).
   - `MarmosetBridge.source_model_path_for(cls, fbx_path: str) -> str` *(class)* — ``.../asset.fbx`` -> ``.../asset_source.fbx`` (shared convention).
@@ -2871,19 +2871,6 @@ Shared helpers for Marmoset Toolbag template scripts.
   - `ToolbagHelpers.collect_mesh_objects(root)` *(static)* — Recursively gather ``mset.MeshObject`` descendants of *root*.
   - `ToolbagHelpers.apply_sky_preset(preset_path)` *(static)* — Load a ``.tbsky`` preset onto the scene's existing SkyObject.
   - `ToolbagHelpers.frame_in_viewport()` *(static)* — Frame the imported scene in the viewport (best-effort).
-
-<a id="mat_utils--marmoset_bridge--marmoset_bridge_slots"></a>
-### `mat_utils/marmoset_bridge/marmoset_bridge_slots.py`
-
-Slots for the Marmoset Toolbag bridge panel.
-
-- **[`class MarmosetBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_bridge_slots.py#L43)** — Slots wired to ``marmoset_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
-  - `MarmosetBridgeSlots.params_module(self)` *(property)*
-  - `MarmosetBridgeSlots.template_dir(self) -> Path` *(property)*
-  - `MarmosetBridgeSlots.make_bridge(self) -> MarmosetBridge`
-  - `MarmosetBridgeSlots.list_template_modes(self)`
-  - `MarmosetBridgeSlots.select_initial_template_index(self, pairs)` — Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry.
-  - `MarmosetBridgeSlots.b000(self)` — Process selected transforms with the chosen template + mode.
 
 <a id="mat_utils--marmoset_bridge--marmoset_rpc--connection"></a>
 ### `mat_utils/marmoset_bridge/marmoset_rpc/connection.py`
@@ -3240,6 +3227,7 @@ Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - [`TARGET_NEW`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L63) — constant
 - [`TARGET_CURRENT`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L64) — constant
 - **[`class SubstanceBridge(SubstanceEngine)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L112)** — Export Maya selection to Substance Painter via a chosen template.
+  - `SubstanceBridge.params_registry(cls)` *(class)* — The panel's parameter registry (``parameters.Parameters``, a
   - `SubstanceBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, painter_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, target: Union[str, int] = TARGET_AUTO, params: Optional[Dict[str, Any]] = None, **legacy_kwargs: Any) -> Optional[Dict[str, Any]]` — Export *objects*, render *template* in *mode*, hand off to Painter.
   - `SubstanceBridge.source_model_path_for(cls, fbx_path: str) -> str` *(class)* — ``.../asset.fbx`` -> ``.../asset_source.fbx``.
 
@@ -3288,19 +3276,6 @@ Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 - **[`class Parameters(ParamRegistry)`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L266)** — Parameters — module namespace.
   - `Parameters.render_cli_context(cls, values: 'dict[str, Any]') -> 'dict[str, str]'` *(class)* — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
   - `Parameters.render_js_context(cls, values: 'dict[str, Any]') -> 'dict[str, str]'` *(class)* — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
-
-<a id="mat_utils--substance_bridge--substance_bridge_slots"></a>
-### `mat_utils/substance_bridge/substance_bridge_slots.py`
-
-Slots for the Substance Painter bridge panel.
-
-- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L49)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
-  - `SubstanceBridgeSlots.params_module(self)` *(property)*
-  - `SubstanceBridgeSlots.template_dir(self) -> Path` *(property)*
-  - `SubstanceBridgeSlots.make_bridge(self) -> SubstanceBridge`
-  - `SubstanceBridgeSlots.list_template_modes(self)`
-  - `SubstanceBridgeSlots.select_initial_template_index(self, pairs)` — Default the panel to ``import (send_to)`` when it's available.
-  - `SubstanceBridgeSlots.b000(self)` — Process the selected transforms with the chosen template + mode.
 
 <a id="mat_utils--substance_bridge--substance_rpc--client"></a>
 ### `mat_utils/substance_bridge/substance_rpc/client.py`
@@ -4213,11 +4188,7 @@ Maya hotkey collision checker for the uitk ShortcutEditor.
 
 Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 
-- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L30)** — Adds the Maya-side Scope resolution and the Bake Source row to
-  - `MayaBridgeSlotsBase.live_param_tooltip_blocks(self)` — Make the Bake Source row report the scene's CURRENT members.
-  - `MayaBridgeSlotsBase.set_bake_source_from_selection(self) -> None` — Store the current selection as the scene's bake source.
-  - `MayaBridgeSlotsBase.select_bake_source(self) -> None` — Select the bake-source set's members (hidden ones included).
-  - `MayaBridgeSlotsBase.clear_bake_source(self) -> None` — Delete the bake-source set node;
+- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L28)** — Adds the Maya-side Scope resolution to :class:`BridgeSlotsBase`.
   - `MayaBridgeSlotsBase.resolve_scope_objects(self, scope: str)` — Objects to export for the chosen ``SCOPE`` param.
 
 <a id="ui_utils--maya_native_menus"></a>

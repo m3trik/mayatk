@@ -33,12 +33,12 @@ except ImportError:
 
 import pythontk as ptk
 
-# DCC-agnostic engine (bundled in this subpackage) + the names the slots
+# DCC-agnostic engine (bundled in this subpackage) + the names the tests
 # import from this module.
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import MarmosetEngine, ROUND_TRIP
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import APP
 
-# Re-exported so the slots/tests can ``from ._marmoset_bridge import SEND_TO, _TEMPLATE_DIR``.
+# Re-exported so the tests can ``from ._marmoset_bridge import SEND_TO, _TEMPLATE_DIR``.
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (  # noqa: F401
     SEND_TO,
     _TEMPLATE_DIR,
@@ -303,10 +303,27 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
     carriers = ("fbx", "usd")
     usd_flattens_instances = True
 
-    def params_defaults(self) -> Dict[str, Any]:
-        from mayatk.mat_utils.marmoset_bridge import parameters as _params
+    #: The bundled ``templates/`` folder: what a panel lists and describes.
+    TEMPLATE_DIR = _TEMPLATE_DIR
 
-        return _params.Parameters.defaults()
+    @classmethod
+    def params_registry(cls):
+        """The panel's parameter registry (``parameters.Parameters``, a
+        ``uitk.bridge.ParamRegistry``): what tentacle's Marmoset Bridge builds its
+        rows from, and :meth:`params_defaults` reads. Imported on use: the
+        registry is uitk's, and the engine surface imports without it."""
+        from . import parameters as _params
+
+        return _params.Parameters
+
+    @staticmethod
+    def list_template_modes() -> List[Tuple[str, str]]:
+        """``[(template, mode), ...]`` for every bundled template, off the class
+        as a panel reads it (:meth:`MarmosetEngine.list_template_modes`)."""
+        return MarmosetEngine.list_template_modes()
+
+    def params_defaults(self) -> Dict[str, Any]:
+        return self.params_registry().defaults()
 
     def _model_writers(
         self,

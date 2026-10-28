@@ -607,6 +607,14 @@ MOVED_NAMES = {
         "tentacle.slots.tools.workspace_map.WorkspaceMapSlots",
         "0.30.0",
     ),
+    "MarmosetBridgeSlots": (
+        "tentacle.slots.tools.marmoset_bridge.MarmosetBridgeSlots",
+        "0.30.0",
+    ),
+    "SubstanceBridgeSlots": (
+        "tentacle.slots.tools.substance_bridge.SubstanceBridgeSlots",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

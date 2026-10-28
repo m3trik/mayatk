@@ -17666,12 +17666,30 @@
               "deprecated": false
             },
             {
+              "name": "params_registry",
+              "qualname": "MarmosetBridge.params_registry",
+              "kind": "classmethod",
+              "signature": "(cls)",
+              "summary": "The panel's parameter registry (``parameters.Parameters``, a",
+              "line": 310,
+              "deprecated": false
+            },
+            {
+              "name": "list_template_modes",
+              "qualname": "MarmosetBridge.list_template_modes",
+              "kind": "staticmethod",
+              "signature": "() -> List[Tuple[str, str]]",
+              "summary": "``[(template, mode), ...]`` for every bundled template, off the class",
+              "line": 320,
+              "deprecated": false
+            },
+            {
               "name": "params_defaults",
               "qualname": "MarmosetBridge.params_defaults",
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "",
-              "line": 306,
+              "line": 325,
               "deprecated": false
             },
             {
@@ -17680,7 +17698,7 @@
               "kind": "method",
               "signature": "(self, *args, **kwargs) -> Optional[str]",
               "summary": "Render a Toolbag script body (delegates to the engine deliverer).",
-              "line": 361,
+              "line": 378,
               "deprecated": false
             },
             {
@@ -17689,7 +17707,7 @@
               "kind": "classmethod",
               "signature": "(cls, fbx_path: str) -> str",
               "summary": "``.../asset.fbx`` -> ``.../asset_source.fbx`` (shared convention).",
-              "line": 373,
+              "line": 390,
               "deprecated": false
             },
             {
@@ -17698,7 +17716,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "``<scene project>/sourceimages/baked`` -- where a roundtrip's maps land.",
-              "line": 742,
+              "line": 759,
               "deprecated": false
             },
             {
@@ -17707,7 +17725,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "``<scene project>/data/marmoset`` -- where a roundtrip's ``.tbscene``",
-              "line": 768,
+              "line": 785,
               "deprecated": false
             },
             {
@@ -17716,7 +17734,7 @@
               "kind": "classmethod",
               "signature": "(cls, mat_name: str) -> str",
               "summary": "*mat_name* with every trailing ``_BAKED`` removed.",
-              "line": 794,
+              "line": 811,
               "deprecated": false
             },
             {
@@ -17725,7 +17743,7 @@
               "kind": "classmethod",
               "signature": "(cls, mat_name: str) -> str",
               "summary": "``<source material>_BAKED``, idempotent across re-bakes.",
-              "line": 809,
+              "line": 826,
               "deprecated": false
             },
             {
@@ -17734,7 +17752,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials, log=None) -> Dict[str, str]",
               "summary": "``{material: name its map files carry}`` for every renamed material.",
-              "line": 822,
+              "line": 839,
               "deprecated": false
             },
             {
@@ -17743,7 +17761,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[str], high_suffix: str, low_suffix: str, include_children: bool = True, log=None) -> Dict[str, str]",
               "summary": "Build the ``{mesh_short_name: 'source'|'target'}`` sidecar for the bake.",
-              "line": 1270,
+              "line": 1287,
               "deprecated": false
             }
           ]
@@ -18014,78 +18032,6 @@
           "deprecated": false
         }
       ]
-    },
-    {
-      "relpath": "mat_utils/marmoset_bridge/marmoset_bridge_slots.py",
-      "summary": "Slots for the Marmoset Toolbag bridge panel.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "MarmosetBridgeSlots",
-          "summary": "Slots wired to ``marmoset_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
-          "line": 43,
-          "bases": [
-            "MayaBridgeSlotsBase"
-          ],
-          "members": [
-            {
-              "name": "params_module",
-              "qualname": "MarmosetBridgeSlots.params_module",
-              "kind": "property",
-              "signature": "(self)",
-              "summary": "",
-              "line": 184,
-              "deprecated": false
-            },
-            {
-              "name": "template_dir",
-              "qualname": "MarmosetBridgeSlots.template_dir",
-              "kind": "property",
-              "signature": "(self) -> Path",
-              "summary": "",
-              "line": 188,
-              "deprecated": false
-            },
-            {
-              "name": "make_bridge",
-              "qualname": "MarmosetBridgeSlots.make_bridge",
-              "kind": "method",
-              "signature": "(self) -> MarmosetBridge",
-              "summary": "",
-              "line": 191,
-              "deprecated": false
-            },
-            {
-              "name": "list_template_modes",
-              "qualname": "MarmosetBridgeSlots.list_template_modes",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 194,
-              "deprecated": false
-            },
-            {
-              "name": "select_initial_template_index",
-              "qualname": "MarmosetBridgeSlots.select_initial_template_index",
-              "kind": "method",
-              "signature": "(self, pairs)",
-              "summary": "Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry.",
-              "line": 197,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "MarmosetBridgeSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Process selected transforms with the chosen template + mode.",
-              "line": 212,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
     },
     {
       "relpath": "mat_utils/marmoset_bridge/marmoset_rpc/connection.py",
@@ -20251,12 +20197,21 @@
           ],
           "members": [
             {
+              "name": "params_registry",
+              "qualname": "SubstanceBridge.params_registry",
+              "kind": "classmethod",
+              "signature": "(cls)",
+              "summary": "The panel's parameter registry (``parameters.Parameters``, a",
+              "line": 156,
+              "deprecated": false
+            },
+            {
               "name": "send",
               "qualname": "SubstanceBridge.send",
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, painter_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, target: Union[str, int] = TARGET_AUTO, params: Optional[Dict[str, Any]] = None, **legacy_kwargs: Any) -> Optional[Dict[str, Any]]",
               "summary": "Export *objects*, render *template* in *mode*, hand off to Painter.",
-              "line": 153,
+              "line": 167,
               "deprecated": false
             },
             {
@@ -20265,7 +20220,7 @@
               "kind": "classmethod",
               "signature": "(cls, fbx_path: str) -> str",
               "summary": "``.../asset.fbx`` -> ``.../asset_source.fbx``.",
-              "line": 294,
+              "line": 308,
               "deprecated": false
             }
           ]
@@ -20600,78 +20555,6 @@
           "deprecated": false
         }
       ]
-    },
-    {
-      "relpath": "mat_utils/substance_bridge/substance_bridge_slots.py",
-      "summary": "Slots for the Substance Painter bridge panel.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "SubstanceBridgeSlots",
-          "summary": "Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
-          "line": 49,
-          "bases": [
-            "MayaBridgeSlotsBase"
-          ],
-          "members": [
-            {
-              "name": "params_module",
-              "qualname": "SubstanceBridgeSlots.params_module",
-              "kind": "property",
-              "signature": "(self)",
-              "summary": "",
-              "line": 200,
-              "deprecated": false
-            },
-            {
-              "name": "template_dir",
-              "qualname": "SubstanceBridgeSlots.template_dir",
-              "kind": "property",
-              "signature": "(self) -> Path",
-              "summary": "",
-              "line": 204,
-              "deprecated": false
-            },
-            {
-              "name": "make_bridge",
-              "qualname": "SubstanceBridgeSlots.make_bridge",
-              "kind": "method",
-              "signature": "(self) -> SubstanceBridge",
-              "summary": "",
-              "line": 207,
-              "deprecated": false
-            },
-            {
-              "name": "list_template_modes",
-              "qualname": "SubstanceBridgeSlots.list_template_modes",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 210,
-              "deprecated": false
-            },
-            {
-              "name": "select_initial_template_index",
-              "qualname": "SubstanceBridgeSlots.select_initial_template_index",
-              "kind": "method",
-              "signature": "(self, pairs)",
-              "summary": "Default the panel to ``import (send_to)`` when it's available.",
-              "line": 213,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "SubstanceBridgeSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Process the selected transforms with the chosen template + mode.",
-              "line": 222,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
     },
     {
       "relpath": "mat_utils/substance_bridge/substance_rpc/client.py",
@@ -27141,55 +27024,19 @@
       "classes": [
         {
           "name": "MayaBridgeSlotsBase",
-          "summary": "Adds the Maya-side Scope resolution and the Bake Source row to",
-          "line": 30,
+          "summary": "Adds the Maya-side Scope resolution to :class:`BridgeSlotsBase`.",
+          "line": 28,
           "bases": [
             "BridgeSlotsBase"
           ],
           "members": [
-            {
-              "name": "live_param_tooltip_blocks",
-              "qualname": "MayaBridgeSlotsBase.live_param_tooltip_blocks",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Make the Bake Source row report the scene's CURRENT members.",
-              "line": 59,
-              "deprecated": false
-            },
-            {
-              "name": "set_bake_source_from_selection",
-              "qualname": "MayaBridgeSlotsBase.set_bake_source_from_selection",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Store the current selection as the scene's bake source.",
-              "line": 99,
-              "deprecated": false
-            },
-            {
-              "name": "select_bake_source",
-              "qualname": "MayaBridgeSlotsBase.select_bake_source",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the bake-source set's members (hidden ones included).",
-              "line": 123,
-              "deprecated": false
-            },
-            {
-              "name": "clear_bake_source",
-              "qualname": "MayaBridgeSlotsBase.clear_bake_source",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Delete the bake-source set node;",
-              "line": 135,
-              "deprecated": false
-            },
             {
               "name": "resolve_scope_objects",
               "qualname": "MayaBridgeSlotsBase.resolve_scope_objects",
               "kind": "method",
               "signature": "(self, scope: str)",
               "summary": "Objects to export for the chosen ``SCOPE`` param.",
-              "line": 152,
+              "line": 32,
               "deprecated": false
             }
           ]
