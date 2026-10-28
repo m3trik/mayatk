@@ -38,7 +38,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX/USD, scene exporter, Blender + Unity bridges, WebXR preview |
 | `light_utils` | [Lightmap baker](lightmap_baker.md), [Light rigs](light_rig.md), HDR manager, lights-from-geometry |
 | `mat_utils` | `GameShader`, `RenderEffects` (per-object `opacity` / `highlight` channels; `RenderOpacity` is its deprecated alias, warning until 0.20.0), `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
-| `node_utils` | `NodeUtils`, `Attributes`, Channels tool, [shared scene data nodes](data_nodes.md) |
+| `node_utils` | `NodeUtils`, `Attributes`, the Channels engine, [shared scene data nodes](data_nodes.md) |
 | `nurbs_utils` | NURBS surfaces, `ImageTracer`, curve-to-tube |
 | `render_utils` | Renderer switching and render-settings helpers (composed by `hdr_manager`) |
 | `rig_utils` | `Controls`, skinning, tube / wheel / telescope / shadow / [articulated](articulated_rig.md) rigs |

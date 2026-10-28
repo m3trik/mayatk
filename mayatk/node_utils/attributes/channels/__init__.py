@@ -1,7 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Channels — Switchboard UI for inspecting and editing Maya attributes."""
+"""Channels — the Maya attribute engine behind tentacle's shared Channels panel
+(``slots/tools/channels.py``)."""
 
 from pythontk.core_utils.module_resolver import lazy_exports
 
-lazy_exports(globals(), {"_channels": "Channels", "channels_slots": "ChannelsSlots"})
+lazy_exports(globals(), {"_channels": "Channels"})

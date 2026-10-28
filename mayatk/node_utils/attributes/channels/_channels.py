@@ -4,8 +4,10 @@
 
 ``Channels`` encapsulates all non-UI attribute operations: filtering,
 connection classification, table-data building, and mutation helpers.
-The companion ``channels_slots`` module wraps this class in a
-Switchboard UI.
+tentacle's shared Channels panel (``slots/tools/channels.py``) drives it as
+``mtk.Channels``, rows keyed by attribute name; what the panel asks of a host
+beyond the attribute operations is the "Panel surface" section, which
+blendertk's ``Channels`` mirrors where Blender has the concept.
 """
 
 try:
@@ -13,6 +15,7 @@ try:
 except Exception:
     cmds = None
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -39,9 +42,53 @@ class Channels:
         "All": {},
     }
 
+    #: The storage types (:meth:`get_attr_type`'s answers) a value cell scrubs
+    #: and wheel-steps; :attr:`INTEGER_TYPES` are the whole-unit ones among them.
+    SCRUBBABLE_TYPES = frozenset(
+        {
+            "float",
+            "int",
+            "double",
+            "doubleAngle",
+            "doubleLinear",
+            "time",
+            "long",
+            "short",
+            "byte",
+        }
+    )
+    INTEGER_TYPES = frozenset({"long", "short", "byte", "int"})
+    #: The connection states (:meth:`classify_connection`) a plain click on the
+    #: panel's key icon keys. Anything else drives the plug (an expression, a
+    #: constraint, a driven key ...): only breaking it (Ctrl) applies.
+    KEYABLE_STATES = frozenset(
+        {"none", "keyframe", "keyframe_active", "keyframe_changed"}
+    )
+    #: The attribute types :meth:`create_attribute` makes, in the panel's order.
+    CREATE_TYPES = ("float", "int", "bool", "string", "enum", "double3")
+    #: Maya's own channel editors the panel's header opens
+    #: (:meth:`open_editor`): ``{key: (label, tooltip)}``.
+    EDITORS = {
+        "channel_control": (
+            "Channel Control",
+            "Open Maya's Channel Control editor.",
+        ),
+        "connection_editor": (
+            "Connection Editor",
+            "Open Maya's Connection Editor.",
+        ),
+    }
+    _EDITOR_COMMANDS = {
+        "channel_control": "ChannelControlEditor",
+        "connection_editor": "ConnectionEditor",
+    }
+
     def __init__(self):
         self._pinned_targets = None
         self._single_object_mode = False
+        # (selection-changed slot, stand-in source) while linked to the
+        # channel box (link_channel_box).
+        self._channel_box_link = None
 
     @property
     def is_pinned(self):
@@ -1225,8 +1272,8 @@ class Channels:
           parent attribute is selected or all three axes of that group
           are selected.
 
-        Used by ``ChannelsSlots._update_context_menu_state`` to enable /
-        disable the *Freeze Transforms* menu item.
+        The Channels panel enables its *Freeze Transforms* / *Unfreeze
+        Transforms* menu items by it.
         """
         if not attr_names:
             return True
@@ -1379,6 +1426,7 @@ class Channels:
     # ------------------------------------------------------------------
 
     # Keep backward-compatible names so existing call sites work unchanged.
+    parse_enum_def = staticmethod(Attributes.parse_enum_def)
     _parse_enum_def = staticmethod(Attributes.parse_enum_def)
     _build_enum_string = staticmethod(Attributes.build_enum_string)
     get_enum_fields = staticmethod(Attributes.get_enum_fields)
@@ -1386,3 +1434,344 @@ class Channels:
     rename_enum_field = staticmethod(Attributes.rename_enum_field)
     add_enum_field = staticmethod(Attributes.add_enum_field)
     delete_enum_field = staticmethod(Attributes.delete_enum_field)
+
+    # ------------------------------------------------------------------
+    # Panel surface: what tentacle's shared Channels panel asks of a host
+    # (blendertk's ``Channels`` mirrors it where Blender has the concept)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def node_name(node, full=False):
+        """*node*'s display name: its leaf name, or with *full* its long path.
+
+        Parameters:
+            node (str): A node as :meth:`get_selected_nodes` returns it.
+            full (bool): The long DAG path rather than the leaf.
+
+        Returns:
+            str | None: ``None`` for no node.
+        """
+        if not node:
+            return None
+        return str(node) if full else str(node).rsplit("|", 1)[-1]
+
+    @staticmethod
+    def get_custom_attrs(node):
+        """*node*'s user-defined attribute names (``[]`` when it has none or is gone)."""
+        try:
+            return cmds.listAttr(node, userDefined=True) or []
+        except Exception:
+            return []
+
+    @staticmethod
+    def is_locked(node, attr_name):
+        """Whether *attr_name* is locked on *node* (``False`` when it is not there)."""
+        try:
+            return bool(cmds.getAttr(f"{node}.{attr_name}", lock=True))
+        except Exception:
+            return False
+
+    @staticmethod
+    def select_nodes(nodes):
+        """Replace the selection with *nodes* (clear it for none); return them."""
+        nodes = list(nodes or [])
+        if nodes:
+            cmds.select(nodes, replace=True)
+        else:
+            cmds.select(clear=True)
+        return nodes
+
+    @staticmethod
+    def get_numeric_values(nodes, attr_name):
+        """``{node: value}`` for the *nodes* whose *attr_name* exists, is unlocked
+        and holds a number: what a scrub or a wheel step moves.
+
+        Returns:
+            dict: Values as floats, in *nodes*' order.
+        """
+        values = {}
+        for node in nodes:
+            plug = f"{node}.{attr_name}"
+            try:
+                if not cmds.attributeQuery(attr_name, node=node, exists=True):
+                    continue
+                if cmds.getAttr(plug, lock=True):
+                    continue
+                value = cmds.getAttr(plug)
+            except Exception:
+                continue
+            if isinstance(value, (int, float)):
+                values[node] = float(value)
+        return values
+
+    @staticmethod
+    def set_numeric_values(values, attr_name):
+        """Set *attr_name* on each node of *values* (``{node: value}``) as one
+        undo step; a node that refuses (locked, connected) is skipped."""
+        with CoreUtils.undo_chunk(f"Edit Attr: {attr_name}"):
+            for node, value in values.items():
+                try:
+                    cmds.setAttr(f"{node}.{attr_name}", value)
+                except Exception:
+                    continue
+
+    @staticmethod
+    def defer(fn):
+        """Run *fn* once Maya is idle (``evalDeferred``); at once outside Maya.
+
+        The panel defers its rebuilds through this, so a burst of scene events
+        (a script selecting in a loop) is one rebuild after it, not one each.
+        """
+        if cmds is None:
+            fn()
+            return
+        cmds.evalDeferred(fn)
+
+    @classmethod
+    def open_editor(cls, key):
+        """Open the :attr:`EDITORS` editor *key*; ``False`` when it could not be."""
+        command = cls._EDITOR_COMMANDS.get(key)
+        if command is None:
+            return False
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        try:
+            return UiUtils.open_editor(command) is not None
+        except Exception:
+            return False
+
+    # -- Live updates ----------------------------------------------------
+
+    @staticmethod
+    def _quiet(fn):
+        """*fn* as a host callback: arguments dropped, errors kept out of
+        Maya's callback pipeline (an exception there can destabilize the DG)."""
+
+        def call(*_args):
+            try:
+                fn()
+            except Exception:
+                pass
+
+        return call
+
+    @classmethod
+    def watch_scene(cls, owner, on_rebuild, on_values, widget=None):
+        """Call a panel back on the scene events that change what it shows.
+
+        *on_rebuild*: the rows may have changed -- the selection, a scene
+        opened, a connection made or broken anywhere. *on_values*: only values
+        and key states may have -- the time changed, or a key was set or cut on
+        an existing curve (which changes no attribute or connection, so nothing
+        else reports it). A callback may run off the main thread or inside a DG
+        notification: it should only schedule work.
+
+        Parameters:
+            owner: Owns every subscription (:meth:`unwatch`).
+            on_rebuild (callable): Takes no arguments.
+            on_values (callable): Takes no arguments.
+            widget (QWidget): When given, the subscriptions end as it is destroyed.
+
+        Returns:
+            bool: True.
+        """
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        mgr = ScriptJobManager.instance()
+        rebuild, values = cls._quiet(on_rebuild), cls._quiet(on_values)
+        for event in ("SelectionChanged", "SceneOpened", "NewSceneOpened"):
+            mgr.subscribe(event, rebuild, owner=owner)
+        mgr.subscribe("timeChanged", values, owner=owner)
+        if widget is not None:
+            mgr.connect_cleanup(widget, owner=owner)
+        try:
+            import maya.api.OpenMaya as om2
+
+            mgr.add_om_callback(
+                om2.MDGMessage.addConnectionCallback, rebuild, owner=owner
+            )
+        except ImportError:
+            pass
+        try:
+            import maya.api.OpenMayaAnim as oma2
+
+            mgr.add_om_callback(
+                oma2.MAnimMessage.addAnimCurveEditedCallback, values, owner=owner
+            )
+        except ImportError:
+            pass
+        return True
+
+    @classmethod
+    def watch_nodes(cls, owner, nodes, on_rebuild, on_attr, on_values):
+        """Call a panel back on changes to *nodes* (redo it per selection).
+
+        *on_rebuild()*: an attribute was added or removed. *on_attr(name,
+        lock_changed, value_changed)*: one was locked / unlocked and/or set
+        (its long name). *on_values()*: a viewport manipulator moved the node
+        (transform tools write the matrix directly, so the attribute message
+        comes only on release; this fires on the Evaluation Manager's worker
+        threads, measured on Maya 2025).
+
+        Returns:
+            list: The subscription tokens (:meth:`unwatch`).
+        """
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        try:
+            import maya.api.OpenMaya as om2
+        except ImportError:
+            return []
+        lock_mask = (
+            om2.MNodeMessage.kAttributeLocked | om2.MNodeMessage.kAttributeUnlocked
+        )
+        set_mask = om2.MNodeMessage.kAttributeSet
+
+        def changed(msg, plug, *_args):
+            try:
+                locked, valued = bool(msg & lock_mask), bool(msg & set_mask)
+                if locked or valued:
+                    on_attr(plug.partialName(useLongNames=True), locked, valued)
+            except Exception:
+                pass
+
+        added_removed, moved = cls._quiet(on_rebuild), cls._quiet(on_values)
+        mgr = ScriptJobManager.instance()
+        tokens = []
+        selection = om2.MSelectionList()
+        for node in nodes:
+            try:
+                selection.clear()
+                selection.add(node)
+                mobj = selection.getDependNode(0)
+            except Exception:
+                continue
+            for register, callback in (
+                (om2.MNodeMessage.addAttributeAddedOrRemovedCallback, added_removed),
+                (om2.MNodeMessage.addAttributeChangedCallback, changed),
+            ):
+                token = mgr.add_om_callback(register, mobj, callback, owner=owner)
+                if token is not None:
+                    tokens.append(token)
+            try:  # only a DAG node has a matrix to watch
+                dag_path = om2.MDagPath.getAPathTo(mobj)
+            except Exception:
+                continue
+            token = mgr.add_om_callback(
+                om2.MDagMessage.addMatrixModifiedCallback, dag_path, moved, owner=owner
+            )
+            if token is not None:
+                tokens.append(token)
+        return tokens
+
+    @staticmethod
+    def unwatch(owner=None, tokens=()):
+        """End subscriptions: the *tokens* given, and every one *owner* holds."""
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        mgr = ScriptJobManager.instance()
+        for token in tokens or ():
+            mgr.unsubscribe(token)
+        if owner is not None:
+            mgr.unsubscribe_all(owner)
+
+    # -- The channel box ------------------------------------------------
+
+    def link_channel_box(self, on_selection_changed, selected_rows):
+        """Keep a panel's channel selection and Maya's channel box in step.
+
+        Parameters:
+            on_selection_changed (callable): Called with the box's selection
+                (:meth:`channel_box_selection`) whenever it changes.
+            selected_rows (callable): Takes no arguments; returns the long
+                names of the channels selected in the panel (``[]`` while it is
+                not shown). It stands in for the box while Maya has it emptied
+                (tabbed away), so Set Selected Keys and friends act on the
+                panel's rows (:meth:`ChannelBox.add_stand_in`).
+
+        Returns:
+            bool: True when the box's selection signal is connected (the box
+            may not be built yet; link again after a scene change, which can
+            replace it).
+        """
+        from mayatk.ui_utils.channel_box import ChannelBox
+
+        self.unlink_channel_box()
+
+        def changed(*_args):
+            on_selection_changed(self.channel_box_selection())
+
+        def stand_in():
+            nodes = self.get_selected_nodes()
+            if not nodes:
+                return []
+            return self._attr_names(nodes[0], selected_rows() or [], long=False)
+
+        self._channel_box_link = (changed, stand_in)
+        ChannelBox.add_stand_in(stand_in)
+        try:
+            return bool(ChannelBox.connect_selection_changed(changed))
+        except Exception:
+            return False
+
+    def unlink_channel_box(self):
+        """Undo :meth:`link_channel_box` (a no-op when not linked)."""
+        link, self._channel_box_link = self._channel_box_link, None
+        if link is None:
+            return
+        from mayatk.ui_utils.channel_box import ChannelBox
+
+        changed, stand_in = link
+        try:
+            ChannelBox.disconnect_selection_changed(changed)
+        except Exception:
+            pass
+        ChannelBox.remove_stand_in(stand_in)
+
+    def channel_box_selection(self):
+        """The long names of the attributes selected in the channel box.
+
+        Every section. The box reports short names (``tx``) for a selection
+        made by script and long ones for a selection made by hand: both come
+        back long, as the panel's rows are.
+
+        Returns:
+            set[str]
+        """
+        raw = self.get_channel_box_selection()
+        nodes = self.get_selected_nodes()
+        if not nodes:
+            return set(raw)
+        return set(self._attr_names(nodes[0], raw, long=True))
+
+    @staticmethod
+    def select_in_channel_box(attr_names):
+        """Select *attr_names* in the channel box (best effort: it may be hidden)."""
+        from mayatk.ui_utils.channel_box import ChannelBox
+
+        try:
+            ChannelBox.select_visual(list(attr_names))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _attr_names(node, attr_names, long=True):
+        """*attr_names* as *node*'s long (or short) attribute names, deduped.
+
+        A name *node* does not know stays as given when converting to long, and
+        is dropped when converting to short (a stand-in reports only real ones).
+        """
+        result = []
+        for attr in attr_names:
+            try:
+                if long:
+                    name = cmds.attributeQuery(attr, node=node, longName=True)
+                else:
+                    name = cmds.attributeQuery(attr, node=node, shortName=True)
+            except Exception:
+                if not long:
+                    continue
+                name = attr
+            if name not in result:
+                result.append(name)
+        return result

@@ -9,7 +9,7 @@ traversal methods that operate via ``maya.cmds``.
 """
 
 import unittest
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 from unittest import mock
 
 import maya.cmds as cmds
@@ -1034,150 +1034,6 @@ class TestSetKeyAtCurrentTime(MayaTkTestCase):
         self.assertEqual(self._keys_now(), [])
 
 
-class TestIconCellDispatch(MayaTkTestCase):
-    """A click on a Lock / Key icon cell toggles it; a drag SETS every row.
-
-    Toggling a drag left the rows mixed whenever it crossed rows that started
-    in different states, so a drag locks / keys the lot (Alt clears, Ctrl
-    breaks) — and the whole drag is ONE undo step, not one per row.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        from qtpy import QtCore
-        from mayatk.node_utils.attributes.channels.channels_slots import (
-            ChannelsSlots,
-        )
-
-        cls.QtCore = QtCore
-        cls.Qt = QtCore.Qt
-        cls.Slots = ChannelsSlots
-
-    def _slots(self, state, modifiers=None, controller=None, attrs=("translateX",)):
-        """A stand-in panel whose rows name *attrs*, each in *state*."""
-        mods = self.Qt.NoModifier if modifiers is None else modifiers
-        tbl = mock.MagicMock()
-        tbl.item.side_effect = lambda row, col: mock.Mock(
-            text=mock.Mock(return_value=attrs[row])
-        )
-        tbl.actions.get.return_value = state
-        if controller is None:
-            controller = mock.MagicMock()
-            controller.get_selected_nodes.return_value = ["pCube1"]
-        slots = SimpleNamespace(
-            COL_NAME=self.Slots.COL_NAME,
-            COL_LOCK=self.Slots.COL_LOCK,
-            COL_CONN=self.Slots.COL_CONN,
-            ui=SimpleNamespace(tbl000=tbl),
-            controller=controller,
-            sb=SimpleNamespace(
-                QtCore=self.QtCore,
-                QtWidgets=SimpleNamespace(
-                    QApplication=SimpleNamespace(keyboardModifiers=lambda: mods)
-                ),
-            ),
-            _refresh_table=mock.Mock(),
-        )
-        slots._apply_icon_cell = MethodType(self.Slots._apply_icon_cell, slots)
-        return slots
-
-    def _click(self, col, state, modifiers=None):
-        slots = self._slots(state, modifiers)
-        self.Slots._on_icon_cell_clicked(slots, 0, col)
-        return slots.controller
-
-    def test_a_click_toggles_the_lock(self):
-        ctrl = self._click(self.Slots.COL_LOCK, "locked")
-        ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], False)
-        ctrl = self._click(self.Slots.COL_LOCK, "unlocked")
-        ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], True)
-
-    def test_alt_click_unlocks(self):
-        ctrl = self._click(self.Slots.COL_LOCK, "unlocked", self.Qt.AltModifier)
-        ctrl.set_lock.assert_called_once_with(["pCube1"], ["translateX"], False)
-
-    def test_a_click_toggles_the_key(self):
-        ctrl = self._click(self.Slots.COL_CONN, "keyframe_active")
-        ctrl.set_key_at_current_time.assert_called_once_with(
-            ["pCube1"], "translateX", keyed=False
-        )
-        ctrl = self._click(self.Slots.COL_CONN, "none")
-        ctrl.set_key_at_current_time.assert_called_once_with(
-            ["pCube1"], "translateX", keyed=True
-        )
-
-    def test_alt_click_removes_the_key(self):
-        ctrl = self._click(self.Slots.COL_CONN, "keyframe_active", self.Qt.AltModifier)
-        ctrl.set_key_at_current_time.assert_called_once_with(
-            ["pCube1"], "translateX", keyed=False
-        )
-
-    def test_a_click_keys_a_changed_value(self):
-        """A keyed value moved off its curve is keyed by a click, as in Maya."""
-        ctrl = self._click(self.Slots.COL_CONN, "keyframe_changed")
-        ctrl.set_key_at_current_time.assert_called_once_with(
-            ["pCube1"], "translateX", keyed=True
-        )
-
-    def test_ctrl_click_still_breaks_the_connection(self):
-        ctrl = self._click(self.Slots.COL_CONN, "keyframe", self.Qt.ControlModifier)
-        ctrl.break_connections.assert_called_once_with(["pCube1"], "translateX")
-        ctrl.set_key_at_current_time.assert_not_called()
-
-    def test_a_drag_locks_every_row_whatever_its_state_and_refreshes_once(self):
-        """Rows already locked stay locked — a drag sets, it doesn't toggle,
-        so the range ends uniform however it started."""
-        attrs = ("translateX", "translateY", "translateZ")
-        slots = self._slots("locked", attrs=attrs)
-        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_LOCK)
-        self.assertEqual(
-            [(c.args[1], c.args[2]) for c in slots.controller.set_lock.call_args_list],
-            [(["translateX"], True), (["translateY"], True), (["translateZ"], True)],
-        )
-        slots._refresh_table.assert_called_once()
-
-    def test_a_drag_keys_every_row_whatever_its_state(self):
-        attrs = ("translateX", "translateY", "translateZ")
-        slots = self._slots("keyframe_active", attrs=attrs)
-        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_CONN)
-        self.assertEqual(
-            [
-                c.kwargs["keyed"]
-                for c in slots.controller.set_key_at_current_time.call_args_list
-            ],
-            [True, True, True],
-        )
-
-    def test_a_ctrl_drag_breaks_every_crossed_row(self):
-        attrs = ("translateX", "translateY", "translateZ")
-        slots = self._slots("keyframe", self.Qt.ControlModifier, attrs=attrs)
-        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_CONN)
-        self.assertEqual(
-            [c.args[1] for c in slots.controller.break_connections.call_args_list],
-            list(attrs),
-        )
-        slots.controller.set_key_at_current_time.assert_not_called()
-        slots._refresh_table.assert_called_once()
-
-    def test_one_undo_reverts_a_whole_drag(self):
-        prev = cmds.undoInfo(q=True, state=True)
-        cmds.undoInfo(state=True)
-        self.addCleanup(cmds.undoInfo, state=prev)
-        cube = cmds.polyCube(name="drag_cube")[0]
-        cmds.select(cube)
-        attrs = ("translateX", "translateY", "translateZ")
-        slots = self._slots("unlocked", controller=Channels(), attrs=attrs)
-
-        self.Slots._on_icon_cells_dragged(slots, [0, 1, 2], self.Slots.COL_LOCK)
-        locked = [cmds.getAttr(f"{cube}.{a}", lock=True) for a in attrs]
-        self.assertEqual(locked, [True, True, True])
-
-        cmds.undo()
-        locked = [cmds.getAttr(f"{cube}.{a}", lock=True) for a in attrs]
-        self.assertEqual(locked, [False, False, False])
-
-
 class TestOffCurveState(MayaTkTestCase):
     """A keyed channel whose value no longer sits on its curve.
 
@@ -1226,151 +1082,156 @@ class TestOffCurveState(MayaTkTestCase):
         self.assertFalse(Channels.is_off_curve(f"{self.cube}.translateY"))
 
 
-class TestEditBatchUndo(MayaTkTestCase):
-    """A drag-fill edit (one value typed into several cells) is ONE undo step.
+class TestPanelSurface(MayaTkTestCase):
+    """What tentacle's shared Channels panel asks of the engine (its icon,
+    edit, scrub and wheel gestures are tentacle's ``test_channels_panel.py``)."""
 
-    Repro (Channels, Maya 2025): drag down the scale Value cells, type 2.5,
-    Enter -- one Undo reverted one cell at a time.  The table brackets the
-    burst (``editBatchStarted`` / ``editBatchFinished``); the panel wraps it in
-    one undo chunk.
-    """
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="panel_cube")[0]
+        self.other = cmds.polyCube(name="panel_other")[0]
 
-    def test_one_undo_reverts_a_whole_fill(self):
-        from mayatk.node_utils.attributes.channels.channels_slots import (
-            ChannelsSlots,
+    def test_node_name_is_the_leaf_or_the_long_path(self):
+        long_name = cmds.ls(self.cube, long=True)[0]
+        self.assertEqual(Channels.node_name(long_name), self.cube)
+        self.assertEqual(Channels.node_name(long_name, full=True), long_name)
+        self.assertIsNone(Channels.node_name(None))
+
+    def test_custom_attrs_are_the_user_defined_ones(self):
+        cmds.addAttr(self.cube, longName="weight", attributeType="double")
+        self.assertEqual(Channels.get_custom_attrs(self.cube), ["weight"])
+        self.assertEqual(Channels.get_custom_attrs("no_such_node"), [])
+
+    def test_is_locked(self):
+        cmds.setAttr(f"{self.cube}.translateX", lock=True)
+        self.assertTrue(Channels.is_locked(self.cube, "translateX"))
+        self.assertFalse(Channels.is_locked(self.cube, "translateY"))
+        self.assertFalse(Channels.is_locked(self.cube, "no_such_attr"))
+
+    def test_numeric_values_skip_locked_and_missing(self):
+        cmds.setAttr(f"{self.cube}.translateX", 2)
+        cmds.setAttr(f"{self.other}.translateX", lock=True)
+        values = Channels.get_numeric_values(
+            [self.cube, self.other, "no_such_node"], "translateX"
         )
+        self.assertEqual(values, {self.cube: 2.0})
 
+    def test_set_numeric_values_is_one_undo_step(self):
         prev = cmds.undoInfo(q=True, state=True)
         cmds.undoInfo(state=True)
         self.addCleanup(cmds.undoInfo, state=prev)
-        cube = cmds.polyCube(name="fill_cube")[0]
-        attrs = ("scaleX", "scaleY", "scaleZ")
         cmds.flushUndo()
-
-        slots = SimpleNamespace(_edit_chunk_open=False)
-        ChannelsSlots._on_edit_batch_started(slots)
-        for attr in attrs:  # one cellChanged per cell, as the fill delivers them
-            Channels.set_attribute_value([cube], attr, "2.5")
-        ChannelsSlots._on_edit_batch_finished(slots)
-        self.assertEqual([cmds.getAttr(f"{cube}.{a}") for a in attrs], [2.5] * 3)
-
+        Channels.set_numeric_values({self.cube: 3.0, self.other: 4.0}, "translateX")
+        self.assertEqual(cmds.getAttr(f"{self.cube}.translateX"), 3.0)
+        self.assertEqual(cmds.getAttr(f"{self.other}.translateX"), 4.0)
         cmds.undo()
-        self.assertEqual([cmds.getAttr(f"{cube}.{a}") for a in attrs], [1.0] * 3)
+        self.assertEqual(cmds.getAttr(f"{self.cube}.translateX"), 0.0)
+        self.assertEqual(cmds.getAttr(f"{self.other}.translateX"), 0.0)
 
-    def test_an_unmatched_finish_closes_nothing(self):
-        from mayatk.node_utils.attributes.channels.channels_slots import (
-            ChannelsSlots,
+    def test_collect_value_strings_marks_a_mixed_value(self):
+        cmds.setAttr(f"{self.other}.translateX", 5)
+        data = Channels.collect_value_strings(
+            [self.cube, self.other], ["translateX", "translateY"]
         )
+        self.assertEqual(data["translateX"], ("*", "none"))
+        self.assertEqual(data["translateY"], ("0", "none"))
 
-        slots = SimpleNamespace(_edit_chunk_open=False)
-        with mock.patch.object(cmds, "undoInfo") as undo_info:
-            ChannelsSlots._on_edit_batch_finished(slots)
-        undo_info.assert_not_called()
+    def test_select_nodes_replaces_the_selection(self):
+        cmds.select(self.cube)
+        Channels.select_nodes([self.other])
+        self.assertEqual(cmds.ls(selection=True), [self.other])
+        Channels.select_nodes([])
+        self.assertEqual(cmds.ls(selection=True), [])
 
+    def test_the_panel_constants(self):
+        self.assertLessEqual(Channels.INTEGER_TYPES, Channels.SCRUBBABLE_TYPES)
+        self.assertIn("doubleLinear", Channels.SCRUBBABLE_TYPES)
+        self.assertNotIn("constraint", Channels.KEYABLE_STATES)
+        self.assertEqual(Channels.CREATE_TYPES, tuple(Channels._ATTR_TYPE_MAP))
+        self.assertEqual(set(Channels.EDITORS), set(Channels._EDITOR_COMMANDS))
+        self.assertFalse(Channels.open_editor("no_such_editor"))
 
-class TestLiveRefresh(MayaTkTestCase):
-    """The panel's live values / key icons keep up with the scene.
-
-    Repro (Channels, Maya 2025): after the first move of a keyed object the
-    values stopped following time changes and the key icons stopped following
-    keys set by command.  Maya's Evaluation Manager fires the matrix callback on
-    its worker threads; ``QTimer.singleShot`` from there never fires, so the
-    pending flag stuck and every later values refresh was dropped.  And a key
-    added to an existing curve changes no attribute or connection on the node,
-    so nothing told the panel at all.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        from mayatk.node_utils.attributes.channels.channels_slots import (
-            ChannelsSlots,
+    def test_parse_enum_def_is_public(self):
+        cmds.addAttr(
+            self.cube, longName="mode", attributeType="enum", enumName="A=2:B=5"
         )
+        pairs = Channels.parse_enum_def(self.cube, "mode")
+        self.assertEqual([index for _label, index in pairs], [2, 5])
 
-        cls.Slots = ChannelsSlots
 
-    def test_a_refresh_scheduled_off_the_main_thread_is_posted_not_timed(self):
-        import threading
+class TestChannelBoxLink(MayaTkTestCase):
+    """While Maya's channel box is emptied (tabbed away), the panel's selected
+    rows stand in for it, as short names: Set Selected Keys reads them."""
 
-        posted = []
-        slots = SimpleNamespace(
-            _destroyed=False,
-            _values_refresh_pending=False,
-            _gui_thread=SimpleNamespace(post=posted.append),
-            _is_widget_alive=lambda w: True,
-            _update_values_only=mock.Mock(),
-        )
-        worker = threading.Thread(
-            target=lambda: self.Slots._schedule_values_only_refresh(slots, "tbl")
-        )
-        worker.start()
-        worker.join(timeout=5)
-        self.assertEqual(len(posted), 1, "the refresh never reached the GUI thread")
-        self.Slots._schedule_values_only_refresh(slots, "tbl")  # coalesced
-        self.assertEqual(len(posted), 1)
+    def setUp(self):
+        super().setUp()
+        from mayatk.ui_utils.channel_box import ChannelBox
 
-        posted[0]()  # the GUI thread runs it
-        slots._update_values_only.assert_called_once_with("tbl")
-        self.assertFalse(slots._values_refresh_pending)
-
-    def _table_with_selection(self, names, visible=True):
-        items = [
-            mock.Mock(
-                column=mock.Mock(return_value=col), text=mock.Mock(return_value=n)
-            )
-            for n in names
-            for col in (self.Slots.COL_NAME, self.Slots.COL_VALUE)
-        ]
-        return mock.Mock(
-            selectedItems=mock.Mock(return_value=items),
-            isVisible=mock.Mock(return_value=visible),
-        )
-
-    def _stand_in(self, tbl, node):
-        slots = SimpleNamespace(
-            COL_NAME=self.Slots.COL_NAME,
-            _destroyed=False,
-            ui=SimpleNamespace(tbl000=tbl),
-            controller=SimpleNamespace(get_selected_nodes=lambda: [node]),
-            _is_widget_alive=lambda w: True,
-        )
-        slots._selected_row_names = MethodType(self.Slots._selected_row_names, slots)
-        return MethodType(self.Slots._selected_channels, slots)
-
-    def test_the_panel_stands_in_with_short_names_of_its_selected_rows(self):
-        """Set Selected Keys reads these while Maya's box is tabbed away."""
+        self.ChannelBox = ChannelBox
         cube = cmds.polyCube(name="stand_in_cube")[0]
-        tbl = self._table_with_selection(["translateY", "rotateZ"])
-        self.assertEqual(self._stand_in(tbl, cube)(), ["ty", "rz"])
+        cmds.select(cube)
+        self.channels = Channels()
+        self.addCleanup(self.channels.unlink_channel_box)
+
+    def test_the_rows_stand_in_with_short_names(self):
+        self.channels.link_channel_box(
+            lambda names: None, lambda: ["translateY", "rotateZ"]
+        )
+        self.assertEqual(self.ChannelBox.stand_in_selection(), ["ty", "rz"])
 
     def test_a_panel_not_shown_stands_in_with_nothing(self):
-        cube = cmds.polyCube(name="stand_in_cube")[0]
-        tbl = self._table_with_selection(["translateY"], visible=False)
-        self.assertEqual(self._stand_in(tbl, cube)(), [])
+        self.channels.link_channel_box(lambda names: None, lambda: [])
+        self.assertEqual(self.ChannelBox.stand_in_selection(), [])
 
-    def test_a_key_added_to_an_existing_curve_reaches_the_panel(self):
-        """A channel outside the transform matrix: a key on ``translateX``
-        dirties the matrix, so the matrix callback covered that one already."""
+    def test_unlink_removes_the_stand_in(self):
+        self.channels.link_channel_box(lambda names: None, lambda: ["translateY"])
+        self.channels.unlink_channel_box()
+        self.assertEqual(self.ChannelBox.stand_in_selection(), [])
+
+
+class TestWatch(MayaTkTestCase):
+    """The engine reports what changes the panel's rows or values.
+
+    Repro (Channels, Maya 2025): a key added to an existing curve changes no
+    attribute or connection on the node, so nothing told the panel and its key
+    icons went stale.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.owner = SimpleNamespace(name="channels-test-owner")
+        self.addCleanup(Channels.unwatch, self.owner)
+
+    def test_a_key_added_to_an_existing_curve_reports_values(self):
         cube = cmds.polyCube(name="live_key_cube")[0]
         cmds.addAttr(cube, longName="weight", attributeType="double", keyable=True)
         cmds.setKeyframe(f"{cube}.weight", time=1, value=0)
         cmds.setKeyframe(f"{cube}.weight", time=10, value=10)
         cmds.currentTime(5)
-        cmds.select(cube)
-
-        slots = self.Slots.__new__(self.Slots)
-        slots.controller = Channels()
-        slots._pending_value_attrs, slots._pending_lock_attrs = set(), set()
-        slots._attr_change_tokens = []
-        slots._schedule_values_only_refresh = mock.Mock()
-        slots._gui_thread = SimpleNamespace(post=lambda fn, *a, **k: None)
-        widget = mock.MagicMock()
-        self.Slots._setup_scene_change_callbacks(slots, widget)
-        self.addCleanup(slots.cleanup_scene_callbacks)
-
-        slots._schedule_values_only_refresh.reset_mock()
+        on_values = mock.Mock()
+        Channels.watch_scene(self.owner, mock.Mock(), on_values)
+        on_values.reset_mock()
         cmds.setKeyframe(f"{cube}.weight")  # no time / attr / connection change
-        slots._schedule_values_only_refresh.assert_called_with(widget)
+        on_values.assert_called()
+
+    def test_a_value_set_and_a_lock_report_the_attribute(self):
+        cube = cmds.polyCube(name="live_attr_cube")[0]
+        on_attr = mock.Mock()
+        tokens = Channels.watch_nodes(
+            self.owner, [cube], mock.Mock(), on_attr, mock.Mock()
+        )
+        self.assertTrue(tokens)
+        cmds.setAttr(f"{cube}.translateX", 3)
+        self.assertIn(("translateX", False, True), [c.args for c in on_attr.call_args_list])
+        on_attr.reset_mock()
+        cmds.setAttr(f"{cube}.translateX", lock=True)
+        self.assertTrue(
+            any(c.args[0] == "translateX" and c.args[1] for c in on_attr.call_args_list)
+        )
+        Channels.unwatch(tokens=tokens)
+        on_attr.reset_mock()
+        cmds.setAttr(f"{cube}.translateY", 1)
+        on_attr.assert_not_called()
 
 
 if __name__ == "__main__":

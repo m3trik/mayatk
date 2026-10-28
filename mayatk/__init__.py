@@ -65,6 +65,8 @@ DEFAULT_INCLUDE = {
     ],
     # Attribute utils
     "node_utils.attributes._attributes": ["Attributes"],
+    # The Channels table's API (its panel is tentacle's shared Channels tool).
+    "node_utils.attributes.channels._channels": "Channels",
     "audio_utils.audio_clips._audio_clips": "AudioClips",
     # Audio utils
     "audio_utils._audio_utils": "AudioUtils",
@@ -533,6 +535,10 @@ MOVED_NAMES = {
     ),
     "TextureCombineSlots": (
         "tentacle.slots.tools.texture_combine.TextureCombineSlots",
+        "0.30.0",
+    ),
+    "ChannelsSlots": (
+        "tentacle.slots.tools.channels.ChannelsSlots",
         "0.30.0",
     ),
 }

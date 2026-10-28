@@ -144,6 +144,7 @@ class TestControlName(MayaTkTestCase):
     """Tests for ChannelBox._control_name."""
 
     @skipUnlessExtended
+    @skipIfBatch("_control_name reads Maya's main channel box (GUI only)")
     def test_returns_string(self):
         name = ChannelBox._control_name()
         self.assertIsInstance(name, str)

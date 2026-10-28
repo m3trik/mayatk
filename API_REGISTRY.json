@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 260,
+          "line": 262,
           "deprecated": false
         }
       ]
@@ -24139,7 +24139,7 @@
               "kind": "staticmethod",
               "signature": "(objects, *args, include_locked=False, include_nonkeyable=False, include_object_name=False, as_group=False) -> dict",
               "summary": "Retrieve current channel-box attribute values for *objects*.",
-              "line": 646,
+              "line": 647,
               "deprecated": false
             },
             {
@@ -24148,7 +24148,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, create: bool = False, quiet: bool = False, keyable: bool = False, lock: bool = False, **attributes) -> None",
               "summary": "Set values on existing node attributes.",
-              "line": 701,
+              "line": 702,
               "deprecated": false
             },
             {
@@ -24157,7 +24157,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, keyable=True, **attributes) -> None",
               "summary": "Set attribute values, creating them first if they don't exist.",
-              "line": 743,
+              "line": 744,
               "deprecated": false
             },
             {
@@ -24166,7 +24166,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name: str, weighted: bool = False, min_value: float = 0.0, max_value: float = 1.0) -> str",
               "summary": "Create a bool or float (weighted) switch attribute if it doesn't exist.",
-              "line": 838,
+              "line": 839,
               "deprecated": false
             },
             {
@@ -24175,7 +24175,7 @@
               "kind": "staticmethod",
               "signature": "(attr: str, place: str, file: str) -> None",
               "summary": "Connect a same-named attribute between two nodes.",
-              "line": 880,
+              "line": 881,
               "deprecated": false
             },
             {
@@ -24184,7 +24184,7 @@
               "kind": "staticmethod",
               "signature": "(*args, force=True) -> None",
               "summary": "Connect multiple attribute pairs at once.",
-              "line": 891,
+              "line": 892,
               "deprecated": false
             },
             {
@@ -24193,7 +24193,7 @@
               "kind": "classmethod",
               "signature": "(cls, node: str, node_type: Optional[str] = None, passthrough_types: Optional[Set[str]] = None, *, is_constraint: Optional[bool] = None, is_driven: Optional[bool] = None, visited: Optional[set] = None) -> Tuple[Optional[str], Optional[str]]",
               "summary": "``(driver_node, driver_type)`` for a source NODE.",
-              "line": 974,
+              "line": 975,
               "deprecated": false
             },
             {
@@ -24202,7 +24202,7 @@
               "kind": "classmethod",
               "signature": "(cls, plug: str, passthrough_types: Optional[set] = None, visited: Optional[set] = None) -> Tuple[Optional[str], Optional[str]]",
               "summary": "Trace upstream through passthrough nodes to find the true driver.",
-              "line": 1026,
+              "line": 1027,
               "deprecated": false
             },
             {
@@ -24211,7 +24211,7 @@
               "kind": "classmethod",
               "signature": "(cls, plug: str, passthrough_types: Optional[Set[str]] = None, plug_precise: bool = True, depth: Optional[int] = None) -> List[str]",
               "summary": "Return the animCurves feeding *plug*, walking source connections.",
-              "line": 1064,
+              "line": 1065,
               "deprecated": false
             },
             {
@@ -24220,7 +24220,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, unlock: bool = False) -> Dict[str, Dict[str, Any]]",
               "summary": "Return lock state for standard transform attributes.",
-              "line": 1294,
+              "line": 1295,
               "deprecated": false
             },
             {
@@ -24229,7 +24229,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, lock_state: Optional[Dict[str, Dict[str, bool]]] = None, translate: Optional[bool] = None, rotate: Optional[bool] = None, scale: Optional[bool] = None, **kwargs) -> None",
               "summary": "Restore lock state from a saved dict, or bulk lock/unlock.",
-              "line": 1380,
+              "line": 1381,
               "deprecated": false
             },
             {
@@ -24238,7 +24238,7 @@
               "kind": "classmethod",
               "signature": "(cls, node: str, _logger=None, **attrs)",
               "summary": "Context manager: set *attrs* on *node* for the block, restore on exit.",
-              "line": 1450,
+              "line": 1451,
               "deprecated": false
             },
             {
@@ -24247,7 +24247,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, attributes=None)",
               "summary": "Context manager: temporarily unlock attributes and restore state on exit.",
-              "line": 1517,
+              "line": 1518,
               "deprecated": false
             },
             {
@@ -24256,7 +24256,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, attributes: Optional[List[str]] = None) -> Dict[str, Any]",
               "summary": "Copy attribute values from the first object into the class clipboard.",
-              "line": 1593,
+              "line": 1594,
               "deprecated": false
             },
             {
@@ -24265,7 +24265,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, values: Optional[Dict[str, Any]] = None) -> None",
               "summary": "Paste attribute values onto *objects*.",
-              "line": 1627,
+              "line": 1628,
               "deprecated": false
             },
             {
@@ -24274,7 +24274,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: List[str]) -> None",
               "summary": "Reset attributes to their default values.",
-              "line": 1649,
+              "line": 1650,
               "deprecated": false
             },
             {
@@ -24283,7 +24283,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: Optional[List[str]] = None) -> None",
               "summary": "Mute channels to suppress animation evaluation.",
-              "line": 1669,
+              "line": 1670,
               "deprecated": false
             },
             {
@@ -24292,7 +24292,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: Optional[List[str]] = None) -> None",
               "summary": "Unmute previously muted channels.",
-              "line": 1686,
+              "line": 1687,
               "deprecated": false
             },
             {
@@ -24301,7 +24301,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: List[str], visible: bool = True) -> None",
               "summary": "Show or hide attributes in the channel box.",
-              "line": 1703,
+              "line": 1704,
               "deprecated": false
             },
             {
@@ -24310,7 +24310,7 @@
               "kind": "staticmethod",
               "signature": "(objects, attributes: List[str]) -> None",
               "summary": "Lock attributes and hide them from the channel box.",
-              "line": 1727,
+              "line": 1728,
               "deprecated": false
             },
             {
@@ -24319,7 +24319,7 @@
               "kind": "staticmethod",
               "signature": "(attributes: List[str], exclude: Union[str, List[str], None] = None, include: Union[str, List[str], None] = None, case_sensitive: bool = False) -> List[str]",
               "summary": "Filter attribute names by inclusion/exclusion patterns.",
-              "line": 1748,
+              "line": 1749,
               "deprecated": false
             },
             {
@@ -24328,7 +24328,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return ``[(label, index), ...]`` for an enum attribute.",
-              "line": 1819,
+              "line": 1820,
               "deprecated": false
             },
             {
@@ -24337,7 +24337,7 @@
               "kind": "staticmethod",
               "signature": "(pairs)",
               "summary": "Build an ``enumName`` string from ``[(label, index), ...]``.",
-              "line": 1856,
+              "line": 1857,
               "deprecated": false
             },
             {
@@ -24346,7 +24346,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return the list of enum field labels for *attr_name*.",
-              "line": 1879,
+              "line": 1880,
               "deprecated": false
             },
             {
@@ -24355,7 +24355,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return the current enum label for an enum attribute, or ``None``.",
-              "line": 1894,
+              "line": 1895,
               "deprecated": false
             },
             {
@@ -24364,7 +24364,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name, label)",
               "summary": "Return the integer index for an enum label, or ``-1`` if not found.",
-              "line": 1912,
+              "line": 1913,
               "deprecated": false
             },
             {
@@ -24373,7 +24373,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name, old_label, new_label)",
               "summary": "Rename a single enum field from *old_label* to *new_label*.",
-              "line": 1927,
+              "line": 1928,
               "deprecated": false
             },
             {
@@ -24382,7 +24382,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name, new_label)",
               "summary": "Append a new enum field *new_label* to *attr_name*.",
-              "line": 1972,
+              "line": 1973,
               "deprecated": false
             },
             {
@@ -24391,7 +24391,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name, label)",
               "summary": "Remove the enum field *label* from *attr_name*.",
-              "line": 2013,
+              "line": 2014,
               "deprecated": false
             }
           ]
@@ -24407,7 +24407,7 @@
         {
           "name": "Channels",
           "summary": "Maya attribute query / mutation logic.",
-          "line": 20,
+          "line": 23,
           "bases": [],
           "members": [
             {
@@ -24416,7 +24416,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 47,
+              "line": 94,
               "deprecated": false
             },
             {
@@ -24425,7 +24425,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 51,
+              "line": 98,
               "deprecated": false
             },
             {
@@ -24434,7 +24434,7 @@
               "kind": "method",
               "signature": "(self, nodes)",
               "summary": "Pin the manager to a fixed node list;",
-              "line": 58,
+              "line": 105,
               "deprecated": false
             },
             {
@@ -24443,7 +24443,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Return the target node list.",
-              "line": 73,
+              "line": 120,
               "deprecated": false
             },
             {
@@ -24452,7 +24452,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Collapse component selections to the transform that owns them.",
-              "line": 92,
+              "line": 139,
               "deprecated": false
             },
             {
@@ -24461,7 +24461,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Return all attribute names currently selected in Maya's channel box.",
-              "line": 143,
+              "line": 190,
               "deprecated": false
             },
             {
@@ -24470,7 +24470,7 @@
               "kind": "staticmethod",
               "signature": "(filter_key='Custom', invert=False)",
               "summary": "Return the ``cmds.listAttr`` kwargs for the given *filter_key*.",
-              "line": 156,
+              "line": 203,
               "deprecated": false
             },
             {
@@ -24479,7 +24479,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "Return set of attribute names on *node* that have incoming connections.",
-              "line": 178,
+              "line": 225,
               "deprecated": false
             },
             {
@@ -24488,7 +24488,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, filter_kwargs)",
               "summary": "Return the intersection of attribute names across *nodes*.",
-              "line": 193,
+              "line": 240,
               "deprecated": false
             },
             {
@@ -24497,7 +24497,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attr_names)",
               "summary": "Return ``{attr_name: (value_str, conn_type)}`` for the given attrs.",
-              "line": 294,
+              "line": 341,
               "deprecated": false
             },
             {
@@ -24506,7 +24506,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Safely get an attribute value, returning ``None`` on failure.",
-              "line": 329,
+              "line": 376,
               "deprecated": false
             },
             {
@@ -24515,7 +24515,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return the Maya attribute type string.",
-              "line": 337,
+              "line": 384,
               "deprecated": false
             },
             {
@@ -24524,7 +24524,7 @@
               "kind": "staticmethod",
               "signature": "(node, attr_name)",
               "summary": "Return ``'→ src.attr'`` if there is an incoming connection, else ``''``.",
-              "line": 358,
+              "line": 405,
               "deprecated": false
             },
             {
@@ -24533,7 +24533,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, attr_name)",
               "summary": "Classify the incoming connection on *node.attr_name*.",
-              "line": 403,
+              "line": 450,
               "deprecated": false
             },
             {
@@ -24542,7 +24542,7 @@
               "kind": "staticmethod",
               "signature": "(plug, tolerance=1e-06)",
               "summary": "Return ``True`` if keyed *plug* holds a value its curve does not.",
-              "line": 448,
+              "line": 495,
               "deprecated": false
             },
             {
@@ -24551,7 +24551,7 @@
               "kind": "staticmethod",
               "signature": "(plug)",
               "summary": "Return ``True`` if *plug* has a keyframe set exactly at the current time.",
-              "line": 478,
+              "line": 525,
               "deprecated": false
             },
             {
@@ -24560,7 +24560,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, filter_kwargs)",
               "summary": "Build row data and state tuples for the table.",
-              "line": 546,
+              "line": 593,
               "deprecated": false
             },
             {
@@ -24569,7 +24569,7 @@
               "kind": "staticmethod",
               "signature": "(val)",
               "summary": "Convert a Maya attribute value to a display string.",
-              "line": 630,
+              "line": 677,
               "deprecated": false
             },
             {
@@ -24578,7 +24578,7 @@
               "kind": "staticmethod",
               "signature": "(text, attr_type)",
               "summary": "Convert user-entered text to a Python value for ``cmds.setAttr``.",
-              "line": 646,
+              "line": 693,
               "deprecated": false
             },
             {
@@ -24587,7 +24587,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Toggle the lock state for *attr_name* on *nodes*.",
-              "line": 669,
+              "line": 716,
               "deprecated": false
             },
             {
@@ -24596,7 +24596,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Break all incoming connections for *attr_name* on *nodes*.",
-              "line": 678,
+              "line": 725,
               "deprecated": false
             },
             {
@@ -24605,7 +24605,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names, lock)",
               "summary": "Lock or unlock *attr_names* across all *nodes*.",
-              "line": 733,
+              "line": 780,
               "deprecated": false
             },
             {
@@ -24614,7 +24614,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Reset *attr_names* to their default values across all *nodes*.",
-              "line": 748,
+              "line": 795,
               "deprecated": false
             },
             {
@@ -24623,7 +24623,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Toggle the keyable state for *attr_names* across all *nodes*.",
-              "line": 766,
+              "line": 813,
               "deprecated": false
             },
             {
@@ -24632,7 +24632,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Delete custom *attr_names* across all *nodes*.",
-              "line": 782,
+              "line": 829,
               "deprecated": false
             },
             {
@@ -24641,7 +24641,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attr_name, text)",
               "summary": "Parse *text* and set *attr_name* on all *nodes*.",
-              "line": 803,
+              "line": 850,
               "deprecated": false
             },
             {
@@ -24650,7 +24650,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, name, attr_type, keyable=True, min_val=None, max_val=None, default_val=0.0, enum_names='')",
               "summary": "Create a custom attribute on *nodes*.",
-              "line": 844,
+              "line": 891,
               "deprecated": false
             },
             {
@@ -24659,7 +24659,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Copy attribute values from the primary node to the clipboard.",
-              "line": 927,
+              "line": 974,
               "deprecated": false
             },
             {
@@ -24668,7 +24668,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Paste previously copied attribute values onto *nodes*.",
-              "line": 934,
+              "line": 981,
               "deprecated": false
             },
             {
@@ -24677,7 +24677,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, old_name, new_name)",
               "summary": "Rename a user-defined attribute on *nodes*.",
-              "line": 945,
+              "line": 992,
               "deprecated": false
             },
             {
@@ -24686,7 +24686,7 @@
               "kind": "staticmethod",
               "signature": "(old_name, new_name)",
               "summary": "Rename a Maya node and return its new full path.",
-              "line": 965,
+              "line": 1012,
               "deprecated": false
             },
             {
@@ -24695,7 +24695,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Return the shape node name(s) for *nodes*.",
-              "line": 986,
+              "line": 1033,
               "deprecated": false
             },
             {
@@ -24704,7 +24704,7 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Return the construction-history input node(s) for *nodes*.",
-              "line": 1005,
+              "line": 1052,
               "deprecated": false
             },
             {
@@ -24713,7 +24713,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Set or remove a keyframe on *attr_name* for *nodes* at the current time.",
-              "line": 1036,
+              "line": 1083,
               "deprecated": false
             },
             {
@@ -24722,7 +24722,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name, keyed=True)",
               "summary": "Set (``keyed=True``) or remove (``keyed=False``) the key on",
-              "line": 1059,
+              "line": 1106,
               "deprecated": false
             },
             {
@@ -24731,7 +24731,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Set a breakdown key on *attr_names* for all *nodes* at the current time.",
-              "line": 1089,
+              "line": 1136,
               "deprecated": false
             },
             {
@@ -24740,7 +24740,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Mute *attr_names* across all *nodes*.",
-              "line": 1105,
+              "line": 1152,
               "deprecated": false
             },
             {
@@ -24749,7 +24749,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Unmute *attr_names* across all *nodes*.",
-              "line": 1114,
+              "line": 1161,
               "deprecated": false
             },
             {
@@ -24758,7 +24758,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Hide *attr_names* from the channel box.",
-              "line": 1123,
+              "line": 1170,
               "deprecated": false
             },
             {
@@ -24767,7 +24767,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Show (unhide) *attr_names* in the channel box.",
-              "line": 1132,
+              "line": 1179,
               "deprecated": false
             },
             {
@@ -24776,7 +24776,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_names)",
               "summary": "Lock and hide *attr_names*.",
-              "line": 1141,
+              "line": 1188,
               "deprecated": false
             },
             {
@@ -24785,7 +24785,7 @@
               "kind": "staticmethod",
               "signature": "(nodes, attr_name)",
               "summary": "Select the upstream node driving *attr_name* on the primary node.",
-              "line": 1150,
+              "line": 1197,
               "deprecated": false
             },
             {
@@ -24794,7 +24794,7 @@
               "kind": "classmethod",
               "signature": "(cls, attr_names)",
               "summary": "Test if *attr_names* maps to a clean group-level freeze.",
-              "line": 1217,
+              "line": 1264,
               "deprecated": false
             },
             {
@@ -24803,7 +24803,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attrs=None, store=True)",
               "summary": "Freeze transforms on *nodes* under cumulative bake semantics.",
-              "line": 1281,
+              "line": 1328,
               "deprecated": false
             },
             {
@@ -24812,7 +24812,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, attrs=None)",
               "summary": "Restore previously stored transforms on *nodes*.",
-              "line": 1330,
+              "line": 1377,
               "deprecated": false
             },
             {
@@ -24821,95 +24821,142 @@
               "kind": "staticmethod",
               "signature": "(nodes)",
               "summary": "Return True when at least one of *nodes* has stored unfreeze data.",
-              "line": 1368,
+              "line": 1415,
               "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "node_utils/attributes/channels/channels_slots.py",
-      "summary": "UI slots for the Channels UI.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ChannelsSlots",
-          "summary": "Switchboard slots for the Channels UI.",
-          "line": 29,
-          "bases": [],
-          "members": [
+            },
             {
-              "name": "launch",
-              "qualname": "ChannelsSlots.launch",
+              "name": "node_name",
+              "qualname": "Channels.node_name",
               "kind": "staticmethod",
-              "signature": "(sb=None, targets=None, filter=None, search=None)",
-              "summary": "Open the Channels UI, optionally pre-targeted.",
-              "line": 235,
+              "signature": "(node, full=False)",
+              "summary": "*node*'s display name: its leaf name, or with *full* its long path.",
+              "line": 1444,
               "deprecated": false
             },
             {
-              "name": "apply_launch_config",
-              "qualname": "ChannelsSlots.apply_launch_config",
+              "name": "get_custom_attrs",
+              "qualname": "Channels.get_custom_attrs",
+              "kind": "staticmethod",
+              "signature": "(node)",
+              "summary": "*node*'s user-defined attribute names (``[]`` when it has none or is gone).",
+              "line": 1459,
+              "deprecated": false
+            },
+            {
+              "name": "is_locked",
+              "qualname": "Channels.is_locked",
+              "kind": "staticmethod",
+              "signature": "(node, attr_name)",
+              "summary": "Whether *attr_name* is locked on *node* (``False`` when it is not there).",
+              "line": 1467,
+              "deprecated": false
+            },
+            {
+              "name": "select_nodes",
+              "qualname": "Channels.select_nodes",
+              "kind": "staticmethod",
+              "signature": "(nodes)",
+              "summary": "Replace the selection with *nodes* (clear it for none);",
+              "line": 1475,
+              "deprecated": false
+            },
+            {
+              "name": "get_numeric_values",
+              "qualname": "Channels.get_numeric_values",
+              "kind": "staticmethod",
+              "signature": "(nodes, attr_name)",
+              "summary": "``{node: value}`` for the *nodes* whose *attr_name* exists, is unlocked",
+              "line": 1485,
+              "deprecated": false
+            },
+            {
+              "name": "set_numeric_values",
+              "qualname": "Channels.set_numeric_values",
+              "kind": "staticmethod",
+              "signature": "(values, attr_name)",
+              "summary": "Set *attr_name* on each node of *values* (``{node: value}``) as one",
+              "line": 1508,
+              "deprecated": false
+            },
+            {
+              "name": "defer",
+              "qualname": "Channels.defer",
+              "kind": "staticmethod",
+              "signature": "(fn)",
+              "summary": "Run *fn* once Maya is idle (``evalDeferred``);",
+              "line": 1519,
+              "deprecated": false
+            },
+            {
+              "name": "open_editor",
+              "qualname": "Channels.open_editor",
+              "kind": "classmethod",
+              "signature": "(cls, key)",
+              "summary": "Open the :attr:`EDITORS` editor *key*;",
+              "line": 1531,
+              "deprecated": false
+            },
+            {
+              "name": "watch_scene",
+              "qualname": "Channels.watch_scene",
+              "kind": "classmethod",
+              "signature": "(cls, owner, on_rebuild, on_values, widget=None)",
+              "summary": "Call a panel back on the scene events that change what it shows.",
+              "line": 1559,
+              "deprecated": false
+            },
+            {
+              "name": "watch_nodes",
+              "qualname": "Channels.watch_nodes",
+              "kind": "classmethod",
+              "signature": "(cls, owner, nodes, on_rebuild, on_attr, on_values)",
+              "summary": "Call a panel back on changes to *nodes* (redo it per selection).",
+              "line": 1606,
+              "deprecated": false
+            },
+            {
+              "name": "unwatch",
+              "qualname": "Channels.unwatch",
+              "kind": "staticmethod",
+              "signature": "(owner=None, tokens=())",
+              "summary": "End subscriptions: the *tokens* given, and every one *owner* holds.",
+              "line": 1668,
+              "deprecated": false
+            },
+            {
+              "name": "link_channel_box",
+              "qualname": "Channels.link_channel_box",
               "kind": "method",
-              "signature": "(self, targets=None, filter=None, search=None)",
-              "summary": "Configure the window from a :meth:`launch` call.",
-              "line": 269,
+              "signature": "(self, on_selection_changed, selected_rows)",
+              "summary": "Keep a panel's channel selection and Maya's channel box in step.",
+              "line": 1680,
               "deprecated": false
             },
             {
-              "name": "header_init",
-              "qualname": "ChannelsSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the header menu with global actions.",
-              "line": 300,
-              "deprecated": false
-            },
-            {
-              "name": "show_create_menu",
-              "qualname": "ChannelsSlots.show_create_menu",
-              "kind": "method",
-              "signature": "(self, *args)",
-              "summary": "Show the *Create Attribute* popup.",
-              "line": 461,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000_init",
-              "qualname": "ChannelsSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate filter combobox and wire its option_box invert action.",
-              "line": 847,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000",
-              "qualname": "ChannelsSlots.cmb000",
-              "kind": "method",
-              "signature": "(self, index)",
-              "summary": "Filter changed — refresh table.",
-              "line": 879,
-              "deprecated": false
-            },
-            {
-              "name": "tbl000_init",
-              "qualname": "ChannelsSlots.tbl000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "One-time table setup: action columns, context menu, scriptJobs.",
-              "line": 892,
-              "deprecated": false
-            },
-            {
-              "name": "cleanup_scene_callbacks",
-              "qualname": "ChannelsSlots.cleanup_scene_callbacks",
+              "name": "unlink_channel_box",
+              "qualname": "Channels.unlink_channel_box",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Tear down every event subscription owned by this slots instance.",
-              "line": 3159,
+              "summary": "Undo :meth:`link_channel_box` (a no-op when not linked).",
+              "line": 1717,
+              "deprecated": false
+            },
+            {
+              "name": "channel_box_selection",
+              "qualname": "Channels.channel_box_selection",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "The long names of the attributes selected in the channel box.",
+              "line": 1731,
+              "deprecated": false
+            },
+            {
+              "name": "select_in_channel_box",
+              "qualname": "Channels.select_in_channel_box",
+              "kind": "staticmethod",
+              "signature": "(attr_names)",
+              "summary": "Select *attr_names* in the channel box (best effort: it may be hidden).",
+              "line": 1748,
               "deprecated": false
             }
           ]

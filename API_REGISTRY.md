@@ -194,7 +194,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`node_utils/_node_utils.py`](#node_utils--_node_utils)
 - [`node_utils/attributes/_attributes.py`](#node_utils--attributes--_attributes) — Consolidated attribute utilities for Maya.
 - [`node_utils/attributes/channels/_channels.py`](#node_utils--attributes--channels--_channels) — Channels — Maya attribute query / mutation logic.
-- [`node_utils/attributes/channels/channels_slots.py`](#node_utils--attributes--channels--channels_slots) — UI slots for the Channels UI.
 - [`node_utils/data_nodes.py`](#node_utils--data_nodes) — The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 - [`nurbs_utils/_nurbs_utils.py`](#nurbs_utils--_nurbs_utils)
 - [`nurbs_utils/curve_to_tube.py`](#nurbs_utils--curve_to_tube) — Sweep a circular profile along NURBS curve(s) to build a tube.
@@ -244,7 +243,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L260) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L262) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -3832,7 +3831,7 @@ Consolidated attribute utilities for Maya.
 
 Channels — Maya attribute query / mutation logic.
 
-- **[`class Channels`](mayatk/mayatk/node_utils/attributes/channels/_channels.py#L20)** — Maya attribute query / mutation logic.
+- **[`class Channels`](mayatk/mayatk/node_utils/attributes/channels/_channels.py#L23)** — Maya attribute query / mutation logic.
   - `Channels.is_pinned(self)` *(property)*
   - `Channels.single_object_mode(self)` *(property)*
   - `Channels.pin_targets(self, nodes)` — Pin the manager to a fixed node list;
@@ -3879,21 +3878,21 @@ Channels — Maya attribute query / mutation logic.
   - `Channels.freeze_transforms(cls, nodes, attrs=None, store=True)` *(class)* — Freeze transforms on *nodes* under cumulative bake semantics.
   - `Channels.unfreeze_transforms(cls, nodes, attrs=None)` *(class)* — Restore previously stored transforms on *nodes*.
   - `Channels.has_unfreeze_info(nodes)` *(static)* — Return True when at least one of *nodes* has stored unfreeze data.
-
-<a id="node_utils--attributes--channels--channels_slots"></a>
-### `node_utils/attributes/channels/channels_slots.py`
-
-UI slots for the Channels UI.
-
-- **[`class ChannelsSlots`](mayatk/mayatk/node_utils/attributes/channels/channels_slots.py#L29)** — Switchboard slots for the Channels UI.
-  - `ChannelsSlots.launch(sb=None, targets=None, filter=None, search=None)` *(static)* — Open the Channels UI, optionally pre-targeted.
-  - `ChannelsSlots.apply_launch_config(self, targets=None, filter=None, search=None)` — Configure the window from a :meth:`launch` call.
-  - `ChannelsSlots.header_init(self, widget)` — Populate the header menu with global actions.
-  - `ChannelsSlots.show_create_menu(self, *args)` — Show the *Create Attribute* popup.
-  - `ChannelsSlots.cmb000_init(self, widget)` — Populate filter combobox and wire its option_box invert action.
-  - `ChannelsSlots.cmb000(self, index)` — Filter changed — refresh table.
-  - `ChannelsSlots.tbl000_init(self, widget)` — One-time table setup: action columns, context menu, scriptJobs.
-  - `ChannelsSlots.cleanup_scene_callbacks(self)` — Tear down every event subscription owned by this slots instance.
+  - `Channels.node_name(node, full=False)` *(static)* — *node*'s display name: its leaf name, or with *full* its long path.
+  - `Channels.get_custom_attrs(node)` *(static)* — *node*'s user-defined attribute names (``[]`` when it has none or is gone).
+  - `Channels.is_locked(node, attr_name)` *(static)* — Whether *attr_name* is locked on *node* (``False`` when it is not there).
+  - `Channels.select_nodes(nodes)` *(static)* — Replace the selection with *nodes* (clear it for none);
+  - `Channels.get_numeric_values(nodes, attr_name)` *(static)* — ``{node: value}`` for the *nodes* whose *attr_name* exists, is unlocked
+  - `Channels.set_numeric_values(values, attr_name)` *(static)* — Set *attr_name* on each node of *values* (``{node: value}``) as one
+  - `Channels.defer(fn)` *(static)* — Run *fn* once Maya is idle (``evalDeferred``);
+  - `Channels.open_editor(cls, key)` *(class)* — Open the :attr:`EDITORS` editor *key*;
+  - `Channels.watch_scene(cls, owner, on_rebuild, on_values, widget=None)` *(class)* — Call a panel back on the scene events that change what it shows.
+  - `Channels.watch_nodes(cls, owner, nodes, on_rebuild, on_attr, on_values)` *(class)* — Call a panel back on changes to *nodes* (redo it per selection).
+  - `Channels.unwatch(owner=None, tokens=())` *(static)* — End subscriptions: the *tokens* given, and every one *owner* holds.
+  - `Channels.link_channel_box(self, on_selection_changed, selected_rows)` — Keep a panel's channel selection and Maya's channel box in step.
+  - `Channels.unlink_channel_box(self)` — Undo :meth:`link_channel_box` (a no-op when not linked).
+  - `Channels.channel_box_selection(self)` — The long names of the attributes selected in the channel box.
+  - `Channels.select_in_channel_box(attr_names)` *(static)* — Select *attr_names* in the channel box (best effort: it may be hidden).
 
 <a id="node_utils--data_nodes"></a>
 ### `node_utils/data_nodes.py`

@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (535)
+## Moved out (544)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -362,6 +362,15 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.refresh_templates` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
 - `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.rename_template_safe` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
 - `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.source_images_dir` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.apply_launch_config` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.cleanup_scene_callbacks` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.cmb000` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.cmb000_init` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.header_init` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.launch` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.show_create_menu` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.tbl000_init` → `tentacle.slots.tools.channels.ChannelsSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.b001_init` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.header_init` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
@@ -540,7 +549,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (149)
+## Added (164)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -647,6 +656,21 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/render_opacity/render_effects.py::RenderEffects.select_objects(objects) -> List[str]`
 - `mat_utils/render_opacity/render_effects.py::RenderEffects.selected_objects(last_only: bool = False) -> List[str]`
 - `mat_utils/shader_templates/_shader_templates.py::ShaderTemplates.suggested_name(nodes) -> str`
+- `node_utils/attributes/channels/_channels.py::Channels.channel_box_selection(self)`
+- `node_utils/attributes/channels/_channels.py::Channels.defer(fn)`
+- `node_utils/attributes/channels/_channels.py::Channels.get_custom_attrs(node)`
+- `node_utils/attributes/channels/_channels.py::Channels.get_numeric_values(nodes, attr_name)`
+- `node_utils/attributes/channels/_channels.py::Channels.is_locked(node, attr_name)`
+- `node_utils/attributes/channels/_channels.py::Channels.link_channel_box(self, on_selection_changed, selected_rows)`
+- `node_utils/attributes/channels/_channels.py::Channels.node_name(node, full=False)`
+- `node_utils/attributes/channels/_channels.py::Channels.open_editor(cls, key)`
+- `node_utils/attributes/channels/_channels.py::Channels.select_in_channel_box(attr_names)`
+- `node_utils/attributes/channels/_channels.py::Channels.select_nodes(nodes)`
+- `node_utils/attributes/channels/_channels.py::Channels.set_numeric_values(values, attr_name)`
+- `node_utils/attributes/channels/_channels.py::Channels.unlink_channel_box(self)`
+- `node_utils/attributes/channels/_channels.py::Channels.unwatch(owner=None, tokens=())`
+- `node_utils/attributes/channels/_channels.py::Channels.watch_nodes(cls, owner, nodes, on_rebuild, on_attr, on_values)`
+- `node_utils/attributes/channels/_channels.py::Channels.watch_scene(cls, owner, on_rebuild, on_values, widget=None)`
 - `nurbs_utils/curve_to_tube.py::CurveToTube.describe(tubes) -> str`
 - `nurbs_utils/image_tracer.py::BluePencilMixin.open_blue_pencil() -> None`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.group_uuid(self) -> Optional[str]`
