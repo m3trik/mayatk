@@ -133,11 +133,6 @@ EXIT_USAGE = 3
 GUI_REQUIRED = {
     "test_sequencer": "Qt table classes hard-crash mayapy (0xC0000409)",
     "test_light_rig_panel": "loads the light_rig panel through MayaUiHandler (a GUI Maya)",
-    "test_reference_manager": (
-        "TestToggleReferenceOnCurrentSceneIsOneClick builds a real uitk "
-        "TableWidget, which hard-crashes mayapy in batch (re-confirmed ALONE in "
-        "a fresh process, 2026-09-14); the whole module passes in the GUI pass"
-    ),
     "test_shot_manifest": (
         "shots adapters register OpenMaya/scriptJob callbacks that "
         "segfault without a real Maya event loop"

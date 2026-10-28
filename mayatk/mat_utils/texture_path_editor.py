@@ -1,5 +1,20 @@
 # !/usr/bin/python
 # coding=utf-8
+"""Texture Path Editor engine: the scene's texture paths and the commands that fix them.
+
+:class:`TexturePathEditor` lists the scene's file nodes with their stored paths
+(:meth:`~TexturePathEditor.rows`) and the baked lightmaps the bake markers name
+(:meth:`~TexturePathEditor.lightmap_dependencies`), and runs every command the
+editor offers over them: Set Directory, Find & Copy, Normalize Paths, Make Paths
+Absolute, Resolve Missing Textures, the renames (Keep Names In Sync included),
+selection and deletion. Its panel is tentacle's shared Texture Path Editor
+(``slots/tools/texture_path_editor.py``), which drives blendertk's twin over the
+same names -- mayatk's are the reference.
+
+Reporting goes through one seam, ``_log``: into :attr:`TexturePathEditor.active_logger`
+when a caller lends one (the Find & Copy panel's pane), else Maya's own channels.
+"""
+
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
@@ -7,1133 +22,499 @@ except ImportError:
     cmds = None
 
 import os
-from functools import partial
 
-from pythontk import FileDependencies, FileUtils, ImgUtils, NamingConvention, StrUtils
-from pythontk.core_utils.engines.textures.map_factory import MapFactory
-from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
-from uitk.widgets.column_config import ColumnConfig
-from uitk.widgets.footer import FooterStatusController
+from pythontk import (
+    FileDependencies,
+    FileUtils,
+    FuzzyMatcher,
+    ImgUtils,
+    MapFactory,
+    StrUtils,
+)
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
-class TexturePathEditorSlots:
-    _ROW_SELECTION_COLUMNS = {
-        "shader": 0,
-        "path": 1,
-        "file_node": 2,
+class TexturePathEditor:
+    """The Texture Path Editor's scene half: file nodes, their paths, and the
+    commands that relocate, respell, find and rename them.
+
+    One instance per editor: it keeps :attr:`previous_paths` (the path each node
+    had before this session's last repath -- the table tooltip's "Previous:" line)
+    and :attr:`active_logger` (where a command reports while a panel lends one).
+    """
+
+    #: The host's words for the table's two name columns and the row actions
+    #: that name a node (tentacle's panel reads them; blendertk has its own).
+    LABELS = {
+        "shader": "Shader",
+        "file_node": "File Node",
+        "texture_dir": "Source Images",
+        "select_file_node": "Select File Node",
+        "graph": "Show in Hypershade",
+        "delete": "Delete File Node",
     }
 
-    #: Shader-column label of a lightmap dependency row (no shader, no file
-    #: node behind it -- the bake markers of the objects in the third column).
-    _LIGHTMAP_ROW_LABEL = "<lightmap>"
+    #: Whether the scene can hold Arnold preview shaders, whose dedicated file
+    #: nodes the panel's "Exclude Arnold Nodes" toggle hides.
+    EXCLUDE_ARNOLD = True
+    _ARNOLD_CLASSIFICATION = "rendernode/arnold*"
 
-    # Read-only class defaults for the lightmap state ``__init__`` sets: every
-    # refresh / scope capture REASSIGNS them (never mutates in place), so a
-    # driver built without ``__init__`` (the test harnesses) reads "none".
-    _lightmap_rows: dict = {}
-    _find_copy_lightmaps: tuple = ()
-
-    # Resolve-Missing cascade order: safest first. Same order is used in the
-    # header-menu checkbox listing so the visual matches the run order.
-    _RESOLVE_STRATEGY_ORDER = ("stem", "texture", "fuzzy")
-
-    # Default displayed length of a texture path while the header's "Truncate
-    # Texture Paths" toggle is on; its option box sets the length. Cut with
-    # ``mode="path"``, which drops whole middle components: the drive/root
-    # stays readable at the front, the filename and as many of its parents as
-    # fit at the back. ``_PATH_TRUNCATE_HEAD`` caps the front to that root —
-    # what identifies a texture is the end of its path, so the whole budget
-    # goes there. Longer since the File Node column is hidden by default.
-    _PATH_TRUNCATE_LENGTH = 96
-    _PATH_TRUNCATE_HEAD = 1
-
-    #: The table's columns, in order: 3-5 are facts about the file.
-    _HEADERS = (
-        "Shader",
-        "Texture Path",
-        "File Node",
-        "File Size",
-        "Dimensions",
-        "Image Type",
-    )
-    #: Optional column -> the ``ImgUtils.texture_facts`` field it shows. Read
-    #: only while the column shows.
-    _INFO_COLUMNS = {3: "bytes", 4: "dimensions", 5: "mode"}
-    #: Hidden until shown from the table header's menu (right-click it): the
-    #: file node, rarely needed, and the file facts.
-    _COLUMNS_HIDDEN_BY_DEFAULT = (2, 3, 4, 5)
-
-    # Normalize-Paths combobox items. Order is the contract: the menu's
-    # combobox is populated in this order, and ``_read_normalize_external_mode``
-    # maps ``currentIndex()`` back to the mode key. Reordering breaks the read.
-    _NORMALIZE_MODE_ITEMS = (
-        ("Leave external textures untouched", "rewrite"),
-        ("Copy external textures to sourceimages", "copy"),
-        ("Move external textures to sourceimages", "move"),
+    #: Scene events the table refreshes on, each with whether only a SHOWN
+    #: table follows it (every undo in the scene fires Undo / Redo).
+    SCENE_EVENTS = (
+        ("SceneOpened", False),
+        ("NewSceneOpened", False),
+        ("SceneImported", False),
+        ("workspaceChanged", False),
+        ("Undo", True),
+        ("Redo", True),
     )
 
-    # Set-Directory / Find-&-Copy relocate combobox items.
-    _RELOCATE_MODE_ITEMS = (
-        ("Leave textures in place (path only)", "rewrite"),
-        ("Copy textures to new directory", "copy"),
-        ("Move textures to new directory", "move"),
+    #: Browse for File's filter: what a file node reads.
+    FILE_TYPES = (
+        "*.png",
+        "*.jpg",
+        "*.jpeg",
+        "*.tga",
+        "*.tif",
+        "*.tiff",
+        "*.exr",
+        "*.hdr",
+        "*.bmp",
+        "*.psd",
+        "*.iff",
+        "*.tx",
+        "*.*",
     )
 
-    # Colour markers leading the Find & Copy source / destination rows, and the
-    # Set Directory picker's caption. The native Windows picker draws its
-    # caption through the shell — plain text, no rich text — but it renders
-    # emoji in colour, so the marker is the one channel that carries colour
-    # without giving up the shell browser (Quick Access, OneDrive, network,
-    # recent). Blue/amber rather than green/red: it survives the common
-    # colour-vision deficiencies, and the words carry the meaning anyway — the
-    # glyph is redundancy, never the only signal.
-    _DIALOG_MARK_SOURCE = "🔵"
-    _DIALOG_MARK_DEST = "🟠"
+    #: Set Directory's file handling, Normalize Paths' external-texture
+    #: handling and Resolve Missing's strategies (cascade order: safest first).
+    RELOCATE_MODES = ("rewrite", "copy", "move")
+    NORMALIZE_MODES = ("rewrite", "copy", "move")
+    RESOLVE_STRATEGY_ORDER = ("stem", "texture", "fuzzy")
 
-    # Find-&-Copy relocate combobox items (no "rewrite" — the operation
-    # always relocates files; the only choice is copy vs. move).
-    _FIND_MODE_ITEMS = (
-        ("Copy", "copy"),
-        ("Move", "move"),
+    #: Rows of a dry-run listing shown in full before it collapses to a count.
+    #: Long enough to recognise the operation, short enough that the plan
+    #: stays one screenful next to the form that produced it.
+    _PLAN_PREVIEW_ROWS = 12
+
+    #: Said when Keep Names In Sync leaves a rename to the file or node edited
+    #: (:meth:`_sync_carries`).
+    _SYNC_ALONE = (
+        "Keep Names In Sync: {name} was renamed alone -- {material} follows "
+        "only a new base name for its own texture set."
     )
 
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.texture_path_editor
-        self._refresh_pending = False
-        self._footer_controller = self._create_footer_controller()
-        self._previous_paths = {}  # node_name -> path before last in-session repath
-        self._browse_in_progress = False  # re-entry guard
-        # Find & Copy is a tool window that stays open while it works, so the
-        # panel is KEPT: reopening it re-seeds the rows from live scene state
-        # rather than throwing away the log the user is still reading and the
-        # size they set. ``_find_copy_nodes`` is the scope that panel is
-        # currently pointed at, captured when it opens (the row selection can
-        # change behind a modeless window; the button that names a count must
-        # not disagree with what it relocates).
-        self._find_copy_panel = None
-        self._find_copy_nodes = []
-        self._find_copy_mode = "copy"
-        self._find_copy_scope_label = ""
-        # Lightmap dependencies: the baked maps the bake markers name, which
-        # no file node references. ``_lightmap_rows`` maps a row's path text
-        # to its dependency record (rebuilt with the table); the Find & Copy
-        # scope carries its own list, captured together with the file nodes.
-        self._lightmap_rows = {}
-        self._find_copy_lightmaps = []
-        # Set for the duration of a panel-driven command; ``_log`` routes the
-        # report into that panel's pane instead of Maya's channels.
-        self._active_logger = None
+    def __init__(self):
+        #: node -> its path before this session's last repath (the tooltip's
+        #: "Previous:" line); the panel clears it when the scene changes.
+        self.previous_paths = {}
+        #: Where ``_log`` reports while a caller lends a logger (a panel's
+        #: pane); ``None``: Maya's own channels.
+        self.active_logger = None
 
     # ------------------------------------------------------------------
-    # Header menu
+    # Project
     # ------------------------------------------------------------------
 
-    def header_init(self, widget):
-        """Initialize the header menu.
+    def texture_dir(self) -> str:
+        """The project's texture folder (the ``sourceImages`` rule), ``""`` if none."""
+        return EnvUtils.get_env_info("sourceimages") or ""
 
-        Plain action items are QPushButtons wired via ``clicked.connect``.
-        The two items with per-button option-box flyouts (Normalize Paths,
-        Resolve Missing Textures) are uitk ``PushButton`` (``tb_*``)
-        auto-wired by name; their flyout contents are populated by matching
-        ``_init`` methods.
+    def _project_roots(self):
+        """``(workspace, sourceimages)`` -- both roots the path converters take.
+
+        ``MatUtils.to_absolute`` / ``to_project_relative`` look either one up
+        themselves when it is not handed over, and that lookup goes through
+        ``cmds.workspace``. Resolving the pair ONCE, here, is what keeps a
+        per-row Maya call out of a table refresh and keeps ``cmds`` off the
+        thread pool in :meth:`rows` -- so callers that loop pass both down
+        rather than letting the converters ask per path.
         """
-        widget.config_buttons("refresh", "menu", "collapse", "hide")
-        widget.refresh_requested.connect(self.refresh_texture_table)
-
-        widget.menu.add("Separator", setTitle="General")
-        btn_open_si = widget.menu.add(
-            "QPushButton",
-            setText="Open Source Images",
-            setObjectName="btn_open_source_images",
-            setToolTip="Open the project's sourceimages directory in the file explorer.",
-        )
-        btn_open_si.clicked.connect(self.open_source_images)
-
-        btn_reload = widget.menu.add(
-            "QPushButton",
-            setText="Reload Scene Textures",
-            setObjectName="btn_reload_scene_textures",
-            setToolTip=(
-                "Force Maya to re-read every scene texture from disk "
-                "(file / aiImage / pxrTexture / imagePlane). Useful after "
-                "editing textures externally or after Find & Copy / Normalize "
-                "Paths relocates them."
-            ),
-        )
-        btn_reload.clicked.connect(self.reload_scene_textures)
-
-        chk_truncate = widget.menu.add(
-            "QCheckBox",
-            setText="Truncate Texture Paths",
-            setObjectName="chk_truncate_paths",
-            setChecked=False,
-            setToolTip=(
-                "Shorten long paths in the Texture Path column by dropping "
-                "whole middle folders — the drive and its first directories "
-                "stay readable at the front, the filename at the back.\n"
-                "Display only — the cell still holds the full path, so edits, "
-                "path commands and the tooltip are unaffected.\n"
-                "Option box (▸): the length to shorten to."
-            ),
-        )
-        chk_truncate.toggled.connect(lambda *_: self._apply_path_truncation())
-        chk_truncate.option_box.menu.setTitle("Truncate Texture Paths")
-        spn_length = chk_truncate.option_box.menu.add(
-            "QSpinBox",
-            setObjectName="spn_truncate_length",
-            setPrefix="Length: ",
-            setSuffix=" characters",
-            setMinimum=24,
-            setMaximum=400,
-            setValue=self._PATH_TRUNCATE_LENGTH,
-            setToolTip=(
-                "How many characters a truncated path shows. Whole middle "
-                "folders are dropped until it fits; the filename always stays."
-            ),
-        )
-        spn_length.valueChanged.connect(lambda *_: self._apply_path_truncation())
-
-        chk_warn_len = widget.menu.add(
-            "QCheckBox",
-            setText="Warn On Over-Long Paths",
-            setObjectName="chk_warn_path_length",
-            setChecked=True,
-            setToolTip=(
-                "Flag rows whose resolved path is longer than this OS accepts "
-                f"({FileUtils.path_length_limit()} characters).\n"
-                "Over-long paths fail late and opaquely — a texture the FBX "
-                "plug-in silently cannot embed, a copy that reports success "
-                "and produced nothing — and a path that fits here still breaks "
-                "on a machine without long paths enabled (260 characters)."
-            ),
-        )
-        chk_warn_len.toggled.connect(lambda *_: self.refresh_texture_table())
-
-        chk_exc_arnold = widget.menu.add(
-            "QCheckBox",
-            setText="Exclude Arnold Nodes",
-            setObjectName="chk_exclude_arnold",
-            setChecked=False,
-            setToolTip=(
-                "Hide rows whose texture is used only by an Arnold shader.\n"
-                "An Arnold preview shader (Materials ▸ Arnold Preview Shader) "
-                "owns a dedicated file node per texture, so every bridged "
-                "material contributes a duplicate row for the same image.\n"
-                "A texture shared with a non-Arnold shader is always shown."
-            ),
-        )
-        chk_exc_arnold.toggled.connect(lambda *_: self.refresh_texture_table())
-
-        chk_lightmaps = widget.menu.add(
-            "QCheckBox",
-            setText="Show Lightmap Dependencies",
-            setObjectName="chk_show_lightmaps",
-            setChecked=True,
-            setToolTip=(
-                "List the baked lightmaps the scene's bake markers name.\n"
-                "A committed lightmap is a texture dependency with no file "
-                "node: the marker records the map and the folder it was baked "
-                "into, and that folder goes stale when the project is "
-                "reorganised or the scene is migrated — the export then ships "
-                "unlit. Rows read red when the map is nowhere on disk and "
-                "amber when it was found somewhere other than the recorded "
-                "folder.\n"
-                "Find & Copy relocates them with the textures and rewrites "
-                "the markers; Normalize Paths / Make Paths Absolute re-spell "
-                "the recorded folder (workspace-relative inside the project, "
-                "so a teammate's copy on another drive resolves it); Select "
-                "Broken Paths, Browse for File and a typed path apply too. "
-                "Set Directory and Resolve Missing are file-node only."
-            ),
-        )
-        chk_lightmaps.toggled.connect(lambda *_: self.refresh_texture_table())
-
-        widget.menu.add("Separator", setTitle="Naming")
-        chk_sync = widget.menu.add(
-            "QCheckBox",
-            setText="Keep Names In Sync",
-            setObjectName="chk_sync_names",
-            setChecked=False,
-            setToolTip=self.sb.tooltip.fmt(
-                title="Keep Names In Sync",
-                body="Renaming a shader, a texture or a file node renames the "
-                "rest of its material to match: the shader, every texture file "
-                "it uses (on disk) and their file nodes share one base name.",
-                bullets=[
-                    "<b>Shader</b> — the base name with the shader affix; its "
-                    "shading group (<i>…SG</i>) and an Arnold <i>…_ai</i> beside "
-                    "it follow.",
-                    "<b>Textures</b> — the material's own texture set, each "
-                    "keeping what follows its base name (map type, UDIM token, "
-                    "extension): <i>rock_Base_Color.png</i> follows <i>stone</i> "
-                    "as <i>stone_Base_Color.png</i>. Every file node reading a "
-                    "renamed file is repointed.",
-                    "<b>Lightmap</b> — the set's baked lightmap "
-                    "(<i>rock_Lightmap.exr</i>) follows, its bake markers "
-                    "re-stamped.",
-                    "<b>File nodes</b> — named after their texture, plus the "
-                    "file node suffix.",
-                ],
-                notes=[
-                    "A texture or file node follows only as a new base name "
-                    "(<i>rock_Normal</i> → <i>stone_Normal</i>); a new map type "
-                    "or another set's map is renamed alone.",
-                    "Left alone: another set's map (an environment cube), and "
-                    "any file outside this project — another project may read "
-                    "it. Both are reported.",
-                    "Planned whole first: a rename that would land on another "
-                    "file stops the lot before anything changes.",
-                    "One undo step, files included.",
-                    "Option box (▸): the shader affix and the file node suffix.",
-                ],
-            ),
-        )
-        flyout = chk_sync.option_box.menu
-        flyout.setTitle("Keep Names In Sync")
-        shader_affix = flyout.add(
-            self.sb.registered_widgets.LineEdit,
-            setObjectName="txt_shader_affix",
-        )
-        shader_affix.option_box.set_affix(
-            default="convention",
-            convention_key="material",
-            settings_key="texture_path_editor_shader_affix",
-            on_change=lambda _mode, w=shader_affix: self._apply_shader_affix_hint(w),
-        )
-        self._apply_shader_affix_hint(shader_affix)
-        flyout.add(
-            self.sb.registered_widgets.LineEdit,
-            setObjectName="txt_file_node_suffix",
-            setPlaceholderText="File Node Suffix",
-            setToolTip=(
-                "Appended to a texture's name to name its file node "
-                "(e.g. '_file': stone_Base_Color.png → stone_Base_Color_file).\n"
-                "Empty: the file node takes the texture's name as it is."
-            ),
-        )
-
-        widget.menu.add("Separator", setTitle="Path Management")
-        widget.menu.add(
-            self.sb.registered_widgets.PushButton,
-            setText="Set Directory…",
-            setObjectName="tb_set_texture_directory",
-            setToolTip=(
-                "Repath every (selected, or all) file node so its texture lives "
-                "under the chosen directory. Subdirectories are flattened. Paths "
-                "become relative when the chosen directory is inside sourceimages."
-            ),
-        )
-        widget.menu.add(
-            self.sb.registered_widgets.PushButton,
-            setText="Find && Copy Textures…",
-            setObjectName="tb_find_and_copy_textures",
-            setToolTip=self.sb.tooltip.fmt(
-                title="Find &amp; Copy Textures",
-                body="Gather the textures used by (selected, or all) file "
-                "nodes, relocate them into one destination, and repath. Paths "
-                "become relative when the destination is inside sourceimages.",
-                bullets=[
-                    "Opens a panel with both folders on screen at once — "
-                    "<b>Search in</b> and <b>Copy into</b>, each labelled — so "
-                    "there is no order to remember and nothing to mistake one "
-                    "for the other. Copy vs Move lives there too.",
-                    "A path that already resolves is its own source, so the "
-                    "search folder is only used for what is unresolved — "
-                    "leave it empty and only the resolving paths relocate.",
-                    "The panel stays open and reports into its own log, so a "
-                    "second run with one value changed is one click away.",
-                ],
-                notes=[
-                    "Lightmap dependencies (rows the header toggle shows) ride "
-                    "along: searched, copied and their bake markers repointed.",
-                    "Arnold texture nodes are not supported.",
-                ],
-            ),
-        )
-        widget.menu.add(
-            self.sb.registered_widgets.PushButton,
-            setText="Normalize Paths",
-            setObjectName="tb_normalize_paths",
-            setToolTip=(
-                "Rewrite (selected, or all) absolute paths inside the project "
-                "to relative. A texture under sourceimages becomes relative to "
-                "it — the one form Maya keeps: a path it can resolve against "
-                "the project root is expanded back to absolute on the next "
-                "open and saved that way. UDIM tokens are preserved."
-            ),
-        )
-        btn_make_abs = widget.menu.add(
-            "QPushButton",
-            setText="Make Paths Absolute",
-            setObjectName="btn_make_paths_absolute",
-            setToolTip=(
-                "Rewrite (selected, or all) relative paths to absolute, "
-                "resolved against the project root. Inverse of Normalize "
-                "Paths — needed e.g. for FBX Embed Media, which cannot "
-                "consume relative paths."
-            ),
-        )
-        btn_make_abs.clicked.connect(self.make_paths_absolute)
-        widget.menu.add(
-            self.sb.registered_widgets.PushButton,
-            setText="Resolve Missing Textures",
-            setObjectName="tb_resolve_missing_textures",
-            setToolTip=(
-                "Search sourceimages (recursively, all subfolders) for "
-                "replacement files for missing (selected, or all) textures. "
-                "Enabled strategies run in order: Stem → Texture → Fuzzy "
-                "(safest first); stops at first hit."
-            ),
-        )
-
-        widget.menu.add("Separator", setTitle="Selection")
-        btn_sel_for_obj = widget.menu.add(
-            "QPushButton",
-            setText="Select Textures for Selected Objects",
-            setObjectName="btn_select_textures_for_objects",
-            setToolTip=(
-                "Highlight the texture-path cells for textures used by the "
-                "currently selected scene objects."
-            ),
-        )
-        btn_sel_for_obj.clicked.connect(self.select_textures_for_objects)
-
-        btn_sel_broken = widget.menu.add(
-            "QPushButton",
-            setText="Select Broken Paths",
-            setObjectName="btn_select_broken_paths",
-            setToolTip="Highlight rows whose texture file is missing.",
-        )
-        btn_sel_broken.clicked.connect(self.select_broken_paths)
-
-        btn_sel_abs = widget.menu.add(
-            "QPushButton",
-            setText="Select Absolute Paths",
-            setObjectName="btn_select_absolute_paths",
-            setToolTip=(
-                "Highlight rows whose path is absolute (regardless of validity). "
-                "These are candidates for Normalize Paths."
-            ),
-        )
-        btn_sel_abs.clicked.connect(self.select_absolute_paths)
-
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Texture Path Editor",
-                body="Inspect and fix file-node texture paths. Path commands "
-                "operate on selected rows if any, otherwise on all file "
-                "nodes in the scene.",
-                sections=[
-                    (
-                        "Path management (header menu)",
-                        [
-                            "<b>Set Directory…</b> — repath to a chosen folder "
-                            "(subdirs flatten). Option box (▸) chooses leave / "
-                            "copy / move.",
-                            "<b>Find &amp; Copy Textures…</b> — gather every "
-                            "texture the file nodes use and relocate them into one "
-                            "destination. Opens a panel carrying every option: "
-                            "Copy / Move, the folder to search, the folder to "
-                            "write into, and whether to search for every texture "
-                            "or only the unresolved ones.",
-                            "<b>Normalize Paths</b> — rewrite absolute paths "
-                            "inside the project to relative. Option box (▸) "
-                            "controls textures outside it: leave / copy / move "
-                            "into sourceimages.",
-                            "<b>Make Paths Absolute</b> — rewrite relative paths "
-                            "to absolute (resolved against the project root). "
-                            "Inverse of Normalize Paths.",
-                            "<b>Resolve Missing Textures</b> — search sourceimages "
-                            "using strategy cascade <i>Stem → Texture → Fuzzy</i> "
-                            "(safest first; stops at first hit). Option box (▸) "
-                            "enables/disables individual strategies.",
-                        ],
-                    ),
-                    (
-                        "General (header menu)",
-                        [
-                            "<b>Open Source Images</b> — Explorer shortcut.",
-                            "<b>Reload Scene Textures</b> — force Maya to re-read "
-                            "all textures from disk (useful after relocations).",
-                            "<b>Truncate Texture Paths</b> — shorten the path "
-                            "column's display by dropping whole middle folders "
-                            "(drive and filename stay readable). The cell keeps "
-                            "the full path (edits, commands and the tooltip "
-                            "always use it). Option box (▸) sets the length.",
-                            "<b>Exclude Arnold Nodes</b> — hide rows whose texture "
-                            "is used only by an Arnold shader (a preview shader "
-                            "owns a duplicate file node per texture). Also narrows "
-                            "the <i>all</i> scope, so path commands skip them too.",
-                            "<b>Show Lightmap Dependencies</b> — rows for the baked "
-                            "maps the bake markers name (no file node). Red = "
-                            "nowhere on disk; amber = found outside the recorded "
-                            "folder. Find &amp; Copy relocates them and rewrites "
-                            "the markers; Normalize Paths / Make Paths Absolute "
-                            "re-spell the recorded folder; hiding them also keeps "
-                            "them out of the <i>all</i> scope.",
-                        ],
-                    ),
-                    (
-                        "Naming (header menu)",
-                        [
-                            "<b>Keep Names In Sync</b> — renaming a shader, or "
-                            "giving a texture or file node a new base name, "
-                            "renames its whole material to one base name: the "
-                            "shader (with its affix), every texture file of its "
-                            "set, on disk, and their file nodes. Option box (▸): "
-                            "the shader affix (the scene convention by default) "
-                            "and the file node suffix.",
-                        ],
-                    ),
-                    (
-                        "Selection helpers (header menu)",
-                        [
-                            "<b>Select Textures for Selected Objects</b> — "
-                            "highlight rows for textures used by the current "
-                            "scene selection.",
-                            "<b>Select Broken Paths</b> — rows whose file is "
-                            "missing on disk.",
-                            "<b>Select Absolute Paths</b> — rows with absolute "
-                            "paths (candidates for Normalize Paths).",
-                        ],
-                    ),
-                ],
-                notes=[
-                    "Find &amp; Copy runs inside its own panel and reports "
-                    "there — the pane at the bottom is the whole record of what "
-                    "it found, relocated and repathed.",
-                    "<b>Right-click</b> any row for per-texture actions: "
-                    "Browse for File (one row) or Folder (several — each "
-                    "repointed to its same-named file there), Rename File "
-                    "(the file on disk, in place), scene selection, Hypershade "
-                    "graph, delete (on a lightmap row: Revert to Source, the "
-                    "Lightmap Baker's Revert Selected — its objects are unbound, the map "
-                    "stays on disk). Editing "
-                    "a path that changes only the file name renames the file "
-                    "too, inside this project (outside it the path repoints).",
-                    "<b>Right-click the column headers</b> to show, hide or "
-                    "reorder columns: File Node, File Size, Dimensions and "
-                    "Image Type start hidden, and a hidden column's values are "
-                    "never read.",
-                    "Collision policy on Copy / Move: same-name + same-size "
-                    "files rebind without overwriting; different-size hits "
-                    "skip with a warning (never silently rebinds to a wrong "
-                    "texture, never destroys the external).",
-                ],
-            )
-        )
-
-    def tb_set_texture_directory_init(self, widget):
-        """Populate the Set Directory option-box with the relocate-mode combobox."""
-        widget.option_box.menu.setTitle("Set Directory")
-        widget.option_box.menu.add(
-            "QComboBox",
-            setObjectName="cmb_relocate_mode",
-            setToolTip=(
-                "Behavior for texture files when the directory changes:\n\n"
-                "• Leave in place — only rewrite the file-node path.\n"
-                "• Copy — duplicate each texture into the chosen directory.\n"
-                "• Move — relocate each texture into the chosen directory.\n\n"
-                "Collision policy: same-name + same-size at destination is a "
-                "safe rebind (no overwrite). Different size is skipped + "
-                "warned — never silently rebind to a wrong texture."
-            ),
-            addItems=[label for label, _key in self._RELOCATE_MODE_ITEMS],
-        )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setObjectName="chk_allow_missing",
-            setText="Allow Missing Targets",
-            setChecked=False,
-            setToolTip=(
-                "Repath a file node even when the chosen directory holds no "
-                "texture of that name.\n\nOff (the default), such nodes keep "
-                "the path they have: rewriting them would only spell the "
-                "breakage differently. Tick it to point a batch at a folder "
-                "you are about to fill."
-            ),
-        )
-
-    def tb_normalize_paths_init(self, widget):
-        """Populate the Normalize Paths option-box with the external-mode combobox."""
-        widget.option_box.menu.setTitle("Normalize Paths")
-        widget.option_box.menu.add(
-            "QComboBox",
-            setObjectName="cmb_external_mode",
-            setToolTip=(
-                "Behavior for external textures (absolute paths outside the "
-                "project) whose file exists on disk:\n\n"
-                "• Leave untouched — only rewrite paths already inside the "
-                "project.\n"
-                "• Copy to sourceimages — duplicate the file in (a UDIM set's "
-                "every tile), then rebind.\n"
-                "• Move to sourceimages — relocate the file in, then rebind.\n\n"
-                "Collision policy: a same-named sourceimages file is reused "
-                "only when its content provably matches; a different file "
-                "under that name is staged alongside it as an _N variant, "
-                "loudly — never silently rebind to a wrong texture, never "
-                "overwrite."
-            ),
-            addItems=[label for label, _key in self._NORMALIZE_MODE_ITEMS],
-        )
-
-    def tb_resolve_missing_textures_init(self, widget):
-        """Populate the Resolve Missing option-box with the strategy checkboxes."""
-        widget.option_box.menu.setTitle("Resolve Missing Textures")
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Stem  — exact name, different extension",
-            setObjectName="chk_stem",
-            setChecked=True,
-            setToolTip=(
-                "Match files in sourceimages whose stem equals the missing "
-                "texture's stem (extension may differ)."
-            ),
-        )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Texture  — same map type + base name (safest fuzzy)",
-            setObjectName="chk_texture",
-            setChecked=True,
-            setToolTip=(
-                "Restrict candidates to files of the same map type "
-                "(AO/DIFF/NORM/SPEC/…) and fuzzy-match on the map-stripped "
-                "base name."
-            ),
-        )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Fuzzy  — similar name (loose; may mismatch)",
-            setObjectName="chk_fuzzy",
-            setChecked=True,
-            setToolTip=(
-                "Loose name matching across all candidates. May mismatch on "
-                "map-type boundaries."
-            ),
-        )
+        return (EnvUtils.get_env_info("workspace") or "", self.texture_dir())
 
     # ------------------------------------------------------------------
-    # Table context menu
-    # ------------------------------------------------------------------
-
-    def tbl000_init(self, widget):
-        if not widget.is_initialized:
-            widget.refresh_on_show = True
-            widget.cellChanged.connect(self.handle_cell_edit)
-            if self._footer_controller:
-                widget.itemSelectionChanged.connect(self._footer_controller.update)
-
-            # Right-click the header: show / hide / reorder the columns. The
-            # optional ones start hidden and are read only once shown.
-            widget.enable_column_config(
-                settings_key="texture_path_editor_columns",
-                locked=(1,),
-                reorderable=True,
-                hidden_by_default=self._COLUMNS_HIDDEN_BY_DEFAULT,
-            )
-            ColumnConfig.of(widget).visibility_changed.connect(
-                lambda column, hidden, w=widget: (
-                    None if hidden else self._fill_info_columns(w, [column])
-                )
-            )
-            widget.context_menu_about_to_show.connect(
-                lambda w=widget: self._fit_row_menu(w)
-            )
-
-            widget.menu.add("Separator", setTitle="Path Management")
-            widget.menu.add(
-                "QPushButton",
-                setText="Browse for File...",
-                setObjectName="row_browse_for_file",
-                setToolTip=(
-                    "One row: pick the texture file to repath it to.\n"
-                    "Several rows: pick a folder — each selected texture is "
-                    "repointed to its same-named file there; one with no such "
-                    "file keeps its path."
-                ),
-            )
-            widget.menu.add(
-                "QPushButton",
-                setText="Rename File...",
-                setObjectName="row_rename_file",
-                setToolTip=(
-                    "Rename this row's texture file on disk, in its cell (a "
-                    "UDIM set renames every tile). Every file node reading it "
-                    "is repointed; with Keep Names In Sync on, a new base name "
-                    "takes the shader, its other textures and their file nodes "
-                    "along. One undo step."
-                ),
-            )
-
-            widget.menu.add("Separator", setTitle="Selection")
-            widget.menu.add(
-                "QPushButton",
-                setText="Select In Scene",
-                setObjectName="select_material",
-                setToolTip=(
-                    "Select all scene objects currently assigned to this material."
-                ),
-            )
-            widget.menu.add(
-                "QPushButton",
-                setText="Select File Node",
-                setObjectName="select_file_node",
-                setToolTip="Select the file node in Maya.",
-            )
-            widget.menu.add(
-                "QPushButton",
-                setText="Show in Hypershade",
-                setObjectName="row_show_in_hypershade",
-                setToolTip="Graph the selected file node in the Hypershade editor.",
-            )
-
-            widget.menu.add("Separator", setTitle="Edit")
-            widget.menu.add(
-                "QPushButton",
-                setText="Delete File Node",
-                setObjectName="delete_file_node",
-                setToolTip="Delete the selected file node from Maya.",
-            )
-
-            def _bind_menu_action(action_name, method, columns=None):
-                widget.register_menu_action(
-                    action_name,
-                    lambda selection, fn=method: fn(selection),
-                    columns=columns or self._ROW_SELECTION_COLUMNS,
-                )
-
-            _bind_menu_action("row_browse_for_file", self.row_browse_for_file)
-            _bind_menu_action("row_rename_file", self.row_rename_file)
-            _bind_menu_action("select_material", self.select_material)
-            _bind_menu_action("select_file_node", self.select_file_node)
-            _bind_menu_action("row_show_in_hypershade", self.row_show_in_hypershade)
-            _bind_menu_action("delete_file_node", self.delete_file_node)
-
-            self._setup_scene_change_callback(widget)
-
-        self._refresh_table_content(widget)
-
-    # ------------------------------------------------------------------
-    # Smart scope
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Path validity — one token-aware rule for the whole panel
+    # Path validity -- one token-aware rule
     # ------------------------------------------------------------------
 
     @staticmethod
     def _texture_on_disk(path: str) -> bool:
         """Is there a file behind *path*? Tile/frame tokens resolved first.
 
-        Every "does this texture exist?" in this panel goes through here.
-        ``os.path.exists`` is the wrong question for a stored ``.ftn`` value:
-        a ``rock.<UDIM>.png`` names no literal file, so a perfectly good tile
-        set painted red in the table, was swept up by Select Broken Paths, and
-        was fed to Resolve Missing Textures — which repaths, so a healthy set
-        could be rebound to whichever single file matched its stem.
+        Every "does this texture exist?" here goes through this. ``os.path.exists``
+        is the wrong question for a stored ``.ftn`` value: a ``rock.<UDIM>.png``
+        names no literal file, so a good tile set read as missing, was swept up
+        by Select Broken Paths and fed to Resolve Missing Textures -- which
+        repaths, so a healthy set could be rebound to whichever single file
+        matched its stem.
 
         It asks ``MatUtils.texture_tiles`` and not the ``1001``-probing
-        ``_texture_exists``: the probe is pinned to the exporter's
-        representative tile, so a set running 1002-1005 reads as missing
-        through it — and this same verdict gates Set Texture Directory's
-        repath, which would then leave a node behind on tiles it had just
-        copied.
+        ``_texture_exists``: the probe is pinned to the exporter's representative
+        tile, so a set running 1002-1005 reads as missing through it -- and this
+        same verdict gates Set Directory's repath.
 
         Parameters:
-            path: An ABSOLUTE path — resolve a stored value through
+            path: An ABSOLUTE path -- resolve a stored value through
                 ``MatUtils.to_absolute`` first.
         """
         return bool(MatUtils.texture_tiles(path))
 
-    # ------------------------------------------------------------------
-    # Menu state
-    # ------------------------------------------------------------------
+    def resolve_path(self, path: str, file_node=None):
+        """``(exists, absolute path)`` for a stored or typed *path*.
+
+        *file_node* is accepted for the hosts' one signature (blendertk resolves
+        a linked image's ``//`` path against its library); Maya resolves every
+        path against the project.
+        """
+        abs_path = MatUtils.to_absolute(path, *self._project_roots()) if path else ""
+        return bool(abs_path) and self._texture_on_disk(abs_path), abs_path
 
     @staticmethod
-    def _menu_flag(menu, name: str, default: bool) -> bool:
-        """State of a checkbox on ``menu``; ``default`` when it isn't there.
+    def is_absolute_path(path: str) -> bool:
+        """Whether *path* is stored absolute -- a Normalize Paths candidate."""
+        return bool(path) and os.path.isabs(path)
 
-        Every toggle in this panel is read from a menu that may not exist yet —
-        a refresh can fire before ``header_init`` builds it, and a workflow can
-        be driven without an option box at all (programmatic calls, tests). One
-        lookup for all of them, so the per-toggle readers carry only the thing
-        that actually differs: the default.
+    # ------------------------------------------------------------------
+    # The table's rows
+    # ------------------------------------------------------------------
+
+    def rows(self, exclude_arnold: bool = False):
+        """One row per (shader, file node): what the editor's table lists.
+
+        The stored ``.ftn`` verbatim (no relativized display): Make Paths
+        Absolute, Select Absolute Paths and a typed path all depend on the cell
+        showing the path the node actually holds.
+
+        Parameters:
+            exclude_arnold: Leave out file nodes only an Arnold shader uses (a
+                preview shader owns a duplicate file node per texture).
+
+        Returns:
+            list[dict]: ``shader`` (the label), ``shader_node`` (the shader a
+            rename of that cell renames; Keep Names In Sync's material),
+            ``materials`` (every shader reading the texture), ``shader_editable``,
+            ``path`` (stored), ``file_node``, ``exists`` (tiles resolved) and
+            ``abspath``.
         """
-        chk = getattr(menu, name, None) if menu is not None else None
-        try:
-            return bool(chk.isChecked())
-        except AttributeError:
-            return default
-
-    def _header_menu(self):
-        """The header's menu, or None while it is still unbuilt."""
-        return getattr(getattr(self.ui, "header", None), "menu", None)
-
-    def _option_menu(self, name: str):
-        """The option-box menu of header item *name*, or None while unbuilt."""
-        item = getattr(self._header_menu(), name, None)
-        return getattr(getattr(item, "option_box", None), "menu", None)
-
-    def _exclude_arnold_pattern(self):
-        """Classification pattern behind the header's "Exclude Arnold Nodes" toggle.
-
-        Returns None (no filtering) when the toggle is off or the header menu
-        hasn't been built yet, so an early refresh is safe.
-        """
-        on = self._menu_flag(self._header_menu(), "chk_exclude_arnold", False)
-        return "rendernode/arnold*" if on else None
-
-    def _get_scope_nodes(self):
-        """Return (nodes, scope_label).
-
-        Selection-aware: returns selected rows' file nodes if any, otherwise
-        all file nodes in the scene. ``scope_label`` is a human-readable
-        descriptor used in dialog titles and info logs.
-
-        The "all" scope honors the header's Exclude Arnold Nodes toggle, so a
-        path command never touches rows the panel is hiding.
-
-        Distinguishes "no selection" (fall through to all) from "selection
-        with no valid file nodes" (warn + return empty) so a user with a
-        broken selection isn't silently escalated to scene-wide scope.
-        """
-        contexts = self._get_selected_contexts(
-            warn_on_empty=False,
-            require_file_nodes=False,
+        found = MatUtils.get_file_nodes(
+            return_type="shaderName|path|fileNodeName",
+            exc_classification=(
+                self._ARNOLD_CLASSIFICATION if exclude_arnold else None
+            ),
         )
-        if contexts:
-            selected_nodes = []
-            for ctx in contexts:
-                selected_nodes.extend(ctx.get("file_nodes") or [])
-            selected_nodes = list(dict.fromkeys(selected_nodes))
-            if selected_nodes:
-                return selected_nodes, f"{len(selected_nodes)} selected row(s)"
-            if any(ctx.get("lightmap") for ctx in contexts):
-                # A lightmap-only selection is a valid scope for the commands
-                # that take one (Find & Copy); the file-node commands get an
-                # empty list and say "nothing to do" themselves.
-                return [], f"{len(contexts)} selected lightmap row(s)"
-            cmds.warning("Selected row(s) contain no valid file nodes; nothing to do.")
-            return [], "selected (no valid file nodes)"
-
-        exc_classification = self._exclude_arnold_pattern()
-        if exc_classification:
-            all_nodes = MatUtils.get_file_nodes(
-                return_type="fileNode", exc_classification=exc_classification
+        workspace, sourceimages = self._project_roots()
+        verdicts = self._resolve_paths(
+            {str(path).strip() for _s, path, _n in found if path},
+            workspace,
+            sourceimages,
+        )
+        rows = []
+        for shader, path, file_node in found:
+            path = str(path or "").strip()
+            exists, abs_path = verdicts.get(path, (False, ""))
+            rows.append(
+                {
+                    "shader": shader or "",
+                    "shader_node": shader or "",
+                    "materials": [shader] if shader else [],
+                    "shader_editable": True,
+                    "path": path,
+                    "file_node": file_node or "",
+                    "exists": exists,
+                    "abspath": abs_path,
+                }
             )
+        return rows
+
+    def _resolve_paths(self, paths, workspace, sourceimages):
+        """``{path: (exists, absolute path)}``; a thread pool past 50 paths.
+
+        The roots are resolved by the caller, on the main thread: the pool
+        below must not touch ``cmds``.
+        """
+
+        def resolve_and_check(path):
+            abs_path = MatUtils.to_absolute(path, workspace, sourceimages)
+            return path, self._texture_on_disk(abs_path), abs_path
+
+        cache = {}
+        if len(paths) > 50:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {executor.submit(resolve_and_check, p): p for p in paths}
+                for future in as_completed(futures):
+                    try:
+                        path, exists, abs_path = future.result(timeout=5)
+                        cache[path] = (exists, abs_path)
+                    except Exception:
+                        path = futures[future]
+                        cache[path] = (
+                            False,
+                            MatUtils.to_absolute(path, workspace, sourceimages),
+                        )
         else:
-            all_nodes = cmds.ls(type="file") or []
-        return all_nodes, f"all {len(all_nodes)} file node(s)"
+            for path in paths:
+                _, exists, abs_path = resolve_and_check(path)
+                cache[path] = (exists, abs_path)
+        return cache
 
-    # ------------------------------------------------------------------
-    # Lightmap dependencies -- rows with no file node behind them
-    # ------------------------------------------------------------------
-    #
-    # A committed lightmap is referenced by a bake marker (map basename + the
-    # folder it was baked into), never by a file node, so every file-node
-    # command here was blind to it: a migration that copied every texture
-    # left the EXRs behind and the export shipped unlit. The engine is
-    # ``LightmapRecords`` (list / heal / relocate + repoint); the panel shows
-    # the records as rows and hands the relocation half to Find & Copy.
+    def file_nodes(self, exclude_arnold: bool = False):
+        """Every file node in the scene -- the "all" scope of a path command.
+
+        Parameters:
+            exclude_arnold: Leave out the ones only an Arnold shader uses, so a
+                command never touches rows the table is hiding.
+        """
+        if exclude_arnold:
+            return MatUtils.get_file_nodes(
+                return_type="fileNode", exc_classification=self._ARNOLD_CLASSIFICATION
+            )
+        return cmds.ls(type="file") or []
 
     @staticmethod
-    def _lightmap_records():
-        """The lightmap record (a class used as a namespace), imported on use:
-        a panel listing file nodes should not load the lightmap package until a
-        lightmap row is asked for."""
-        from mayatk.light_utils.lightmap_baker.lightmap_records import (
-            LightmapRecords,
-        )
-
-        return LightmapRecords
-
-    def _show_lightmaps_enabled(self) -> bool:
-        """The header's "Show Lightmap Dependencies" toggle (default on)."""
-        return self._menu_flag(self._header_menu(), "chk_show_lightmaps", True)
-
-    def _lightmap_dependencies(self):
-        """The scene's lightmap dependencies, or ``[]`` when the toggle hides
-        them, the scene has none, or the engine cannot list them (a listing
-        must never cost the table)."""
-        if not self._show_lightmaps_enabled():
-            return []
-        try:
-            return self._lightmap_records().lightmap_dependencies()
-        except Exception as e:  # noqa: BLE001
-            cmds.warning(f"Lightmap dependencies not listed: {e}")
-            return []
+    def node_exists(node) -> bool:
+        """Whether *node* (a file node or shader name) is still in the scene."""
+        return bool(node) and bool(cmds.objExists(str(node)))
 
     @staticmethod
-    def _lightmap_row_path(dep) -> str:
-        """The path a lightmap row shows: the marker's recorded folder + map.
+    def stored_path(node) -> str:
+        """The node's stored ``.ftn``, or "" when the plug cannot be read.
 
-        The STORED value, as the file-node rows show theirs -- where the map
-        was actually found, when that is elsewhere, is the tooltip's job.
-        """
-        folder = str(dep.get("dir") or "").replace("\\", "/").rstrip("/")
-        return f"{folder}/{dep['map']}" if folder else dep["map"]
-
-    def _lightmap_row_labels(self, dep):
-        """``(shader, node)`` labels for a lightmap row, read like a texture row.
-
-        Shader column: the material(s) the lightmapped objects wear -- an
-        atlas by material is named after its material, and a per-object map
-        still belongs to one. Node column: the map's stem, what a file node
-        for it would be called (``ROOM_ENV_LightMap``), since none exists.
-        The objects themselves are the tooltip's: a row reading
-        ``BASEBOARD_A (+45)`` identified nothing (reported 2026-08-26).
+        Shared by every reader so none can disagree about a node whose plug has
+        gone away mid-command (a referenced file node unloaded under it).
         """
         try:
-            mats = MatUtils.get_mats(
-                [o for o in dep.get("objects") or [] if cmds.objExists(o)]
+            return cmds.getAttr(f"{node}.fileTextureName") or ""
+        except Exception:
+            return ""
+
+    def selected_file_nodes(self):
+        """The file nodes the scene selection's materials read.
+
+        Returns:
+            ``None`` when nothing is selected, else the file nodes (``[]``: the
+            selection carries no material, or its materials no file node).
+        """
+        selection = cmds.ls(sl=True, flatten=True)
+        if not selection:
+            return None
+        nodes = []
+        for mat in MatUtils.get_mats(selection) or []:
+            try:
+                nodes.extend(cmds.ls(cmds.listHistory(mat) or [], type="file") or [])
+            except Exception:
+                pass
+        return list(dict.fromkeys(nodes))
+
+    # ------------------------------------------------------------------
+    # General
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def reload_textures() -> None:
+        """Force Maya to re-read every scene texture from disk."""
+        MatUtils.reload_textures(refresh_viewport=True)
+
+    # ------------------------------------------------------------------
+    # Set Directory
+    # ------------------------------------------------------------------
+
+    def set_texture_directory(
+        self,
+        file_nodes,
+        target_dir: str,
+        relocate_mode: str = "rewrite",
+        allow_missing: bool = False,
+    ) -> int:
+        """Repath each file node so its texture lives directly under *target_dir*.
+
+        *relocate_mode* controls disk behavior for nodes whose current path
+        resolves to an existing file:
+          - ``"rewrite"`` -- path-only (no file movement).
+          - ``"copy"`` -- copy the file to *target_dir* then rebind.
+          - ``"move"`` -- move the file to *target_dir* then rebind.
+
+        A node is repathed only when the texture is ACTUALLY at the destination
+        afterwards -- tile/frame tokens resolved, so a UDIM set counts as present
+        when its tiles are. Every mode used to rewrite the plug regardless, which
+        is how picking sourceimages in the default (path-only) mode filled the
+        table with red rows naming files that were never at the destination.
+        *allow_missing* restores the blind rewrite for the one case that wants
+        it: pointing a batch at a folder you are about to fill.
+
+        Tile sets relocate per tile (``MatUtils.texture_tiles``) -- the same rule
+        ``MatUtils.stage_textures_relative`` stages them by.
+
+        Collision policy: same-name + same-size at destination is a safe rebind
+        (no overwrite); different size is skipped + warned. Records prior paths
+        in :attr:`previous_paths`. Returns the number of file nodes updated.
+        """
+        if relocate_mode not in self.RELOCATE_MODES:
+            raise ValueError(
+                f"Unknown relocate_mode {relocate_mode!r}; expected one of "
+                f"{sorted(self.RELOCATE_MODES)}."
             )
-        except Exception:  # noqa: BLE001 — a label must never cost the table
-            mats = []
-        mats = list(dict.fromkeys(str(m) for m in mats))
-        shader = ", ".join(mats[:2])
-        if len(mats) > 2:
-            shader += f" (+{len(mats) - 2})"
-        return shader or self._LIGHTMAP_ROW_LABEL, os.path.splitext(dep["map"])[0]
-
-    def _get_scope_lightmaps(self):
-        """Lightmap dependencies in scope, for the commands that take them.
-
-        Mirrors :meth:`_get_scope_nodes`: the selected lightmap rows when the
-        selection holds any (a selection of file-node rows alone takes no
-        lightmaps along), otherwise every lightmap row the table shows -- so
-        the header toggle that hides them also keeps them out of an "all"
-        scope.
-        """
-        contexts = self._get_selected_contexts(
-            warn_on_empty=False, require_file_nodes=False
-        )
-        if contexts:
-            return [ctx["lightmap"] for ctx in contexts if ctx.get("lightmap")]
-        return list(self._lightmap_rows.values())
-
-    def _normalize_lightmaps(self, lightmaps, relative: bool) -> int:
-        """Re-spell the scoped lightmap markers' folders (Normalize / Make Absolute).
-
-        Files never move: inside the project the recorded folder becomes
-        workspace-relative (``relative=True``) -- what lets a teammate's copy
-        of the project, mounted on another drive, still resolve it -- or is
-        expanded to absolute (``relative=False``). Reports through the panel's
-        channels; a scope with no lightmaps is a silent no-op.
-        """
-        if not lightmaps:
+        if not file_nodes:
             return 0
+        node_names = [str(n) for n in file_nodes]
+        target_dir_norm = os.path.normpath(target_dir).replace("\\", "/")
+        workspace, source_images = self._project_roots()
+
+        # Phase 1 -- collect (node, old_path, new_path, source tiles, new_abs).
+        plan = []
+        for node_name in node_names:
+            old_path = self.stored_path(node_name)
+            if not old_path:
+                continue
+            new_abs = os.path.normpath(
+                os.path.join(target_dir_norm, os.path.basename(old_path))
+            ).replace("\\", "/")
+            new_path = MatUtils.to_project_relative(new_abs, workspace, source_images)
+            if new_path == old_path:
+                continue
+            # The whole set, not one name: a token path denotes every tile on
+            # disk, and each has to travel for the repathed pattern to resolve.
+            sources = (
+                MatUtils.texture_tiles(
+                    MatUtils.to_absolute(old_path, workspace, source_images)
+                )
+                if relocate_mode != "rewrite"
+                else []
+            )
+            plan.append((node_name, old_path, new_path, sources, new_abs))
+
+        # Phase 2 -- relocations outside the undo chunk (disk ops aren't undoable).
+        relocated = 0
+        collision_skipped = 0
+        skipped_nodes = set()
+        if relocate_mode in ("copy", "move"):
+            import shutil
+
+            for node_name, _old_path, _new_path, sources, new_abs in plan:
+                dst_dir = os.path.dirname(new_abs)
+                for src in sources:
+                    dst = os.path.join(dst_dir, os.path.basename(src))
+                    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
+                        os.path.abspath(dst)
+                    ):
+                        continue  # already at the destination -- nothing to do
+                    try:
+                        if os.path.exists(dst):
+                            try:
+                                same = os.path.getsize(src) == os.path.getsize(dst)
+                            except OSError:
+                                same = False
+                            if not same:
+                                self._log(
+                                    f"{node_name}: '{os.path.basename(dst)}' already "
+                                    "exists at destination with different size; "
+                                    "skipping to avoid wrong-file rebind.",
+                                    "warning",
+                                )
+                                collision_skipped += 1
+                                skipped_nodes.add(node_name)
+                                break
+                            if relocate_mode == "move":
+                                try:
+                                    os.remove(src)
+                                except OSError as e:
+                                    self._log(
+                                        f"{node_name}: equivalent at dst, but could "
+                                        f"not remove '{src}': {e}",
+                                        "warning",
+                                    )
+                        else:
+                            os.makedirs(dst_dir, exist_ok=True)
+                            if relocate_mode == "move":
+                                shutil.move(src, dst)
+                            else:
+                                shutil.copy2(src, dst)
+                        relocated += 1
+                    except Exception as e:
+                        self._log(
+                            f"{node_name}: failed to {relocate_mode}: {e}", "warning"
+                        )
+                        skipped_nodes.add(node_name)
+                        break
+
+        # Phase 3 -- path updates (undoable).
+        count = 0
+        missing_at_target = 0
+        cmds.undoInfo(openChunk=True, chunkName="Set Texture Directory")
         try:
-            count = self._lightmap_records().normalize_lightmap_paths(
-                self._lightmap_objects(lightmaps), relative=relative
+            for node_name, old_path, new_path, _sources, new_abs in plan:
+                if node_name in skipped_nodes:
+                    continue
+                # The destination is what the node will READ from, so it is
+                # what has to hold a file -- never "did a copy run?" (a texture
+                # already sitting in the target needs no copy and must still be
+                # rebound to the shorter form).
+                if not (allow_missing or self._texture_on_disk(new_abs)):
+                    missing_at_target += 1
+                    continue
+                try:
+                    Attributes.set_plug_literal(
+                        f"{node_name}.fileTextureName", new_path
+                    )
+                    self.previous_paths[node_name] = old_path
+                    count += 1
+                except Exception as e:
+                    self._log(f"{node_name}: failed to set path: {e}", "warning")
+        finally:
+            cmds.undoInfo(closeChunk=True)
+
+        if relocate_mode != "rewrite":
+            self._log(
+                f"Set Directory — relocated: {relocated} file(s); "
+                f"collision skipped: {collision_skipped}; mode: {relocate_mode}."
             )
-        except Exception as e:  # noqa: BLE001 — the texture half already ran
-            cmds.warning(f"Lightmap folders not rewritten: {e}")
-            return 0
-        if count:
-            om.MGlobal.displayInfo(
-                f"{count} lightmap marker(s) now record their folder "
-                f"{'relative to the project' if relative else 'as an absolute path'}."
+        if missing_at_target:
+            self._log(
+                f"Set Directory: {missing_at_target} file node(s) left on their "
+                f"current path — '{target_dir_norm}' holds no texture of that "
+                "name, and repathing them would only spell the breakage "
+                "differently. Use copy/move to bring the files along, or tick "
+                "'Allow Missing Targets' to point them there anyway.",
+                "warning",
             )
         return count
 
-    def _repath_lightmap(self, dep, folder: str) -> bool:
-        """Point every marker naming *dep*'s map at *folder*, then refresh.
-
-        The manual counterpart of Find & Copy's relocation (Browse for File
-        and a typed path on a lightmap row): files are not touched, the
-        markers' recorded folder changes and the FBX manifest is republished.
-        """
-        folder = str(folder or "").replace("\\", "/").rstrip("/")
-        if not folder:
-            cmds.warning("A lightmap path needs a folder.")
-            return False
-        try:
-            count = self._lightmap_records().repath_lightmaps(
-                {dep["map"].lower(): folder}, dep.get("objects")
-            )
-        except Exception as e:  # noqa: BLE001
-            cmds.warning(f"Failed to repath lightmap {dep['map']}: {e}")
-            return False
-        om.MGlobal.displayInfo(
-            f"{dep['map']}: lightmap folder -> '{folder}' ({count} marker(s))"
-        )
-        return True
-
     # ------------------------------------------------------------------
-    # Header slots — General
+    # Make Paths Absolute / Normalize Paths
     # ------------------------------------------------------------------
 
-    def open_source_images(self):
-        """Open the project's sourceimages directory."""
-        path = EnvUtils.get_env_info("sourceimages")
-        if path and os.path.exists(path):
-            FileUtils.open_explorer(path)
-        else:
-            cmds.warning(f"Source images directory not found: {path}")
+    def make_paths_absolute(self, file_nodes) -> int:
+        """Rewrite relative texture paths to absolute -- inverse of Normalize Paths.
 
-    def reload_scene_textures(self):
-        """Force Maya to re-read all scene textures from disk."""
-        MatUtils.reload_textures(refresh_viewport=True)
-        om.MGlobal.displayInfo("Reloaded scene textures from disk.")
-        self.ui.tbl000.init_slot()
+        Each relative path is resolved against the project root (the same rule
+        Maya and the table's validity check use) and written back absolute. Pure
+        path rewrite -- no files move; UDIM tokens live in the basename, so they
+        survive the prefix join. Missing files are still rewritten (the absolute
+        form points where Maya would have looked); Resolve Missing Textures is
+        the command for finding them.
 
-    # ------------------------------------------------------------------
-    # Header slots — Path Management
-    # ------------------------------------------------------------------
+        "Relative" is judged on the value with environment variables EXPANDED,
+        so a ``$TEXDIR/foo.png`` counts as already absolute and is left intact.
 
-    def tb_set_texture_directory(self, widget=None):
-        """Repath file nodes (selection or all) under a chosen directory.
+        Returns:
+            int: How many paths were rewritten.
 
-        The option-box combobox selects whether files are also relocated to
-        the new directory (copy / move) or only the path attribute changes
-        (rewrite, default).
-        """
-        nodes, scope_label = self._get_scope_nodes()
-        if not nodes:
-            cmds.warning("No file nodes to process.")
-            return
-
-        relocate_mode = self._read_relocate_mode(widget, self._RELOCATE_MODE_ITEMS)
-
-        # Surface the active mode in the dialog title — last interaction before
-        # any file ops fire. Matches the dynamic-text intent in Find & Copy.
-        mode_hint = {
-            "rewrite": "path only",
-            "copy": "copy files",
-            "move": "move files",
-        }.get(relocate_mode, relocate_mode)
-
-        # Same marker as Find & Copy's destination picker: this is the panel's
-        # third directory dialog and it is a TARGET too, so it must not read as
-        # "pick a folder to look in".
-        target_dir = self.sb.dir_dialog(
-            title=(
-                f"{self._DIALOG_MARK_DEST} DESTINATION — Set Texture Directory "
-                f"({mode_hint}) for {scope_label}"
-            ),
-            start_dir=EnvUtils.get_env_info("sourceimages"),
-        )
-        if not target_dir:
-            return
-
-        om.MGlobal.displayInfo(
-            f"Setting texture paths to: {target_dir} (mode: {relocate_mode})"
-        )
-        count = self._set_texture_dir_flat(
-            nodes,
-            target_dir,
-            relocate_mode=relocate_mode,
-            allow_missing=self._read_option_flag(widget, "chk_allow_missing", False),
-        )
-        om.MGlobal.displayInfo(f"Updated {count}/{len(nodes)} file nodes.")
-        self.ui.tbl000.init_slot()
-
-    def tb_find_and_copy_textures(self, widget=None):
-        """Open the Find & Copy panel over the current scope.
-
-        Every option lives on that one panel, so there is no option box: the
-        mode, the search folder and the destination are read together, next to
-        each other, at the moment they are used — and the panel stays up while
-        it works, so what it did is on screen instead of in a script editor.
-        """
-        nodes, scope_label = self._get_scope_nodes()
-        lightmaps = self._get_scope_lightmaps()
-        if not nodes and not lightmaps:
-            cmds.warning("No file nodes to process.")
-            return
-        if lightmaps:
-            scope_label = (f"{scope_label} + " if nodes else "") + (
-                f"{len(lightmaps)} lightmap(s)"
-            )
-        self._find_and_copy_workflow(
-            nodes, scope_label=scope_label, lightmaps=lightmaps
-        )
-
-    @classmethod
-    def _read_option_flag(cls, button, name: str, default: bool) -> bool:
-        """State of a checkbox in ``button``'s option box; ``default`` if absent."""
-        return cls._menu_flag(
-            getattr(getattr(button, "option_box", None), "menu", None), name, default
-        )
-
-    def _read_relocate_mode(self, button, mode_items) -> str:
-        """Read a relocate combobox (``cmb_relocate_mode``) via index lookup."""
-        combo = button.option_box.menu.cmb_relocate_mode
-        idx = combo.currentIndex()
-        if 0 <= idx < len(mode_items):
-            return mode_items[idx][1]
-        return mode_items[0][1]  # safe default
-
-    def tb_normalize_paths(self, widget=None):
-        """Rewrite paths inside the project to relative.
-
-        External-mode is read from this button's own option_box combobox.
-        ``widget`` is the button itself, passed by the switchboard auto-wire.
-        """
-        nodes, _scope_label = self._get_scope_nodes()
-        lightmaps = self._get_scope_lightmaps()
-        if not nodes and not lightmaps:
-            cmds.warning("No file nodes to process.")
-            return
-
-        if nodes:
-            external_mode = self._read_normalize_external_mode(widget)
-            self._normalize_to_relative(nodes, external_mode=external_mode)
-        # Lightmap rows: the marker's recorded folder takes the same portable
-        # spelling (workspace-relative inside the project). Files never move.
-        self._normalize_lightmaps(lightmaps, relative=True)
-        self.ui.tbl000.init_slot()
-
-    def _read_normalize_external_mode(self, button) -> str:
-        """Read the Normalize Paths external-mode combobox via index lookup."""
-        combo = button.option_box.menu.cmb_external_mode
-        idx = combo.currentIndex()
-        if 0 <= idx < len(self._NORMALIZE_MODE_ITEMS):
-            return self._NORMALIZE_MODE_ITEMS[idx][1]
-        return self._NORMALIZE_MODE_ITEMS[0][1]  # safe default
-
-    def make_paths_absolute(self):
-        """Rewrite relative paths (selection or all) to absolute."""
-        nodes, _scope_label = self._get_scope_nodes()
-        lightmaps = self._get_scope_lightmaps()
-        if not nodes and not lightmaps:
-            cmds.warning("No file nodes to process.")
-            return
-        if nodes:
-            self._make_paths_absolute(nodes)
-        self._normalize_lightmaps(lightmaps, relative=False)
-        self.ui.tbl000.init_slot()
-
-    def _make_paths_absolute(self, file_nodes) -> None:
-        """Rewrite relative texture paths to absolute — inverse of Normalize Paths.
-
-        Each relative path is resolved against the project root (the same
-        rule Maya and the table's validity check use) and written back
-        absolute. Pure path rewrite — no files move; UDIM tokens live in
-        the basename, so they survive the prefix join. Missing files are
-        still rewritten (the absolute form points where Maya would have
-        looked); Resolve Missing Textures is the command for finding them.
-
-        "Relative" is judged on the value with environment variables
-        EXPANDED, so a ``$TEXDIR/foo.png`` counts as already absolute and is
-        left intact. Judged on the raw string it read as relative and was
-        rewritten to ``<proj>/$TEXDIR/foo.png`` — the variable pasted under
-        the project, resolving nowhere, and re-running could not undo it.
+        Raises:
+            ValueError: No project workspace to resolve against.
         """
         workspace = EnvUtils.get_env_info("workspace") or ""
         if not workspace:
-            cmds.warning("Project workspace not set; cannot resolve relative paths.")
-            return
-        source_images = self._resolve_source_images_path()
+            raise ValueError(
+                "Project workspace not set; cannot resolve relative paths."
+            )
+        source_images = self.texture_dir()
 
         rewritten = 0
         already_absolute = 0
@@ -1153,2029 +534,76 @@ class TexturePathEditorSlots:
                 new_path = MatUtils.to_absolute(path, workspace, source_images)
                 try:
                     Attributes.set_plug_literal(f"{node}.fileTextureName", new_path)
-                    self._previous_paths[node] = path
+                    self.previous_paths[node] = path
                     rewritten += 1
                 except Exception as e:
-                    cmds.warning(f"{node}: failed to set path: {e}")
+                    self._log(f"{node}: failed to set path: {e}", "warning")
         finally:
             cmds.undoInfo(closeChunk=True)
 
-        om.MGlobal.displayInfo(
+        self._log(
             f"Make Paths Absolute — rewritten: {rewritten}; "
             f"already absolute: {already_absolute}."
         )
+        return rewritten
 
-    def tb_resolve_missing_textures(self, widget=None):
-        """Resolve missing textures with configurable cascade strategies.
-
-        Strategy selection is read from this button's own option_box
-        checkboxes. ``widget`` is the button itself, passed by auto-wire.
-        """
-        nodes, _scope_label = self._get_scope_nodes()
-        if not nodes:
-            cmds.warning("No file nodes to process.")
-            return
-
-        modes = self._read_resolve_modes(widget)
-        if not modes:
-            cmds.warning("No Resolve Missing strategies enabled in the option-box.")
-            return
-
-        self._resolve_missing_textures(modes=modes, file_nodes=nodes)
-
-    def _read_resolve_modes(self, button):
-        """Read the Resolve Missing strategy checkboxes; preserve safest-first order."""
-        menu = button.option_box.menu
-        attr_by_mode = {
-            "stem": "chk_stem",
-            "texture": "chk_texture",
-            "fuzzy": "chk_fuzzy",
-        }
-        return [
-            mode
-            for mode in self._RESOLVE_STRATEGY_ORDER
-            if getattr(menu, attr_by_mode[mode]).isChecked()
-        ]
-
-    # ------------------------------------------------------------------
-    # Header slots — Selection
-    # ------------------------------------------------------------------
-
-    def select_textures_for_objects(self):
-        """Select table rows whose textures are used by the scene selection."""
-        selection = cmds.ls(sl=True, flatten=True)
-        if not selection:
-            self.sb.message_box("Select object(s) first.")
-            return
-
-        mats = MatUtils.get_mats(selection)
-        if not mats:
-            cmds.warning("No materials found on selected objects.")
-            return
-
-        target_node_names = set()
-        for mat in mats:
-            try:
-                file_nodes = cmds.ls(cmds.listHistory(mat) or [], type="file") or []
-                for fn in file_nodes:
-                    target_node_names.add(fn.split("|")[-1].split(":")[-1])
-            except Exception:
-                pass
-
-        if not target_node_names:
-            cmds.warning("No file nodes found for selected objects.")
-            return
-
-        table = self.ui.tbl000
-        table.clearSelection()
-        selected_count = 0
-        for row in range(table.rowCount()):
-            node_data = table.item_data(row, 2)
-            if not node_data:
-                continue
-            node_name = str(node_data).split("|")[-1].split(":")[-1]
-            if node_name in target_node_names:
-                path_item = table.item(row, 1)
-                if path_item:
-                    path_item.setSelected(True)
-                    selected_count += 1
-                    if selected_count == 1:
-                        table.scrollToItem(path_item)
-        if selected_count > 0:
-            om.MGlobal.displayInfo(f"Selected {selected_count} rows in the table.")
-
-    def select_broken_paths(self):
-        """Select rows whose texture file is missing."""
-        self._select_rows_by_predicate(
-            # A lightmap row is broken when the engine found its map nowhere
-            # (a stale-but-found hint is amber, not broken -- it ships).
-            predicate=lambda path, abs_path: (
-                not self._lightmap_rows[path].get("path")
-                if path in self._lightmap_rows
-                else not self._texture_on_disk(abs_path)
-            ),
-            empty_message="No broken paths found.",
-            count_message="broken paths",
-        )
-
-    def select_absolute_paths(self):
-        """Select rows whose path is absolute (regardless of validity)."""
-        self._select_rows_by_predicate(
-            # Lightmap rows are absolute by design (the marker's hint is read
-            # by consumers with no workspace) and never Normalize candidates.
-            predicate=lambda path, abs_path: (
-                path not in self._lightmap_rows and os.path.isabs(path)
-            ),
-            empty_message="No absolute paths found.",
-            count_message="absolute paths",
-        )
-
-    def _select_rows_by_predicate(self, predicate, empty_message, count_message):
-        """Select rows whose ``(path, abs_path)`` satisfies the predicate."""
-        widget = self.ui.tbl000
-        source_root, source_images = self._project_roots()
-        widget.clearSelection()
-
-        selection_mode = widget.selectionMode()
-        widget.setSelectionMode(self.sb.QtWidgets.QAbstractItemView.MultiSelection)
-        rows_to_select = []
-        try:
-            for row in range(widget.rowCount()):
-                item = widget.item(row, 1)
-                if not item:
-                    continue
-                path = str(item.text()).strip()
-                if not path:
-                    continue
-                abs_path = MatUtils.to_absolute(path, source_root, source_images)
-                if predicate(path, abs_path):
-                    rows_to_select.append(row)
-
-            for row in rows_to_select:
-                path_item = widget.item(row, 1)
-                if path_item:
-                    path_item.setSelected(True)
-
-            if rows_to_select:
-                widget.scrollToItem(widget.item(rows_to_select[0], 1))
-                om.MGlobal.displayInfo(
-                    f"Selected {len(rows_to_select)} {count_message}."
-                )
-            else:
-                om.MGlobal.displayInfo(empty_message)
-        finally:
-            widget.setSelectionMode(selection_mode)
-
-    # ------------------------------------------------------------------
-    # Row-only context slots
-    # ------------------------------------------------------------------
-
-    def row_browse_for_file(self, selection=None):
-        """Open a file dialog and repath the selected row's file node."""
-        if getattr(self, "_browse_in_progress", False):
-            return
-        self._browse_in_progress = True
-        try:
-            self._do_browse_for_file(selection)
-        finally:
-            from qtpy.QtCore import QTimer
-
-            QTimer.singleShot(250, lambda: setattr(self, "_browse_in_progress", False))
-
-    def _do_browse_for_file(self, selection):
-        contexts = self._get_selected_contexts(selection, require_file_nodes=False)
-        if len(contexts) > 1:
-            # Several rows: one folder, each repointed to its own file there.
-            self._browse_for_folder(contexts)
-            return
-        lightmaps = [ctx["lightmap"] for ctx in contexts if ctx.get("lightmap")]
-        if lightmaps:
-            # A lightmap row: the file picked names the folder the markers
-            # should record (the map itself is what the bake committed, so a
-            # different basename is refused rather than silently rebound).
-            self._browse_for_lightmap(lightmaps[0])
-            return
-
-        nodes = self._file_nodes_from_selection(selection)
-        if not nodes:
-            return
-        if len(nodes) > 1:  # one shader row standing for several file nodes
-            self._browse_for_folder(contexts)
-            return
-
-        node_name = nodes[0]
-        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
-        try:
-            current = cmds.getAttr(f"{node_name}.fileTextureName") or ""
-        except Exception:
-            current = ""
-
-        start_dir = sourceimages
-        if current:
-            workspace = EnvUtils.get_env_info("workspace") or ""
-            current_dir = os.path.dirname(
-                MatUtils.to_absolute(current, workspace, sourceimages)
-            )
-            if current_dir and os.path.isdir(current_dir):
-                start_dir = current_dir
-
-        chosen = self.sb.file_dialog(
-            file_types=[
-                "*.png",
-                "*.jpg",
-                "*.jpeg",
-                "*.tga",
-                "*.tif",
-                "*.tiff",
-                "*.exr",
-                "*.hdr",
-                "*.bmp",
-                "*.psd",
-                "*.iff",
-                "*.tx",
-                "*.*",
-            ],
-            title=f"Select texture file for {node_name}",
-            start_dir=start_dir,
-            filter_description="Texture Files",
-            allow_multiple=False,
-        )
-        if not chosen:
-            return
-
-        new_path = MatUtils.to_project_relative(chosen)
-        cmds.undoInfo(openChunk=True, chunkName="Browse Texture File")
-        try:
-            Attributes.set_plug_literal(f"{node_name}.fileTextureName", new_path)
-            if current and current != new_path:
-                self._previous_paths[node_name] = current
-            om.MGlobal.displayInfo(f"{node_name}: '{current}' -> '{new_path}'")
-        except Exception as e:
-            cmds.warning(f"{node_name}: failed to set path: {e}")
-        finally:
-            cmds.undoInfo(closeChunk=True)
-        self.ui.tbl000.init_slot()
-
-    def _browse_for_lightmap(self, dep) -> None:
-        """Pick the file a lightmap row's markers should point at; repath them."""
-        start_dir = dep.get("dir") or EnvUtils.get_env_info("sourceimages") or ""
-        if dep.get("path"):
-            start_dir = os.path.dirname(dep["path"])
-        if not (start_dir and os.path.isdir(start_dir)):
-            start_dir = EnvUtils.get_env_info("sourceimages") or ""
-        chosen = self.sb.file_dialog(
-            file_types=["*.exr", "*.hdr", "*.png", "*.tif", "*.tiff", "*.*"],
-            title=f"Select lightmap file {dep['map']}",
-            start_dir=start_dir,
-            filter_description="Lightmap Files",
-            allow_multiple=False,
-        )
-        if not chosen:
-            return
-        if os.path.basename(chosen).lower() != dep["map"].lower():
-            cmds.warning(
-                f"Browse for File: the markers name {dep['map']!r}; pick that "
-                f"file (chose {os.path.basename(chosen)!r}). A different map "
-                "is a re-bake, not a repath."
-            )
-            return
-        if self._repath_lightmap(dep, os.path.dirname(chosen)):
-            self.ui.tbl000.init_slot()
-
-    def _browse_for_folder(self, contexts) -> None:
-        """Several rows: repoint each to its same-named file in a folder picked.
-
-        The file nodes go through Set Directory's path-only pass
-        (:meth:`_set_texture_dir_flat`), which repoints a node only when the
-        folder actually holds its texture -- tiles included -- and names the
-        rest; a lightmap row follows when its map is there.
-        """
-        nodes = list(
-            dict.fromkeys(n for ctx in contexts for n in ctx.get("file_nodes") or [])
-        )
-        lightmaps = [ctx["lightmap"] for ctx in contexts if ctx.get("lightmap")]
-        workspace, sourceimages = self._project_roots()
-        start_dir = sourceimages
-        for node in nodes[:1]:
-            current = cmds.getAttr(f"{node}.fileTextureName") or ""
-            folder = os.path.dirname(
-                MatUtils.to_absolute(current, workspace, sourceimages)
-            )
-            if folder and os.path.isdir(folder):
-                start_dir = folder
-        chosen = self.sb.dir_dialog(
-            title=(
-                f"{self._DIALOG_MARK_DEST} Browse for Folder — repoint "
-                f"{len(contexts)} texture(s) to their same-named files in…"
-            ),
-            start_dir=start_dir,
-        )
-        if not chosen:
-            return
-        count = self._set_texture_dir_flat(nodes, chosen) if nodes else 0
-        missing = []
-        for dep in lightmaps:
-            if os.path.isfile(os.path.join(chosen, dep["map"])):
-                count += int(self._repath_lightmap(dep, chosen))
-            else:
-                missing.append(dep["map"])
-        if missing:
-            cmds.warning(
-                f"Browse for Folder: no {', '.join(missing)} in '{chosen}'; "
-                "those lightmaps keep their folder."
-            )
-        om.MGlobal.displayInfo(
-            f"Browse for Folder: repointed {count} of {len(contexts)} row(s)."
-        )
-        self.ui.tbl000.init_slot()
-
-    # ------------------------------------------------------------------
-    # Row menu fitted to the selection
-    # ------------------------------------------------------------------
-
-    def _fit_row_menu(self, widget) -> None:
-        """Fit the row menu to the selection, just before it opens.
-
-        Browse is a file pick for one row and a folder pick for several (its
-        label says which); Rename File renames one row's file and is disabled
-        otherwise; Delete on lightmap rows only is the baker's Revert Selected.
-        """
-        selection = (
-            widget.get_selection(
-                columns=self._ROW_SELECTION_COLUMNS, include_current=True
-            )
-            or []
-        )
-        rows = len(selection)
-        lightmap_rows = sum(
-            1
-            for entry in selection
-            if str(self._selection_value(entry, "path") or "").strip()
-            in self._lightmap_rows
-        )
-        QPushButton = self.sb.QtWidgets.QPushButton
-        delete = widget.menu.findChild(QPushButton, "delete_file_node")
-        if delete is not None:
-            delete.setText(
-                "Revert to Source..."
-                if rows and lightmap_rows == rows
-                else "Delete File Node"
-            )
-        browse = widget.menu.findChild(QPushButton, "row_browse_for_file")
-        if browse is not None:
-            browse.setText("Browse for Folder..." if rows > 1 else "Browse for File...")
-        rename = widget.menu.findChild(QPushButton, "row_rename_file")
-        if rename is not None:
-            rename.setEnabled(rows == 1)
-
-    # ------------------------------------------------------------------
-    # File facts -- the optional columns
-    # ------------------------------------------------------------------
-
-    def _row_texture_path(self, widget, row: int, workspace: str, sourceimages: str):
-        """The absolute texture (or tile pattern) *row* names; ``""`` if none."""
-        item = widget.item(row, 1)
-        if item is None:
-            return ""
-        UserRole = self.sb.QtCore.Qt.UserRole
-        lightmap = self._lightmap_rows.get(
-            str(item.data(UserRole) or item.text()).strip()
-        )
-        if lightmap is not None:
-            return lightmap.get("path") or ""
-        stored = item.text().strip()
-        return MatUtils.to_absolute(stored, workspace, sourceimages) if stored else ""
-
-    @staticmethod
-    def _format_fact(field: str, facts: dict):
-        """``(text, tooltip, sort key)`` for one fact of a row."""
-        if not facts:
-            return "", "No file on disk.", None
-        tiles = facts.get("tiles", 1)
-        of_set = f" — the first of {tiles} tiles" if tiles > 1 else ""
-        if field == "bytes":
-            size = facts.get("bytes")
-            across = f", across {tiles} tiles" if tiles > 1 else ""
-            return FileUtils.format_bytes(size), f"{size:,} bytes{across}", size
-        value = facts.get(field)
-        if value is None:
-            why = (
-                "Online-only: not downloaded to read its header."
-                if facts.get("online_only")
-                else "Unreadable header."
-            )
-            return "", why, None
-        if field == "dimensions":
-            width, height = value
-            return (
-                f"{width} x {height}",
-                f"{width} x {height} pixels{of_set}",
-                width * height,
-            )
-        tip = value
-        if ";" not in value:  # a PIL mode: spell its depth too
-            try:
-                tip = f"{value} — {ImgUtils.format_bit_depth(value)}"
-            except Exception:  # noqa: BLE001 -- the mode alone still reads
-                pass
-        return value, tip + of_set, value
-
-    def _fill_info_columns(self, widget, columns=None) -> None:
-        """Fill the fact columns that show (of *columns*, default all).
-
-        A hidden column is never read: its files are not even stat'ed. Headers
-        are read once per file version (``ImgUtils.texture_facts`` caches), so
-        a refresh costs nothing new.
-        """
-        header = widget.horizontalHeader()
-        wanted = {
-            column: field
-            for column, field in self._INFO_COLUMNS.items()
-            if (columns is None or column in columns)
-            and column < widget.columnCount()
-            and not header.isSectionHidden(column)
-        }
-        if not wanted:
-            return
-        workspace, sourceimages = self._project_roots()
-        sorting = widget.isSortingEnabled()
-        widget.setSortingEnabled(False)  # a sorted column would move rows mid-fill
-        widget.blockSignals(True)  # a filled cell is not an edit
-        try:
-            for row in range(widget.rowCount()):
-                path = self._row_texture_path(widget, row, workspace, sourceimages)
-                facts = (
-                    ImgUtils.texture_facts(path, tuple(wanted.values())) if path else {}
-                )
-                for column, field in wanted.items():
-                    text, tip, key = self._format_fact(field, facts)
-                    widget.set_sorted_cell(row, column, text, key).setToolTip(tip)
-        finally:
-            widget.blockSignals(False)
-            widget.setSortingEnabled(sorting)
-
-    # ------------------------------------------------------------------
-    # Renaming -- a texture file, and the names kept in sync with it
-    # ------------------------------------------------------------------
-
-    def row_rename_file(self, selection=None):
-        """Rename one row's texture file, edited in its own cell.
-
-        The path cell opens on just the file name (the stem selected); Enter
-        renames the file on disk and repoints every node reading it
-        (:meth:`_rename_texture`).
-        """
-        selection = list(selection or [])
-        contexts = self._get_selected_contexts(selection, require_file_nodes=False)
-        if len(contexts) != 1 or len(selection) != 1:
-            cmds.warning("Rename File: select a single row.")
-            return
-        context, row = contexts[0], selection[0].row
-        table = self.ui.tbl000
-        dep = context.get("lightmap")
-        if dep is not None:
-            name = dep["map"]
-        else:
-            node = context.get("file_node")
-            if not node:
-                cmds.warning("Rename File: this row has no file node.")
-                return
-            name = os.path.basename(
-                (cmds.getAttr(f"{node}.fileTextureName") or "").replace("\\", "/")
-            )
-        if not name:
-            cmds.warning("Rename File: this row names no file.")
-            return
-        table.edit_cell_as(
-            row,
-            1,
-            name,
-            lambda new_name, ctx=context: self._rename_texture(ctx, new_name),
-        )
-
-    #: Said when Keep Names In Sync leaves a rename to the file or node edited
-    #: (:meth:`_sync_carries`).
-    _SYNC_ALONE = (
-        "Keep Names In Sync: {name} was renamed alone -- {material} follows "
-        "only a new base name for its own texture set."
-    )
-
-    def _rename_texture(self, context, new_name: str) -> bool:
-        """Rename the texture file *context* names to *new_name*, then refresh.
-
-        With Keep Names In Sync on, a new base name for a file of the
-        material's own texture set renames the whole material instead
-        (:meth:`_sync_names`); any other rename -- another set's map, a new
-        map type -- renames that file alone and says so
-        (:meth:`_sync_carries`). A lightmap row's bake markers are re-stamped
-        with the name (``LightmapRecords.rename_lightmap``) -- they bind the
-        map by name. Refused names are reported, never half-applied.
-        """
-        new_name = str(new_name or "").strip()
-        dep = context.get("lightmap")
-        try:
-            if dep is not None:
-                if not dep.get("path"):
-                    raise ValueError(f"{dep['map']} is not on disk to rename.")
-                with CoreUtils.undo_chunk("Rename Lightmap"):
-                    MatUtils.rename_texture_file(dep["path"], new_name)
-                    self._lightmap_records().rename_lightmap(dep["map"], new_name)
-                om.MGlobal.displayInfo(f"Renamed lightmap {dep['map']} -> {new_name}")
-            else:
-                node = context["file_node"]
-                stored = cmds.getAttr(f"{node}.fileTextureName") or ""
-                syncing = self._sync_names_enabled() and context.get("shader_node")
-                base = MapFactory.get_base_texture_name(new_name)
-                if syncing and self._sync_carries(
-                    context, base, texture=(stored, new_name)
-                ):
-                    self._sync_names(context, base)
-                else:
-                    result = MatUtils.rename_texture_file(stored, new_name)
-                    om.MGlobal.displayInfo(
-                        f"Renamed {os.path.basename(stored)} -> {new_name}; "
-                        f"repointed {len(result['nodes'])} file node(s)."
-                    )
-                    if syncing:
-                        cmds.warning(
-                            self._SYNC_ALONE.format(
-                                name=os.path.basename(stored),
-                                material=context["shader_node"],
-                            )
-                        )
-        except (ValueError, OSError, RuntimeError) as e:  # RuntimeError: cmds.rename
-            cmds.warning(f"Rename File: {e}")
-            return False
-        self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
-        return True
-
-    def _sync_names_enabled(self) -> bool:
-        """State of the header's "Keep Names In Sync" toggle."""
-        return self._menu_flag(self._header_menu(), "chk_sync_names", False)
-
-    def _sync_affixes(self):
-        """``(shader (prefix, suffix), file node (prefix, suffix))`` from the
-        Keep Names In Sync option box -- the shader's through its affix picker
-        (the scene convention by default), the file node's a plain suffix."""
-        flyout = self._option_menu("chk_sync_names")
-        field = getattr(flyout, "txt_shader_affix", None)
-        shader = ("", "")
-        if field is not None:
-            shader = field.option_box.resolve_affix(default="suffix")
-        if not any(shader):  # an empty field: the convention, not nothing
-            shader = NamingConvention.affix_parts("material")
-        suffix_field = getattr(flyout, "txt_file_node_suffix", None)
-        suffix = suffix_field.text().strip() if suffix_field is not None else ""
-        if suffix and not suffix.startswith("_"):
-            suffix = f"_{suffix}"
-        return tuple(shader), ("", suffix)
-
-    @staticmethod
-    def _apply_shader_affix_hint(widget) -> None:
-        """The shader affix field's placeholder and tooltip, per its mode."""
-        mode = widget.option_box.affix_mode
-        hints = {
-            "convention": (
-                "Scene Convention",
-                "The shader takes the scene's naming convention for materials "
-                "(edit it in the Naming panel's Suffix By Type).\nClick the "
-                "button beside the field to type your own instead.",
-            ),
-            "prefix": ("Shader Prefix", "Prepended to the base name: MAT_stone."),
-            "suffix": ("Shader Suffix", "Appended to the base name: stone_MAT."),
-        }
-        placeholder, tip = hints.get(
-            mode,
-            (
-                "Shader Affix",
-                "Placement read from the '_': '_MAT' is a suffix, 'MAT_' a prefix.",
-            ),
-        )
-        widget.setPlaceholderText(placeholder)
-        widget.setToolTip(tip)
-
-    def _sync_plan(self, context, base: str, dry_run: bool = False) -> dict:
-        """``MatUtils.sync_material_names`` for *context*'s material at *base*,
-        with the option box's affixes and the lightmap records this panel
-        holds (a real run is one undo chunk of its own)."""
-        shader_affix, node_affix = self._sync_affixes()
-        return MatUtils.sync_material_names(
-            context.get("shader_node"),
-            base,
-            material_affix=shader_affix,
-            file_node_affix=node_affix,
-            dry_run=dry_run,
-            lightmaps=self._lightmap_records(),
-        )
-
-    def _sync_carries(self, context, base: str, texture=None, node=None) -> bool:
-        """Whether Keep Names In Sync renames *context*'s whole material for an
-        edit: the sync at *base* (a dry run) gives the edited thing exactly the
-        name typed (case aside) -- *texture* ``(stored path, new file name)``
-        or *node* ``(file node, new node name)``.
-
-        That holds for a file of the material's own texture set (or its node)
-        whose base alone changed. Syncing to the typed name's base, whatever
-        was typed, renamed the set after an environment cube's new name while
-        the cube kept its own, and a new map type (the base unchanged) renamed
-        nothing. Another set's map, a new map type, tile token or extension,
-        or a file the sync keeps (outside the project) is renamed alone.
-
-        Raises:
-            ValueError: The sync refuses *base* (``MatUtils.sync_material_names``).
-        """
-        plan = self._sync_plan(context, base, dry_run=True)
-        if texture is not None:
-            stored, name = texture
-            path = MatUtils.to_absolute(stored, *self._project_roots())
-            planned = next(
-                (n for old, n in plan["textures"] if FileUtils.is_same_file(old, path)),
-                None,
-            )
-        else:
-            edited, name = node
-            planned = dict(plan["file_nodes"]).get(edited)
-            name = StrUtils.apply_affix(name, *self._sync_affixes()[1])
-        return bool(planned) and planned.lower() == name.lower()
-
-    def _sync_names(self, context, base: str) -> bool:
-        """Name *context*'s material, its texture set, lightmap and nodes for
-        *base* (``MatUtils.sync_material_names``), and report it."""
-        plan = self._sync_plan(context, base)
-        changed = int(bool(plan["material"])) + sum(
-            len(plan[key])
-            for key in ("companions", "textures", "file_nodes", "lightmaps")
-        )
-        om.MGlobal.displayInfo(
-            f"Names synced to {base!r}: {changed} rename(s) "
-            f"({len(plan['textures'])} texture file(s), "
-            f"{len(plan['lightmaps'])} lightmap(s))."
-        )
-        for reason in plan["skipped"]:
-            cmds.warning(f"Sync Names: {reason}")
-        return True
-
-    def select_material(self, selection=None):
-        """Select scene objects assigned to the materials of selected rows."""
-        contexts = self._get_selected_contexts(selection, require_file_nodes=False)
-        if not contexts:
-            return
-
-        all_assigned_objects = []
-        for context in contexts:
-            lightmap = context.get("lightmap")
-            if lightmap is not None:
-                # A lightmap row selects the objects carrying its bake markers.
-                all_assigned_objects.extend(
-                    o for o in lightmap.get("objects") or [] if cmds.objExists(o)
-                )
-                continue
-            shader_name = context.get("shader_name")
-            if not shader_name:
-                continue
-            try:
-                assigned = MatUtils.find_by_mat_id(shader_name, shell=True)
-                if assigned:
-                    all_assigned_objects.extend(assigned)
-            except Exception as e:
-                print(f"Failed to query objects for '{shader_name}': {e}")
-
-        if not all_assigned_objects:
-            cmds.warning("No scene objects found for the selected materials.")
-            return
-
-        try:
-            cmds.select(all_assigned_objects, r=True)
-            om.MGlobal.displayInfo(f"Selected objects for {len(contexts)} material(s).")
-        except Exception as e:
-            om.MGlobal.displayError(f"Failed to select objects: {str(e)}")
-
-    def select_file_node(self, selection=None):
-        """Select the file nodes from the selected rows."""
-        contexts = self._get_selected_contexts(selection)
-        if not contexts:
-            return
-
-        nodes_to_select = []
-        for context in contexts:
-            file_node = context.get("file_node") or (
-                context["file_nodes"][0] if context["file_nodes"] else None
-            )
-            if file_node:
-                nodes_to_select.append(file_node)
-        if not nodes_to_select:
-            return
-
-        try:
-            cmds.select(nodes_to_select, r=True)
-            om.MGlobal.displayInfo(f"Selected {len(nodes_to_select)} file node(s).")
-        except Exception as e:
-            om.MGlobal.displayError(f"Failed to select file nodes: {str(e)}")
-
-    def row_show_in_hypershade(self, selection=None):
-        """Graph the selected file node(s) in Hypershade."""
-        contexts = self._get_selected_contexts(selection)
-        if not contexts:
-            return
-
-        nodes_to_graph = []
-        for context in contexts:
-            file_node = context.get("file_node") or (
-                context["file_nodes"][0] if context["file_nodes"] else None
-            )
-            if file_node:
-                nodes_to_graph.append(file_node)
-        if not nodes_to_graph:
-            return
-        MatUtils.graph_materials(nodes_to_graph)
-
-    def delete_file_node(self, selection=None):
-        """Delete the selected file node(s); a lightmap row reverts its objects.
-
-        A lightmap row has no file node -- its bake markers bind the map -- so
-        the action used to return silently on one. Its delete is the Lightmap
-        Baker's Revert Selected on the objects it binds
-        (:meth:`_remove_lightmaps`).
-        """
-        everything = self._get_selected_contexts(selection, require_file_nodes=False)
-        lightmaps = [ctx["lightmap"] for ctx in everything if ctx.get("lightmap")]
-        if lightmaps:
-            self._remove_lightmaps(lightmaps)
-        contexts = [ctx for ctx in everything if ctx.get("file_nodes")]
-        if not contexts:
-            if not lightmaps and everything:
-                cmds.warning("Delete File Node: the selected row(s) hold no file node.")
-            return
-
-        nodes_to_delete = []
-        for context in contexts:
-            file_node = context.get("file_node") or (
-                context["file_nodes"][0] if context["file_nodes"] else None
-            )
-            if file_node:
-                nodes_to_delete.append(file_node)
-        if not nodes_to_delete:
-            return
-
-        nodes_to_delete = list(set(nodes_to_delete))
-        node_names = [n.split("|")[-1].split(":")[-1] for n in nodes_to_delete]
-
-        count = len(nodes_to_delete)
-        msg = f"Are you sure you want to delete {count} file node(s)?"
-        if count == 1:
-            msg = f"Are you sure you want to delete the file node '{node_names[0]}'?"
-
-        shaders, other = self._downstream_consumers(nodes_to_delete)
-        if shaders:
-            shown = ", ".join(shaders[:4])
-            if len(shaders) > 4:
-                shown += f", +{len(shaders) - 4} more"
-            msg += (
-                f"<br>Connected to <hl>{len(shaders)}</hl> material(s): "
-                f"<hl>{shown}</hl><br>Those connections will be broken."
-            )
-        elif other:
-            msg += (
-                f"<br>Connected to <hl>{len(other)}</hl> node(s) in the shading "
-                "graph.<br>Those connections will be broken."
-            )
-
-        reply = self.sb.message_box(msg, "Yes", "No")
-        if reply == "Yes":
-            try:
-                cmds.delete(nodes_to_delete)
-                om.MGlobal.displayInfo(f"Deleted {count} file node(s).")
-                self.ui.tbl000.init_slot()
-            except Exception as e:
-                om.MGlobal.displayError(f"Failed to delete file nodes: {str(e)}")
-
-    def _remove_lightmaps(self, deps) -> int:
-        """Revert the objects each lightmap in *deps* binds to source.
-
-        The Lightmap Baker's Revert Selected, scoped to those objects and
-        confirmed first: ``LightmapRecords.revert`` clears their markers and
-        republishes the manifest, so nothing is left bound to the map (a legacy
-        atlas UV layout is restored too). Their materials and texture UVs were
-        never changed, and the map file stays on disk. The reflection probe
-        binds no object and is reported instead. One undo step.
-
-        Returns:
-            How many objects were cleared.
-        """
-        bound = [dep for dep in deps if dep.get("objects")]
-        for dep in deps:
-            if not dep.get("objects"):
-                cmds.warning(
-                    f"{dep['map']} is the scene's reflection probe; it binds no "
-                    "object -- re-bake without a probe to drop it."
-                )
-        if not bound:
-            return 0
-        objects = list(dict.fromkeys(o for dep in bound for o in dep["objects"]))
-        names = ", ".join(dep["map"] for dep in bound[:4])
-        if len(bound) > 4:
-            names += f", +{len(bound) - 4} more"
-        reply = self.sb.message_box(
-            f"<b>Revert to Source</b> &mdash; the {len(objects)} object(s) "
-            f"lit by <hl>{names}</hl>?<br><br>Removes their lightmap wiring: "
-            "each object's lightmap record and its entry in the scene's "
-            "lightmap export data. Their materials and texture UVs were never "
-            "changed, and the map file stays on disk. One Undo restores the "
-            "wiring.",
-            "Yes",
-            "No",
-        )
-        if reply != "Yes":
-            return 0
-        cleared = self._lightmap_records().revert(objects)
-        om.MGlobal.displayInfo(
-            f"Reverted {len(cleared)} object(s) to source (unbound from {names}; "
-            "the map stays on disk)."
-        )
-        self.ui.tbl000.init_slot()
-        return len(cleared)
-
-    def _downstream_consumers(self, file_nodes) -> tuple:
-        """Return ``(shaders, other)``: what deleting *file_nodes* would unwire.
-
-        ``shaders`` are the surface shaders the textures feed, through any
-        intermediates (``MatUtils.get_connected_shaders``). ``other`` catches
-        the rest of a live graph -- a bump/displacement chain that never
-        reaches a surface shader still breaks when the file node goes -- and
-        is reported only when no shader was found, since an intermediate on
-        the way to a named material is already covered by ``shaders``.
-
-        Excluded: the nodes being deleted (they take each other down) and
-        Maya's default registries (``defaultTextureList1`` ...), which EVERY
-        file node hangs off -- counting those would flag an orphan texture as
-        connected.
-
-        Parameters:
-            file_nodes (list): The file nodes slated for deletion.
-
-        Returns:
-            tuple: ``(sorted shader names, sorted other consumer names)``.
-        """
-
-        # Guard the empty case explicitly rather than lean on what ``cmds.ls``
-        # makes of an empty list (measured: empty on Maya 2025, not relied on).
-        def _long(nodes):
-            nodes = list(nodes)
-            return set(cmds.ls(nodes, long=True) or []) if nodes else set()
-
-        doomed = _long(file_nodes)
-        shaders = set(MatUtils.get_connected_shaders(file_nodes))
-        shader_longs = _long(shaders)
-
-        other = set()
-        for node in file_nodes:
-            for dst in cmds.listConnections(node, source=False, destination=True) or []:
-                dst_long = (cmds.ls(dst, long=True) or [dst])[0]
-                if dst_long in doomed or dst_long in shader_longs:
-                    continue
-                if cmds.ls(dst, defaultNodes=True):
-                    continue
-                other.add(dst)
-
-        return sorted(shaders), sorted(other)
-
-    # ------------------------------------------------------------------
-    # Set-Directory workflow
-    # ------------------------------------------------------------------
-
-    def _set_texture_dir_flat(
-        self,
-        file_nodes,
-        target_dir: str,
-        relocate_mode: str = "rewrite",
-        allow_missing: bool = False,
-    ) -> int:
-        """Repath each file node so its texture lives directly under target_dir.
-
-        ``relocate_mode`` controls disk behavior for nodes whose current path
-        resolves to an existing file:
-          - ``"rewrite"`` — path-only (no file movement).
-          - ``"copy"`` — copy the file to ``target_dir`` then rebind.
-          - ``"move"`` — move the file to ``target_dir`` then rebind.
-
-        A node is repathed only when the texture is ACTUALLY at the
-        destination afterwards — tile/frame tokens resolved, so a UDIM set
-        counts as present when its tiles are. Every mode used to rewrite the
-        plug regardless, which is how picking sourceimages in the default
-        (path-only) mode filled the table with red rows naming files that were
-        never at the destination; in copy/move it was worse, because a token
-        path matched no ``os.path.exists`` and so relocated NOTHING while the
-        node was repathed anyway. ``allow_missing`` restores the blind rewrite
-        for the one case that wants it: pointing a batch at a folder you are
-        about to fill.
-
-        Tile sets relocate per tile (``MatUtils.texture_tiles``) — the same
-        rule ``MatUtils.stage_textures_relative`` stages them by.
-
-        Collision policy: same-name + same-size at destination is a safe
-        rebind (no overwrite); different size is skipped + warned. (A size
-        proxy, kept deliberately: the target here is an arbitrary flat
-        directory, not the engine-managed sourceimages staging that
-        ``_normalize_to_relative`` now delegates to.) Records prior paths in
-        ``self._previous_paths`` so the table tooltip can show the original.
-        Returns the number of file nodes actually updated.
-        """
-        # Derive valid modes from the combobox items — SSoT for the mode keys.
-        valid_modes = {key for _label, key in self._RELOCATE_MODE_ITEMS}
-        if relocate_mode not in valid_modes:
-            raise ValueError(
-                f"Unknown relocate_mode {relocate_mode!r}; expected one of {sorted(valid_modes)}."
-            )
-        if not file_nodes:
-            return 0
-        node_names = [str(n) for n in file_nodes]
-        target_dir_norm = os.path.normpath(target_dir).replace("\\", "/")
-        workspace, source_images = self._project_roots()
-        to_relative = lambda p: MatUtils.to_project_relative(  # noqa: E731
-            p, workspace, source_images
-        )
-
-        # Phase 1 — collect (node, old_path, new_path, source tiles, new_abs).
-        plan = []
-        for node_name in node_names:
-            try:
-                old_path = cmds.getAttr(f"{node_name}.fileTextureName") or ""
-            except Exception:
-                continue
-            if not old_path:
-                continue
-            new_abs = os.path.normpath(
-                os.path.join(target_dir_norm, os.path.basename(old_path))
-            ).replace("\\", "/")
-            new_path = to_relative(new_abs)
-            if new_path == old_path:
-                continue
-
-            # The whole set, not one name: a token path denotes every tile on
-            # disk, and each has to travel for the repathed pattern to resolve.
-            sources = (
-                MatUtils.texture_tiles(
-                    MatUtils.to_absolute(old_path, workspace, source_images)
-                )
-                if relocate_mode != "rewrite"
-                else []
-            )
-            plan.append((node_name, old_path, new_path, sources, new_abs))
-
-        # Phase 2 — perform relocations outside the undo chunk (disk ops aren't undoable).
-        relocated = 0
-        collision_skipped = 0
-        skipped_nodes = set()
-        if relocate_mode in ("copy", "move"):
-            import shutil
-
-            for node_name, _old_path, _new_path, sources, new_abs in plan:
-                dst_dir = os.path.dirname(new_abs)
-                for src in sources:
-                    dst = os.path.join(dst_dir, os.path.basename(src))
-                    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
-                        os.path.abspath(dst)
-                    ):
-                        continue  # already at the destination — nothing to do
-                    try:
-                        if os.path.exists(dst):
-                            try:
-                                same = os.path.getsize(src) == os.path.getsize(dst)
-                            except OSError:
-                                same = False
-                            if not same:
-                                cmds.warning(
-                                    f"{node_name}: '{os.path.basename(dst)}' already "
-                                    f"exists at destination with different size; "
-                                    f"skipping to avoid wrong-file rebind."
-                                )
-                                collision_skipped += 1
-                                skipped_nodes.add(node_name)
-                                break
-                            if relocate_mode == "move":
-                                try:
-                                    os.remove(src)
-                                except OSError as e:
-                                    cmds.warning(
-                                        f"{node_name}: equivalent at dst, but could "
-                                        f"not remove '{src}': {e}"
-                                    )
-                        else:
-                            os.makedirs(dst_dir, exist_ok=True)
-                            if relocate_mode == "move":
-                                shutil.move(src, dst)
-                            else:
-                                shutil.copy2(src, dst)
-                        relocated += 1
-                    except Exception as e:
-                        cmds.warning(f"{node_name}: failed to {relocate_mode}: {e}")
-                        skipped_nodes.add(node_name)
-                        break
-
-        # Phase 3 — apply path updates (undoable).
-        count = 0
-        missing_at_target = 0
-        cmds.undoInfo(openChunk=True, chunkName="Set Texture Directory")
-        try:
-            for node_name, old_path, new_path, _sources, new_abs in plan:
-                if node_name in skipped_nodes:
-                    continue
-                # The destination is what the node will READ from, so it is
-                # what has to hold a file — never "did a copy run?" (a texture
-                # already sitting in the target needs no copy and must still
-                # be rebound to the shorter form).
-                if not (allow_missing or self._texture_on_disk(new_abs)):
-                    missing_at_target += 1
-                    continue
-                try:
-                    Attributes.set_plug_literal(
-                        f"{node_name}.fileTextureName", new_path
-                    )
-                    self._previous_paths[node_name] = old_path
-                    count += 1
-                except Exception as e:
-                    cmds.warning(f"{node_name}: failed to set path: {e}")
-        finally:
-            cmds.undoInfo(closeChunk=True)
-
-        if relocate_mode != "rewrite":
-            om.MGlobal.displayInfo(
-                f"Set Directory — relocated: {relocated} file(s); "
-                f"collision skipped: {collision_skipped}; "
-                f"mode: {relocate_mode}."
-            )
-        if missing_at_target:
-            cmds.warning(
-                f"Set Directory: {missing_at_target} file node(s) left on their "
-                f"current path — '{target_dir_norm}' holds no texture of that "
-                "name, and repathing them would only spell the breakage "
-                "differently. Use copy/move to bring the files along, or tick "
-                "'Allow Missing Targets' to point them there anyway."
-            )
-        return count
-
-    # ------------------------------------------------------------------
-    # Find-and-Copy workflow
-    # ------------------------------------------------------------------
-
-    def _find_and_copy_workflow(
-        self,
-        file_nodes,
-        relocate_mode: str = "copy",
-        scope_label: str = "",
-        lightmaps=None,
-    ):
-        """Open the Find & Copy panel over *file_nodes*, or re-seed and raise it.
-
-        *lightmaps* are the lightmap dependency records in scope
-        (:meth:`_get_scope_lightmaps`); they get their own opt-out row on the
-        form and are relocated after the textures, by the same folders.
-
-        The panel is kept between invocations rather than rebuilt. It is a
-        tool window that stays open while the operation runs — closing and
-        recreating it would throw away the report the user is reading and the
-        size they set it to — but every invocation re-seeds the rows, so the
-        counts and hints always describe the scope the command was just
-        issued for.
-
-        The scope is captured HERE, not re-read when Run is pressed. The row
-        selection can change behind a modeless window, and a button reading
-        "Copy 12 texture(s)" that relocates three is the exact class of
-        mismatch this panel exists to remove. Re-issuing the command re-seeds
-        it; the footer names the scope so which one is loaded is visible.
-        """
-        self._find_copy_nodes = [str(n) for n in file_nodes]
-        self._find_copy_mode = relocate_mode
-        self._find_copy_scope_label = scope_label
-        self._find_copy_lightmaps = list(lightmaps or [])
-
-        panel = self._find_copy_panel
-        if panel is None:
-            panel = self.sb.form_panel(
-                self._find_and_copy_scope_fields(),
-                title="Find & Copy Textures",
-                parent=getattr(self, "ui", None),
-                # Callable: the mode lives ON the form, so a fixed verb here
-                # would contradict the combo the moment it is changed.
-                ok_text=self._find_and_copy_ok_text,
-                validate=self._validate_find_and_copy,
-                help_text=self._find_and_copy_help_text(),
-                on_run=self._run_find_and_copy,
-                # A tool window the user sizes once and reopens all week: the
-                # size it comes back at is part of being a panel rather than
-                # a dialog.
-                settings=self._find_copy_settings(),
-            )
-            self._find_copy_panel = panel
-        else:
-            panel.set_fields(self._find_and_copy_scope_fields())
-
-        panel.footer.setDefaultStatusText(
-            f"Scope: {scope_label}" if scope_label else ""
-        )
-        panel.present()
-        return panel
-
-    @staticmethod
-    def _stored_path(node) -> str:
-        """The node's stored ``.ftn``, or "" when the plug cannot be read.
-
-        Shared by the source partition and the form's "what is missing" line
-        so the two cannot disagree about a node whose plug has gone away
-        mid-command (a referenced file node unloaded under it).
-        """
-        try:
-            return cmds.getAttr(f"{node}.fileTextureName") or ""
-        except Exception:
-            return ""
-
-    def _partition_resolved_sources(self, node_names):
-        """Split nodes into ``({basename: source path}, [unresolved nodes])``.
-
-        A node whose stored path resolves to a file on disk already *is* its
-        own source: a recursive walk can only rediscover the same bytes, more
-        slowly, with a form in front of it. Only what does not resolve has
-        anything to find.
-
-        A token path (``<UDIM>``, ``<uvtile>``, ``<f>``…) is never a literal
-        file, so those nodes always land in ``unresolved`` and go through the
-        search, which expands the token. It used to test the literal string
-        ``"<udim>"``, so every other spelling fell through as a plain path;
-        ``MatUtils.has_path_token`` is the one classifier now.
-        """
-        workspace, source_images = self._project_roots()
-        resolved = {}
-        unresolved = []
-        for node in node_names:
-            path = self._stored_path(node)
-            abs_path = (
-                MatUtils.to_absolute(path, workspace, source_images) if path else ""
-            )
-            if (
-                abs_path
-                and not MatUtils.has_path_token(abs_path)
-                and os.path.isfile(abs_path)
-            ):
-                resolved.setdefault(os.path.basename(abs_path).lower(), abs_path)
-            else:
-                unresolved.append(node)
-        return resolved, unresolved
-
-    def _find_copy_settings(self):
-        """The panel's geometry store, or None when the switchboard has none.
-
-        ``getattr``: the slot is constructed against a real Switchboard in
-        production and against a stand-in in tests, and a panel that cannot
-        remember its size is a smaller loss than a tool that will not open.
-        """
-        store = getattr(self.sb, "settings", None)
-        if store is None:
-            return None
-        return store.branch("find_and_copy_textures")
-
-    def _find_and_copy_scope_fields(self):
-        """Field specs for the scope the panel is currently pointed at.
-
-        Re-partitions the nodes on every call rather than caching: reopening
-        the panel after a Resolve Missing pass must not still claim the
-        textures it just fixed are unresolved.
-        """
-        return self._find_and_copy_fields(
-            self._find_copy_nodes,
-            self._partition_resolved_sources(self._find_copy_nodes)[1],
-            EnvUtils.get_env_info("sourceimages") or "",
-            self._find_copy_mode,
-            lightmaps=self._find_copy_lightmaps,
-        )
-
-    def _find_and_copy_fields(
-        self,
-        node_names,
-        unresolved,
-        sourceimages,
-        relocate_mode="copy",
-        lightmaps=None,
-    ):
-        """The Find & Copy rows: operation, search folder, destination, dry run.
-
-        *lightmaps* (dependency records) count toward the search hint: a
-        missing lightmap is as much "something to find" as a broken file
-        node, and the search folder must switch on for it. They get no row
-        of their own — the scope already says what this command was issued
-        over, and an opt-out for what was just selected is a second place
-        to answer a question already answered.
-
-        Both folders on screen at once, each labelled and each carrying — as
-        its tooltip — what will happen to it, which is the whole point and
-        what two identical native pickers in a variable order could not do.
-
-        The source row is DISABLED, not hidden, when every path already
-        resolves: the reason ("nothing needs finding") is the answer to the
-        question a missing row would raise, and its placeholder says the
-        same where the empty field is.
-
-        Pure: no Qt, no scene writes. The panel renders whatever this
-        returns, so what the form SAYS is testable on its own.
-
-        Returns:
-            list[dict]: specs for ``sb.form_panel`` — ``mode`` (carrying
-            ``dry_run`` inline), ``source_dir``, ``dest_dir``.
-        """
-        # Counted from the NODES, never from ``resolved``: that dict is keyed
-        # by basename, so two file nodes reading the same texture collapse into
-        # one entry and the panel would promise to copy fewer than it will.
-        total = len(node_names)
-        resolved_count = total - len(unresolved)
-        mode_labels = {key: label for label, key in self._FIND_MODE_ITEMS}
-        initial_mode = mode_labels.get(relocate_mode, self._FIND_MODE_ITEMS[0][0])
-
-        lightmaps = list(lightmaps or [])
-        missing_lightmaps = [d for d in lightmaps if not d.get("path")]
-        # What the search folder is FOR: the file nodes that do not resolve
-        # and the lightmaps found nowhere -- one list, since one folder serves
-        # both and the row must switch on for either.
-        wanted = [os.path.basename(self._stored_path(n)) or str(n) for n in unresolved]
-        wanted.extend(d["map"] for d in missing_lightmaps)
-
-        # The placeholder says WHY this field would be filled, in as few words
-        # as fit: a line edit elides what overruns it, and a cropped sentence
-        # is worse than none. Counted off ``wanted``, never off ``total`` — a
-        # lightmap-only scope has no file nodes, and a count of 0 in the one
-        # line that is always on screen makes the rest of the form untrusted.
-        # What leaving it empty costs is spelled out in the hint, which has
-        # room for it.
-        if wanted:
-            listed = ", ".join(wanted[:3])
-            if len(wanted) > 3:
-                listed += f", +{len(wanted) - 3} more"
-            skipped = "Leave it empty to skip them"
-            if resolved_count:
-                skipped += f" and relocate the {resolved_count} that already resolve"
-            source_hint = (
-                f"Searched recursively for {len(wanted)} unresolved "
-                f"texture(s): {listed}. {skipped}. A path that already "
-                "resolves is its own source and is never searched for — it "
-                "is the file the scene is rendering."
-            )
-            source_placeholder = f"{len(wanted)} path(s) require a search dir"
-        else:
-            source_hint = (
-                f"All {total} path(s) resolve — every texture is its own source, "
-                "so nothing needs finding."
-                if total
-                else "Nothing in scope needs finding — every path already resolves."
-            )
-            source_placeholder = "No path requires a search dir"
-
-        # Order is the reading order of the decision: what to do (and whether
-        # to commit it -- dry run rides the operation row, because it is the
-        # same question answered twice), where to look, where it lands.
-        return [
-            {
-                "name": "mode",
-                "kind": "choice",
-                # Right-aligned, and punctuated: it is a lead-in to the combo
-                # beside it, not a column entry like the marked folder rows
-                # (whose markers line up down the left edge).
-                "label": "Operation:",
-                "label_align": "right",
-                "items": [label for label, _key in self._FIND_MODE_ITEMS],
-                "value": initial_mode,
-                "hint": (
-                    "Copy duplicates each texture into the destination; "
-                    "Move removes the original after a successful copy."
-                ),
-                "inline": [
-                    {
-                        "name": "dry_run",
-                        "kind": "check",
-                        "label": "Dry run (preview only)",
-                        "hint": (
-                            "Report exactly what would be relocated and "
-                            "repathed without touching a file or a plug, then "
-                            "arm <b>Apply</b> to commit the report on screen. "
-                            "The preview and the commit derive every "
-                            "destination path through the same call, so what "
-                            "Apply writes is what was previewed."
-                        ),
-                    }
-                ],
-            },
-            {
-                "name": "source_dir",
-                "kind": "dir",
-                "label": f"{self._DIALOG_MARK_SOURCE} Search in",
-                "hint": source_hint,
-                "placeholder": source_placeholder,
-                "enabled": bool(wanted),
-            },
-            {
-                "name": "dest_dir",
-                "kind": "dir",
-                "label": f"{self._DIALOG_MARK_DEST} Copy into",
-                "value": sourceimages,
-                "hint": (
-                    f"The {total} texture(s) land HERE and the file nodes "
-                    "are repointed at them. Paths become relative when "
-                    "this folder is inside the project."
-                ),
-            },
-        ]
-
-    def _find_and_copy_ok_text(self, values) -> str:
-        """Accept-button text — the verb chosen ON the form, and the real count.
-
-        Re-evaluated on every edit by the panel, so switching the Operation
-        combo retitles the button that commits it — and ticking Dry Run
-        retitles it to what it will actually do, which is not copy anything.
-        """
-        total = len(self._find_copy_nodes)
-        lightmaps = len(self._find_copy_lightmaps)
-        what = f"{total} texture(s)"
-        if lightmaps:
-            what = (
-                f"{what} + {lightmaps} lightmap(s)"
-                if total
-                else f"{lightmaps} lightmap(s)"
-            )
-        if values.get("dry_run"):
-            return f"Preview {what}"
-        mode = values.get("mode") or self._FIND_MODE_ITEMS[0][0]
-        return f"{mode} {what}"
-
-    def _find_and_copy_help_text(self) -> str:
-        """Rich text behind the panel header's ``?``."""
-        return self.sb.tooltip.fmt(
-            title="Find &amp; Copy Textures",
-            body="Gather the textures the scoped file nodes use, relocate them "
-            "into one destination, and repoint the nodes at them.",
-            sections=[
-                (
-                    "The rows",
-                    [
-                        "<b>Operation</b> — Copy duplicates each texture; Move "
-                        "removes the original after a successful copy.",
-                        "<b>Search in</b> — searched recursively, and only for "
-                        "paths that do not already resolve. Leave it empty to "
-                        "skip those and relocate the rest.",
-                        "<b>Copy into</b> — where the textures land. Created if "
-                        "it does not exist; paths become relative when it is "
-                        "inside the project.",
-                        "<b>Dry run</b> — report what would happen without "
-                        "touching anything, then press <b>Apply</b> in the "
-                        "footer to commit exactly what was reported.",
-                    ],
-                ),
-            ],
-            notes=[
-                "Lightmaps in the scope ride along — there is no row for them, "
-                "because the selection that opened this panel already said so. "
-                "No file node references a baked map, so this is the one "
-                "command that relocates them: searched and copied like the "
-                "textures, then every marker is repointed at the destination "
-                "and the FBX manifest republished.",
-                "Source and destination may not be the same folder — nothing "
-                "would move, and the run would report success.",
-                "What the search did not find is named at the end of the "
-                "report; those nodes keep their current path.",
-                "Collision policy: same-name + same-size files rebind without "
-                "overwriting; different-size hits skip with a warning.",
-            ],
-        )
-
-    def _run_find_and_copy(self, values):
-        """The panel's Run — over whatever scope the panel is pointed at."""
-        return self._run_find_and_copy_over(list(self._find_copy_nodes), values)
-
-    def _run_find_and_copy_over(self, node_names, values):
-        """Preview or commit *node_names*, reporting into the panel.
-
-        Returns the call that WOULD commit when this pass was a preview, which
-        is the panel's contract for arming its Apply button. That call is this
-        same method with the preview switched off, over the nodes and answers
-        AS THEY WERE PREVIEWED — so Apply commits the report on screen even if
-        the row selection or the form has moved on since.
-        """
-        panel = self._find_copy_panel
-        dry_run = bool(values.get("dry_run"))
-        self._active_logger = getattr(panel, "logger", None)
-        try:
-            planned = self._execute_find_and_copy(
-                node_names, values, progress_host=panel, dry_run=dry_run
-            )
-        finally:
-            self._active_logger = None
-        self.ui.tbl000.init_slot()
-        if not (dry_run and planned):
-            return None
-        return partial(
-            self._run_find_and_copy_over, node_names, dict(values, dry_run=False)
-        )
-
-    @staticmethod
-    def _validate_find_and_copy(values):
-        """Refuse a form that cannot do what it says, and say why.
-
-        The reported mistake IS the first rule: aiming the destination at the
-        folder being searched relocates nothing (every source is already
-        there), reports success, and leaves the user believing the textures
-        moved.
-        """
-        dest = values.get("dest_dir") or ""
-        source = values.get("source_dir") or ""
-        if not dest:
-            return "Pick a destination — this is where the textures will land."
-        if source and os.path.normcase(os.path.abspath(source)) == os.path.normcase(
-            os.path.abspath(dest)
-        ):
-            return (
-                "Search folder and destination are the same — nothing would "
-                "move. The destination is where the textures LAND."
-            )
-        return ""
-
-    def _execute_find_and_copy(
-        self, file_nodes, answers, progress_host=None, dry_run=False
-    ):
-        """Collect sources, relocate them into one directory, repath the nodes.
-
-        The answers arrive as a plain dict — from the panel, from a test, from
-        anything that can name the four values — so the work is reachable and
-        checkable without a window in front of it.
-
-        ONE form, with both folders on it at the same time. It used to be two
-        native directory pickers shown back to back — the same widget twice,
-        one meaning "search here" and the other "write here", with the
-        direction carried only by the window caption. Reported 2026-08-25:
-        users pick their texture folder in the DESTINATION picker, believing
-        they are answering "where do I find these". Colour-marking the
-        captions (2026-08-18) did not fix it, and could not: a shell caption
-        is the lowest-salience text on screen, and worse, the two option-box
-        toggles that skipped a picker made the ORDER variable — with every
-        path already valid the FIRST and only dialog was the destination, so
-        the position the user was navigating by had moved.
-
-        Side by side and labelled, there is nothing to tell apart and no order
-        to remember; the accept button names the operation and the count, and
-        source == destination is refused inline, BEFORE any file is touched.
-        Both toggles are gone with the sequence that needed them: the
-        destination pre-fills to sourceimages (what "Always Relocate To
-        sourceimages" bought, minus the hidden state), and "search
-        everything, not just what is broken" went with them — a resolving
-        path is the file the scene is rendering, so the search fills the
-        gaps and the empty field says what that means.
-
-        A source row with no folder in it skips the unresolved nodes and
-        relocates the rest — with 48 of 50 paths valid, those 48 must not be
-        lost to the two that are broken.
-
-        ``dry_run`` reports the same decision without acting on it: the
-        search still runs (reading the disk is the only way to know what would
-        move), but no folder is created, no file is relocated and no plug is
-        written. Both passes derive the destination paths through the one
-        :meth:`_plan_remap` call, so a preview cannot promise a path the
-        commit would not write.
-
-        Parameters:
-            file_nodes: The nodes to relocate textures for.
-            answers: ``source_dir``, ``dest_dir``, ``mode``, ``dry_run``.
-            progress_host: Widget whose footer carries the progress bar —
-                the panel running the command, so the feedback is on the
-                window being watched rather than the one behind it.
-            dry_run: Report the plan; change nothing.
-
-        Returns:
-            bool: whether there was anything to do — the signal the panel's
-            Apply button is armed from, so a preview that found nothing
-            offers nothing to commit.
-        """
-        node_names = [str(n) for n in file_nodes]
-        source_dir = answers.get("source_dir") or ""
-        dest_dir = answers.get("dest_dir") or ""
-        # Normalized HERE rather than on the way out of the form: the same
-        # dict arrives from the panel and from a test, and a mode read
-        # straight off the combo ("Copy" / "Move") has to mean the same thing
-        # on every path in.
-        relocate_mode = (
-            "move" if str(answers.get("mode", "")).lower() == "move" else "copy"
-        )
-
-        resolved, unresolved = self._partition_resolved_sources(node_names)
-        # The lightmaps captured with this scope. No opt-out: the selection
-        # that opened the panel already said what this runs over, and a row
-        # asking again could only contradict it.
-        lightmaps = list(self._find_copy_lightmaps)
-
-        found_textures = []
-        if unresolved and source_dir:
-            # find_texture_files ticks per directory so the marquee advances
-            # during the walk. The walk itself isn't interruptible
-            # mid-directory, but Esc cancels via the ProgressBar filter.
-            with self.sb.progress(
-                progress_host or self.ui, text=f"Searching {source_dir}…"
-            ) as update:
-                found_textures = MatUtils.find_texture_files(
-                    file_nodes=unresolved,
-                    source_dir=source_dir,
-                    recursive=True,
-                    progress_callback=self.sb.progress_adapter(update),
-                )
-        elif unresolved:
-            self._log(
-                f"No search folder — skipping {len(unresolved)} unresolved "
-                f"texture(s); continuing with {len(resolved)} valid path(s)."
-            )
-
-        if unresolved and source_dir:
-            # Name what the search did NOT find, by node. Reported 2026-08-26:
-            # a run that found 46 of 48 read as a success -- the counts were
-            # right, but nothing said WHICH two kept their broken path -- and
-            # the export then failed on textures the panel had "just copied".
-            found_names = {os.path.basename(p).lower() for p in found_textures}
-            not_found = [
-                node
-                for node in unresolved
-                if not self._landed(
-                    os.path.basename(self._stored_path(node)), found_names
-                )
-            ]
-            if not_found:
-                self._log(
-                    f"{len(not_found)} of {len(unresolved)} unresolved "
-                    f"texture(s) not found under {source_dir} — their file "
-                    "nodes keep their current path",
-                    "warning",
-                    items=[
-                        f"{node}:  "
-                        f"{os.path.basename(self._stored_path(node)) or '<no path>'}"
-                        for node in not_found
-                    ],
-                )
-
-        if not resolved and not found_textures and not lightmaps:
-            self._log("No textures found.", "warning")
-            return False
-
-        # Dedup by basename, newest mtime wins. Walks can return multiple
-        # matches per target filename (versioned/archived copies, sync-client
-        # conflict copies); feeding all of them into the threaded copy pool
-        # would have two workers racing on the same destination — a deadlock
-        # pattern on Windows against a cloud-sync client. A valid path outranks
-        # every walk hit of that name: it is the file the scene is rendering.
-        by_basename = {}
-        for fpath in found_textures:
-            bn = os.path.basename(fpath).lower()
-            if bn in resolved:
-                continue
-            try:
-                mtime = os.path.getmtime(fpath)
-            except OSError:
-                mtime = 0.0
-            existing = by_basename.get(bn)
-            if existing is None or mtime > existing[0]:
-                by_basename[bn] = (mtime, fpath)
-        if found_textures and len(by_basename) < len(found_textures):
-            self._log(
-                f"{len(found_textures)} candidates found, deduped to "
-                f"{len(by_basename)} unique basenames (newest wins)."
-            )
-        deduped = list(resolved.values()) + [v[1] for v in by_basename.values()]
-
-        # --- Destination -----------------------------------------------------
-        # Already answered, on the same form as the source. Created if
-        # missing: the destination is typed as often as it is browsed, and a
-        # folder that does not exist yet is a normal answer to "put them here".
-        if not dry_run:
-            try:
-                os.makedirs(dest_dir, exist_ok=True)
-            except OSError as e:
-                self._log(f"Cannot create '{dest_dir}': {e}", "error")
-                return False
-
-        # Sources already sitting in the destination need no file op — and a
-        # Move would be a self-copy, which shutil rejects as SameFileError, so
-        # the file drops out of the copied set and its node never repaths.
-        # They skip straight to the repath, which is the half that still
-        # applies: a texture already in place still normalizes to relative.
-        dest_key = os.path.normcase(os.path.abspath(dest_dir))
-        in_place, to_relocate = [], []
-        for src in deduped:
-            same_dir = (
-                os.path.normcase(os.path.dirname(os.path.abspath(src))) == dest_key
-            )
-            (in_place if same_dir else to_relocate).append(src)
-
-        if dry_run:
-            return self._report_find_and_copy_plan(
-                node_names,
-                dest_dir,
-                relocate_mode,
-                in_place,
-                to_relocate,
-                lightmap_plan=self._plan_lightmaps(
-                    lightmaps, source_dir, dest_dir, relocate_mode
-                ),
-            )
-
-        copied = []
-        if to_relocate:
-            relocate_verb = "Moving" if relocate_mode == "move" else "Copying"
-            with self.sb.progress(
-                progress_host or self.ui, text=f"{relocate_verb} textures…"
-            ) as update:
-                copied = MatUtils.move_texture_files(
-                    found_files=to_relocate,
-                    new_dir=dest_dir,
-                    delete_old=(relocate_mode == "move"),
-                    progress_callback=self.sb.progress_adapter(update),
-                )
-            if not copied and not in_place and not lightmaps:
-                self._log(f"No textures {relocate_verb.lower()}.", "warning")
-                return False
-
-        if deduped:
-            self._log(
-                f"Find & {relocate_mode.title()} — sources: {len(resolved)} from "
-                f"valid path(s), {len(by_basename)} found by search; "
-                f"{len(copied)} relocated, {len(in_place)} already at destination."
-            )
-
-        landed = [dst for _src, dst in copied] + list(in_place)
-        copied_basenames = {
-            os.path.basename(p).lower(): os.path.basename(p) for p in landed
-        }
-        remap = self._plan_remap(node_names, dest_dir, copied_basenames)
-
-        if remap:
-            cmds.undoInfo(openChunk=True, chunkName="Remap Found Textures")
-            try:
-                count = 0
-                unchanged = 0
-                for node_name, path, final_path in remap:
-                    if final_path == path:
-                        # Already the stored form — re-running the command over
-                        # textures that never left the destination (the normal
-                        # case once the destination is pinned to sourceimages)
-                        # would otherwise dirty every plug, reload every
-                        # texture, and report them all as remapped.
-                        unchanged += 1
-                        continue
-
-                    Attributes.set_plug_literal(
-                        f"{node_name}.fileTextureName", final_path
-                    )
-                    # Every other path command records this; the panel's
-                    # "Previous:" tooltip line is built from it.
-                    self._previous_paths[node_name] = path
-                    count += 1
-                self._log(
-                    f"Remapped {count} file nodes.",
-                    "success" if count else "info",
-                )
-                if unchanged:
-                    self._log(f"{unchanged} already pointed at the destination.")
-            finally:
-                cmds.undoInfo(closeChunk=True)
-        elif deduped:
-            self._log("No file nodes matched the copied textures.", "warning")
-
-        if lightmaps:
-            self._relocate_lightmaps(lightmaps, source_dir, dest_dir, relocate_mode)
-
-        # The honest close: what is STILL broken after this run, by node.
-        # Re-partitioned from the live plugs, so a copy that failed or a
-        # search that missed shows up here whatever the counts above said.
-        if node_names:
-            _still_ok, still_unresolved = self._partition_resolved_sources(node_names)
-            if still_unresolved:
-                self._log(
-                    f"{len(still_unresolved)} texture(s) still unresolved after "
-                    "this run — the export's path check will fail on them",
-                    "warning",
-                    items=[
-                        f"{node}:  {self._stored_path(node) or '<no path>'}"
-                        for node in still_unresolved
-                    ],
-                )
-        return True
-
-    def _plan_remap(self, node_names, dest_dir, basenames):
-        """``[(node, stored path, final path)]`` for every node a relocation repaths.
-
-        The ONE place a destination path is derived, so a preview cannot
-        promise a path the committed pass would not write.
-
-        The path is flattened deliberately: the files land in ``dest_dir``'s
-        root, and ``MatUtils.remap_texture_paths`` would try to preserve the
-        original relative depth, which no longer corresponds to disk layout.
-
-        *basenames* maps each landed file's lower-case basename to its name
-        as it landed. The search matches names case-insensitively, so a
-        stored ``WOOD.png`` can land as ``Wood.png``; the node takes the
-        landed spelling, the only one a case-sensitive filesystem opens.
-        """
-        workspace, source_images = self._project_roots()
-        plan = []
-        for node_name in node_names:
-            try:
-                path = cmds.getAttr(f"{node_name}.fileTextureName")
-            except Exception:
-                continue
-            name = os.path.basename(path or "")
-            if not name or not self._landed(name, basenames):
-                continue
-            final_path = MatUtils.to_project_relative(
-                os.path.join(dest_dir, basenames.get(name.lower(), name)),
-                workspace,
-                source_images,
-            )
-            plan.append((node_name, path, final_path))
-        return plan
-
-    @staticmethod
-    def _landed(basename: str, landed) -> bool:
-        """Did a file for *basename* land -- literally, or as tiles of its set?
-
-        *landed* holds (as a set, or as a dict's keys) the lower-case
-        basenames of the files copied or already at the destination. A
-        tokened stored name (``rock.<UDIM>.png``) is never among them
-        literally -- its TILES are -- so it is matched as the
-        pattern the token table spells (:meth:`MatUtils.token_wildcard`). A
-        plain membership test left every tiled node unrepathed after its
-        tiles had been copied.
-        """
-        lower = basename.lower()
-        if not MatUtils.has_path_token(lower):
-            return lower in landed
-        import fnmatch
-
-        pattern = MatUtils.token_wildcard(lower, None).lower()
-        return any(fnmatch.fnmatchcase(name, pattern) for name in landed)
-
-    #: Rows of a dry-run listing shown in full before it collapses to a count.
-    #: Long enough to recognise the operation, short enough that the plan
-    #: stays one screenful next to the form that produced it.
-    _PLAN_PREVIEW_ROWS = 12
-
-    def _report_find_and_copy_plan(
-        self,
-        node_names,
-        dest_dir,
-        relocate_mode,
-        in_place,
-        to_relocate,
-        lightmap_plan=None,
-    ):
-        """Report what a live pass WOULD do, having written nothing.
-
-        Every line comes from the same values the commit acts on — the
-        partitioned source lists, :meth:`_plan_remap`, and the lightmap plan
-        the engine's own dry run returned — so this is the plan itself being
-        described, not a second guess at it.
-        """
-        verb = "Move" if relocate_mode == "move" else "Copy"
-        basenames = {
-            os.path.basename(p).lower(): os.path.basename(p)
-            for p in (*in_place, *to_relocate)
-        }
-        remap = self._plan_remap(node_names, dest_dir, basenames)
-        changed = [row for row in remap if row[2] != row[1]]
-        lightmaps_change = bool(
-            lightmap_plan and (lightmap_plan["relocate"] or lightmap_plan["in_place"])
-        )
-
-        if not to_relocate and not changed and not lightmaps_change:
-            self._log(
-                "Dry run — nothing would change: every texture is already at "
-                "the destination and every path already stored in its final "
-                "form.",
-                "warning",
-            )
-            self._report_lightmap_plan(lightmap_plan, dest_dir, verb)
-            return False
-
-        if to_relocate:
-            self._log(
-                f"Dry run — would {verb.lower()} {len(to_relocate)} texture(s) "
-                f"into {dest_dir}"
-                + (f" ({len(in_place)} already there)" if in_place else ""),
-                items=self._plan_lines(
-                    f"{os.path.basename(p)}  ←  {os.path.dirname(p)}"
-                    for p in to_relocate
-                ),
-            )
-        elif in_place:
-            self._log(
-                f"Dry run — all {len(in_place)} texture(s) are already at the "
-                "destination; only the stored paths would change."
-            )
-
-        if changed:
-            self._log(
-                f"Would repath {len(changed)} file node(s)",
-                items=self._plan_lines(
-                    f"{node}:  {old}  →  {new}" for node, old, new in changed
-                ),
-            )
-        unchanged = len(remap) - len(changed)
-        if unchanged:
-            self._log(f"{unchanged} node(s) already point at the destination.")
-
-        self._report_lightmap_plan(lightmap_plan, dest_dir, verb)
-
-        self._log(
-            f"Nothing has been written — press Apply to {verb.lower()} and "
-            "repath exactly this.",
-            "warning",
-        )
-        return True
-
-    # -- lightmaps through Find & Copy ------------------------------------
-    # The engine does the work (LightmapRecords.relocate_lightmaps: search,
-    # copy, repoint the markers, republish the manifest); the panel scopes it
-    # to the captured records and reports through the same pane.
-
-    @staticmethod
-    def _lightmap_objects(lightmaps):
-        """The transforms the records name -- the engine's scope argument."""
-        return list(
-            dict.fromkeys(o for dep in lightmaps for o in (dep.get("objects") or []))
-        )
-
-    @staticmethod
-    def _lightmap_maps(lightmaps):
-        """The file names the records carry -- a relocation's scope: a row IS
-        its file, and the reflection probe's row names no object at all."""
-        return list(dict.fromkeys(dep["map"] for dep in lightmaps))
-
-    def _plan_lightmaps(self, lightmaps, source_dir, dest_dir, relocate_mode):
-        """The engine's dry run over *lightmaps*, or ``None`` when none are in scope."""
-        if not lightmaps:
-            return None
-        try:
-            return self._lightmap_records().relocate_lightmaps(
-                dest_dir,
-                source_dir=source_dir,
-                mode=relocate_mode,
-                maps=self._lightmap_maps(lightmaps),
-                dry_run=True,
-            )
-        except Exception as e:  # noqa: BLE001 — a preview must not raise
-            self._log(f"Lightmaps not planned: {e}", "error")
-            return None
-
-    def _report_lightmap_plan(self, plan, dest_dir, verb) -> None:
-        """The dry-run lines for the lightmaps -- same shape as the texture ones."""
-        if not plan:
-            return
-        if plan["relocate"]:
-            self._log(
-                f"Dry run — would {verb.lower()} {len(plan['relocate'])} "
-                f"lightmap(s) into {dest_dir} and repoint their bake markers"
-                + (
-                    f" ({len(plan['in_place'])} already there)"
-                    if plan["in_place"]
-                    else ""
-                ),
-                items=self._plan_lines(
-                    f"{os.path.basename(src)}  ←  {os.path.dirname(src)}"
-                    for src, _dst in plan["relocate"]
-                ),
-            )
-        elif plan["in_place"]:
-            self._log(
-                f"Dry run — all {len(plan['in_place'])} lightmap(s) are already "
-                "at the destination; only the bake markers would change."
-            )
-        if plan["missing"]:
-            self._log(
-                f"{len(plan['missing'])} lightmap(s) found nowhere — their "
-                "markers would keep pointing at the recorded folder",
-                "warning",
-                items=[
-                    f"{dep['map']}  (recorded in {dep['dir'] or '<no folder>'})"
-                    + (f"  {dep['note']}" if dep.get("note") else "")
-                    for dep in plan["missing"]
-                ],
-            )
-
-    def _relocate_lightmaps(self, lightmaps, source_dir, dest_dir, relocate_mode):
-        """Relocate *lightmaps* for real and report; returns whether any landed."""
-        try:
-            result = self._lightmap_records().relocate_lightmaps(
-                dest_dir,
-                source_dir=source_dir,
-                mode=relocate_mode,
-                maps=self._lightmap_maps(lightmaps),
-            )
-        except Exception as e:  # noqa: BLE001 — the textures already landed
-            self._log(f"Lightmaps not relocated: {e}", "error")
-            return False
-        landed = len(result["copied"]) + len(result["in_place"])
-        if landed:
-            self._log(
-                f"Lightmaps — {len(result['copied'])} relocated, "
-                f"{len(result['in_place'])} already at destination; "
-                f"{result['updated']} bake marker(s) repointed, manifest "
-                "republished.",
-                "success",
-            )
-        failed = len(result["relocate"]) - len(result["copied"])
-        if failed:
-            self._log(
-                f"{failed} lightmap(s) did not copy — see the script editor.",
-                "warning",
-            )
-        if result["missing"]:
-            self._log(
-                f"{len(result['missing'])} lightmap(s) found nowhere — the "
-                "export's path check will fail on them",
-                "warning",
-                items=[
-                    f"{dep['map']}  (recorded in {dep['dir'] or '<no folder>'})"
-                    + (f"  {dep['note']}" if dep.get("note") else "")
-                    for dep in result["missing"]
-                ],
-            )
-        return bool(landed)
-
-    @classmethod
-    def _plan_lines(cls, lines):
-        """*lines* capped at :attr:`_PLAN_PREVIEW_ROWS`, with the remainder counted.
-
-        A truncated listing that does not SAY it was truncated reads as the
-        whole plan, which is the one thing a preview must never do.
-        """
-        listed = list(lines)
-        if len(listed) <= cls._PLAN_PREVIEW_ROWS:
-            return listed
-        hidden = len(listed) - cls._PLAN_PREVIEW_ROWS
-        return listed[: cls._PLAN_PREVIEW_ROWS] + [f"… and {hidden} more"]
-
-    # ------------------------------------------------------------------
-    # Normalize workflow
-    # ------------------------------------------------------------------
-
-    def _normalize_to_relative(
-        self, file_nodes, external_mode: str = "rewrite"
-    ) -> None:
+    def normalize_paths(self, file_nodes, external_mode: str = "rewrite") -> int:
         """Rewrite (selected) paths inside the project to relative.
 
         A thin driver over :meth:`MatUtils.stage_textures_relative`
-        (``scope="project"``) — the same engine behind the Scene Exporter's
-        Convert To Relative Paths task, so the panel and the exporter cannot
-        drift on what "relative" means. This method owns only the UI-mode
-        mapping, the ``_previous_paths`` bookkeeping the table tooltip reads,
-        and the summary line.
+        (``scope="project"``) -- the same engine behind the Scene Exporter's
+        Convert To Relative Paths task, so the editor and the exporter cannot
+        drift on what "relative" means. This method owns only the mode mapping,
+        the :attr:`previous_paths` bookkeeping and the summary line.
 
-        "Inside" means under the project ROOT, not under sourceimages: a
-        texture already in the project is portable where it sits — it needs no
-        copy to become so — and the option-box modes read on "external"
-        textures only. What it is made relative TO is a separate question the
-        converter owns: under sourceimages, relative to that rule (the form
-        Maya keeps across a reload); elsewhere in the project, relative to the
-        root (which Maya expands again on load — portable in the file it was
-        saved into, not beyond it).
+        "Inside" means under the project ROOT, not under sourceimages: a texture
+        already in the project is portable where it sits, and *external_mode*
+        reads on "external" textures only. Under sourceimages a path is made
+        relative to that rule (the form Maya keeps across a reload); elsewhere in
+        the project, relative to the root.
 
         Per node (engine semantics):
-          - already relative → no-op, unless it is in the legacy
-            ``sourceimages/…`` spelling, which is upgraded in place.
-          - absolute inside the project → rewritten relative. UDIM/frame
-            tokens ride the basename and survive (the engine relativizes a
-            token path in place; the old local pass skipped them entirely).
-          - absolute inside the project, file missing → left untouched, same
-            as the external case below. Relativizing it would only spell the
-            breakage differently while reporting it as a rewrite.
-          - absolute outside the project, by mode:
-              external_mode="rewrite" → left untouched.
-              external_mode="copy"    → staged into sourceimages (a token
-                                        set stages every tile), then rebound
-                                        relative.
-              external_mode="move"    → as copy, and the external original
-                                        is removed once staged.
-          - absolute outside the project, file missing → left untouched
-            (Resolve Missing Textures is the command for that case).
+          - already relative -> no-op, unless it is in the legacy
+            ``sourceimages/...`` spelling, which is upgraded in place.
+          - absolute inside the project -> rewritten relative; tokens survive.
+          - absolute inside the project, file missing -> left untouched.
+          - absolute outside the project, by mode: ``"rewrite"`` left untouched;
+            ``"copy"`` staged into sourceimages (a token set stages every tile),
+            then rebound relative; ``"move"`` as copy, the original removed.
+          - absolute outside the project, file missing -> left untouched.
 
-        Collision policy (the engine's): a same-named sourceimages resident
-        is reused only when its CONTENT provably matches (size + partial
-        hash); a different file under the same name is staged alongside it
-        under an ``_N`` index on its base name, loudly — the node is neither
-        rebound to a same-named-but-different texture nor abandoned on its
-        absolute path. (Replaced this method's old size-only proxy, which
-        called any two same-length files "the same file" — the exact
-        wrong-file rebind the check exists to prevent.)
+        Collision policy (the engine's): a same-named sourceimages resident is
+        reused only when its CONTENT provably matches; a different file under
+        that name is staged alongside it under an ``_N`` index, loudly.
+
+        Returns:
+            int: How many paths changed.
         """
-        # Derive valid modes from the combobox items — SSoT for the mode keys.
-        valid_modes = {key for _label, key in self._NORMALIZE_MODE_ITEMS}
-        if external_mode not in valid_modes:
+        if external_mode not in self.NORMALIZE_MODES:
             raise ValueError(
                 f"Unknown external_mode {external_mode!r}; "
-                f"expected one of {sorted(valid_modes)}."
+                f"expected one of {sorted(self.NORMALIZE_MODES)}."
             )
 
         nodes = [str(n) for n in file_nodes]
-        before = {}
-        for node in nodes:
-            try:
-                before[node] = cmds.getAttr(f"{node}.fileTextureName") or ""
-            except Exception:
-                before[node] = ""
+        before = {node: self.stored_path(node) for node in nodes}
 
-        # The engine is ``@CoreUtils.undoable`` — one undo step, no chunk here.
+        # The engine is ``@CoreUtils.undoable`` -- one undo step, no chunk here.
         results = MatUtils.stage_textures_relative(
             nodes,
             external_mode={"rewrite": "skip"}.get(external_mode, external_mode),
             scope="project",
         )
 
-        # Every path command feeds the table tooltip's "Previous:" line.
+        changed = 0
         for node in nodes:
             try:
                 after = cmds.getAttr(f"{node}.fileTextureName") or ""
             except Exception:
                 continue
             if before.get(node) and after != before[node]:
-                self._previous_paths[node] = before[node]
+                self.previous_paths[node] = before[node]
+                changed += 1
 
         rewritten = already_relative = 0
         external_relocated = variant_staged = 0
@@ -3196,12 +624,10 @@ class TexturePathEditorSlots:
                 missing_left += 1
             # Any other skipped:* was already warned about by the engine.
 
-        relocate_label = {
-            "rewrite": "—",
-            "copy": "copied",
-            "move": "moved",
-        }[external_mode]
-        om.MGlobal.displayInfo(
+        relocate_label = {"rewrite": "—", "copy": "copied", "move": "moved"}[
+            external_mode
+        ]
+        self._log(
             f"Normalize Paths — rewritten: {rewritten}; "
             f"already relative: {already_relative}; "
             f"external {relocate_label}: {external_relocated}"
@@ -3209,6 +635,7 @@ class TexturePathEditorSlots:
             + f"; external left as-is: {external_left}; "
             f"missing left as-is: {missing_left}."
         )
+        return changed
 
     # ------------------------------------------------------------------
     # Resolve Missing
@@ -3247,7 +674,8 @@ class TexturePathEditorSlots:
             ]
         raise ValueError(f"Unknown resolve mode: {mode!r}")
 
-    def _texture_aware_strategy(self, index_stems):
+    @staticmethod
+    def _texture_aware_strategy(index_stems):
         """Custom strategy: filter by map type, then fuzzy-match base name.
 
         For a missing ``asset01_..._ao``, this restricts candidates to other
@@ -3305,24 +733,31 @@ class TexturePathEditorSlots:
 
         return texture
 
-    def _resolve_missing_textures(self, modes, file_nodes=None):
-        """Resolve missing textures using the given strategy modes (in cascade order).
+    def resolve_missing_textures(self, modes, file_nodes=None) -> int:
+        """Rebind missing textures to files found under sourceimages.
+
+        The enabled *modes* run as one cascade, safest first (``stem`` exact
+        name, ``texture`` same map type + base name, ``fuzzy`` similar name);
+        the first unique hit wins. A token path is never rebound (this binds ONE
+        file, which would flatten a tile set).
 
         Parameters:
-            modes: List of mode names drawn from ``_RESOLVE_STRATEGY_ORDER``.
-            file_nodes: Optional list of file nodes to restrict to. If None,
-                       processes all ``cmds.ls(type="file")``.
+            modes: Mode names drawn from :attr:`RESOLVE_STRATEGY_ORDER`.
+            file_nodes: The file nodes to restrict to; ``None``: every one.
+
+        Returns:
+            int: How many were rebound.
         """
         if not modes:
             raise ValueError("At least one mode is required.")
-        unknown = set(modes) - set(self._RESOLVE_STRATEGY_ORDER)
+        unknown = set(modes) - set(self.RESOLVE_STRATEGY_ORDER)
         if unknown:
             raise ValueError(f"Unknown resolve mode(s): {sorted(unknown)}")
 
         sourceimages = EnvUtils.get_env_info("sourceimages")
         if not sourceimages or not os.path.isdir(sourceimages):
-            cmds.warning(f"sourceimages directory not found: {sourceimages}")
-            return
+            self._log(f"sourceimages directory not found: {sourceimages}", "warning")
+            return 0
 
         workspace = EnvUtils.get_env_info("workspace") or ""
         if file_nodes is None:
@@ -3331,8 +766,8 @@ class TexturePathEditorSlots:
             # Preserve namespaces; stripping breaks cmds.getAttr/setAttr.
             all_file_nodes = [str(n) for n in file_nodes]
         if not all_file_nodes:
-            cmds.warning("No file nodes to process.")
-            return
+            self._log("No file nodes to process.", "warning")
+            return 0
 
         missing = []
         for node in all_file_nodes:
@@ -3340,11 +775,9 @@ class TexturePathEditorSlots:
                 path = cmds.getAttr(f"{node}.fileTextureName") or ""
             except Exception:
                 continue
-            # A token path is skipped whether or not its tiles are there:
-            # this command rebinds to ONE concrete file, which would flatten a
-            # tile set to a single tile. It used to test the literal
-            # ``"<udim>"``, so every other token spelling fell through to
-            # exactly that.
+            # A token path is skipped whether or not its tiles are there: this
+            # command rebinds to ONE concrete file, which would flatten a tile
+            # set to a single tile.
             if not path or MatUtils.has_path_token(path):
                 continue
             if self._texture_on_disk(
@@ -3356,8 +789,8 @@ class TexturePathEditorSlots:
                 missing.append((node, path, stem))
 
         if not missing:
-            om.MGlobal.displayInfo("No missing textures to resolve.")
-            return
+            self._log("No missing textures to resolve.")
+            return 0
 
         index = []
         # Never into a folder of stale copies (a sync cache, the Recycle Bin,
@@ -3368,12 +801,9 @@ class TexturePathEditorSlots:
                 if stem:
                     index.append((stem.lower(), os.path.join(root, f)))
         if not index:
-            cmds.warning("No files in sourceimages to match against.")
-            return
+            self._log("No files in sourceimages to match against.", "warning")
+            return 0
 
-        to_project_relative = lambda p: MatUtils.to_project_relative(  # noqa: E731
-            p, workspace, sourceimages
-        )
         by_stem = {}
         for stem_key, abs_path in index:
             by_stem.setdefault(stem_key, []).append(abs_path)
@@ -3387,10 +817,9 @@ class TexturePathEditorSlots:
         cmds.undoInfo(openChunk=True, chunkName="Resolve Missing Textures")
         try:
             for node, current_path, stem in missing:
-                stem_lower = stem.lower()
                 match_name, _score, status, strat_name = (
                     FuzzyMatcher.find_with_fallbacks(
-                        stem_lower,
+                        stem.lower(),
                         index_stems,
                         strategies=strategies,
                         score_threshold=0.6,
@@ -3402,8 +831,9 @@ class TexturePathEditorSlots:
                     continue
                 if status == "ambiguous":
                     ambiguous += 1
-                    cmds.warning(
-                        f"{node}: ambiguous {strat_name} match for '{stem}', skipped."
+                    self._log(
+                        f"{node}: ambiguous {strat_name} match for '{stem}', skipped.",
+                        "warning",
                     )
                     continue
                 matches = by_stem.get(match_name) or []
@@ -3412,478 +842,473 @@ class TexturePathEditorSlots:
                     continue
                 if len(matches) > 1:
                     ambiguous += 1
-                    cmds.warning(
-                        f"{node}: '{match_name}' resolves to {len(matches)} files, skipped."
+                    self._log(
+                        f"{node}: '{match_name}' resolves to {len(matches)} files, "
+                        "skipped.",
+                        "warning",
                     )
                     continue
-                final_abs = matches[0]
-                new_path = to_project_relative(final_abs)
+                new_path = MatUtils.to_project_relative(
+                    matches[0], workspace, sourceimages
+                )
                 try:
                     Attributes.set_plug_literal(f"{node}.fileTextureName", new_path)
-                    self._previous_paths[node] = current_path
+                    self.previous_paths[node] = current_path
                     resolved += 1
-                    om.MGlobal.displayInfo(f"{node}: '{current_path}' -> '{new_path}'")
+                    self._log(f"{node}: '{current_path}' -> '{new_path}'")
                 except Exception as e:
-                    cmds.warning(f"{node}: failed to set path: {e}")
+                    self._log(f"{node}: failed to set path: {e}", "warning")
         finally:
             cmds.undoInfo(closeChunk=True)
 
-        om.MGlobal.displayInfo(
+        self._log(
             f"Resolved {resolved}/{len(missing)} missing "
             f"(no match: {no_match}, ambiguous: {ambiguous}); "
             f"strategies: {', '.join(modes)}."
         )
-        self.ui.tbl000.init_slot()
+        return resolved
 
     # ------------------------------------------------------------------
-    # Table refresh / scene callbacks
+    # Find & Copy
     # ------------------------------------------------------------------
 
-    def refresh_texture_table(self):
-        """Manual refresh trigger from the header refresh button."""
-        table = getattr(self.ui, "tbl000", None)
-        if not table:
-            return
-        table.init_slot()
+    def _partition_resolved_sources(self, node_names):
+        """Split nodes into ``({basename: source path}, [unresolved nodes])``.
 
-    def _setup_scene_change_callback(self, widget):
-        """Subscribe to scene-change events via ScriptJobManager."""
-        mgr = ScriptJobManager.instance()
-        for event, visible_only in (
-            ("SceneOpened", False),
-            ("NewSceneOpened", False),
-            ("SceneImported", False),
-            ("workspaceChanged", False),
-            # An undone rename or repath: the rows would name what is gone.
-            # Only while shown -- every undo in the scene fires these.
-            ("Undo", True),
-            ("Redo", True),
-        ):
-            mgr.subscribe(
-                event,
-                lambda w=widget, v=visible_only: self._on_scene_change(w, v),
-                owner=self,
-            )
-        mgr.connect_cleanup(widget, owner=self)
+        A node whose stored path resolves to a file on disk already *is* its own
+        source: a recursive walk can only rediscover the same bytes. Only what
+        does not resolve has anything to find.
 
-    def _on_scene_change(self, widget, visible_only: bool = False):
-        # One refresh per idle. Pending is "shown" (an undo: skips a hidden
-        # table) or "always" (a scene event) -- and a scene event outranks a
-        # waiting undo rather than being swallowed by it.
-        pending = self._refresh_pending
-        self._refresh_pending = (
-            "shown" if visible_only and pending in (False, "shown") else "always"
-        )
-        if pending:
-            return
-
-        def do_refresh():
-            mode, self._refresh_pending = self._refresh_pending, False
-            try:
-                try:
-                    visible = widget.isVisible()
-                except RuntimeError:
-                    # Widget has been deleted (C++ object gone).
-                    self.cleanup_scene_callbacks()
-                    return
-                if mode == "shown" and not visible:
-                    return
-                self._previous_paths.clear()
-                if mode == "always":
-                    print(
-                        "TexturePathEditor: Scene changed, refreshing texture "
-                        "path table..."
-                    )
-                self._refresh_table_content(widget)
-            except Exception as e:
-                print(f"TexturePathEditor: Error refreshing table on scene change: {e}")
-
-        cmds.evalDeferred(do_refresh)
-
-    def _refresh_table_content(self, widget):
-        """Refresh the table content with current scene data."""
-        cmds.waitCursor(state=True)
-        try:
-            widget.setUpdatesEnabled(False)
-            widget.clear()
-            # Stored .ftn verbatim (no relativized display): Make Paths
-            # Absolute / Select Absolute Paths and cell-edit write-back all
-            # depend on the cell showing the path the node actually holds.
-            rows = MatUtils.get_file_nodes(
-                return_type="shaderName|path|fileNodeName",
-                exc_classification=self._exclude_arnold_pattern(),
-            )
-            # Lightmap rows: the maps the bake markers name. Keyed by the
-            # path text (the one column every selection payload carries), so
-            # the row helpers can tell them from file-node rows; an EMPTY
-            # UserRole on the name cells keeps the file-node commands from
-            # mistaking the object label for a node.
-            self._lightmap_rows = {
-                self._lightmap_row_path(dep): dep
-                for dep in self._lightmap_dependencies()
-            }
-            if not rows and not self._lightmap_rows:
-                rows = [("", "", "No file nodes found")]
-
-            # The fact columns start empty: _fill_info_columns reads only the
-            # ones showing.
-            facts = [""] * len(self._INFO_COLUMNS)
-            formatted = []
-            for shader_name, path, file_node_name in rows:
-                # Stash node names in UserRole so handle_cell_edit can recover
-                # the old name after editing.
-                formatted.append(
-                    [
-                        (shader_name, shader_name),
-                        path,
-                        (file_node_name, file_node_name),
-                        *facts,
-                    ]
-                )
-            for path, dep in self._lightmap_rows.items():
-                shader_label, node_label = self._lightmap_row_labels(dep)
-                # The path cell keeps its path in UserRole too: an edit
-                # replaces the text, and the cell-edit handler needs the row's
-                # identity to reach the record it repoints.
-                formatted.append(
-                    [
-                        (shader_label, ""),
-                        (path, path),
-                        (node_label, ""),
-                        *facts,
-                    ]
-                )
-
-            widget.add(formatted, headers=list(self._HEADERS))
-
-            header = widget.horizontalHeader()
-            header.setSectionsMovable(False)
-            QHeaderView = self.sb.QtWidgets.QHeaderView
-            for column in range(len(self._HEADERS)):
-                header.setSectionResizeMode(
-                    column,
-                    QHeaderView.Stretch if column == 1 else QHeaderView.Interactive,
-                )
-            widget.setColumnWidth(0, 200)
-            widget.setColumnWidth(2, 200)
-            for column in self._INFO_COLUMNS:
-                widget.setColumnWidth(column, 90)
-            # A rebuild resets the columns; the user's layout goes back on.
-            widget.restore_column_state()
-
-            self.setup_formatting(widget)
-            widget.apply_formatting()
-            self._apply_path_truncation(widget)
-            self._fill_info_columns(widget)
-        finally:
-            widget.setUpdatesEnabled(True)
-            cmds.waitCursor(state=False)
-
-        # After apply_formatting — that pass is what fills the set.
-        over_long = getattr(self, "_over_long_paths", None)
-        if over_long:
-            cmds.warning(
-                f"Texture Path Editor: {len(over_long)} path(s) exceed this OS's "
-                f"{FileUtils.path_length_limit()}-character path limit."
-            )
-
-        if self._footer_controller:
-            self._footer_controller.update()
-
-    def _warn_path_length_enabled(self) -> bool:
-        """State of the header's "Warn On Over-Long Paths" toggle.
-
-        Defaults to True when the header menu hasn't been built yet — an
-        early refresh should warn, not silently skip the check (same
-        defensive lookup as ``_truncate_paths_enabled``, opposite default
-        because this one is on by default).
+        A token path (``<UDIM>``, ``<uvtile>``, ``<f>``...) is never a literal
+        file, so those nodes always land in ``unresolved`` and go through the
+        search, which expands the token (``MatUtils.has_path_token`` is the one
+        classifier).
         """
-        return self._menu_flag(self._header_menu(), "chk_warn_path_length", True)
-
-    def _truncate_paths_enabled(self) -> bool:
-        """State of the header's "Truncate Texture Paths" toggle.
-
-        Returns False when the header menu hasn't been built yet, so an early
-        refresh is safe (same defensive lookup as ``_exclude_arnold_pattern``).
-        """
-        return self._menu_flag(self._header_menu(), "chk_truncate_paths", False)
-
-    def _truncate_length(self) -> int:
-        """The Truncate Texture Paths option box's length; the default until
-        the header menu is built."""
-        spin = getattr(
-            self._option_menu("chk_truncate_paths"), "spn_truncate_length", None
-        )
-        return int(spin.value()) if spin is not None else self._PATH_TRUNCATE_LENGTH
-
-    def _apply_path_truncation(self, widget=None):
-        """Push the Truncate Texture Paths toggle onto the path column.
-
-        Display-only: ``set_column_truncation`` shortens what the delegate
-        paints, never the item's data — the cell still holds (and edits back)
-        the full path, and ``setup_formatting``'s tooltip still resolves it.
-        Re-applied on every table rebuild so a refresh can't drop it.
-        """
-        widget = widget if widget is not None else getattr(self.ui, "tbl000", None)
-        if widget is None:  # toggled before the table exists
-            return
-        widget.set_column_truncation(
-            1,
-            length=(
-                self._truncate_length() if self._truncate_paths_enabled() else None
-            ),
-            mode="path",
-            # An ellipsis, not the primitive's default "..", which in a path
-            # column reads as a parent-directory segment.
-            insert="…",
-            head=self._PATH_TRUNCATE_HEAD,
-        )
-
-    def cleanup_scene_callbacks(self):
-        """Clean up scene-change subscriptions via ScriptJobManager."""
-        ScriptJobManager.instance().unsubscribe_all(self)
-
-    def setup_formatting(self, widget):
-        # Resolved HERE, on the main thread: ``resolve_and_check`` below runs
-        # on a thread pool, and ``cmds`` must not be touched from one.
-        source_root, source_images = self._project_roots()
-        path_cache = {}
-        unique_paths = set()
-        for row in range(widget.rowCount()):
-            item = widget.item(row, 1)
-            if item:
-                path = str(item.text()).strip()
-                if path:
-                    unique_paths.add(path)
-
-        def resolve_and_check(path):
-            abs_path = MatUtils.to_absolute(path, source_root, source_images)
-            return path, self._texture_on_disk(abs_path), abs_path
-
-        if len(unique_paths) > 50:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = {
-                    executor.submit(resolve_and_check, p): p for p in unique_paths
-                }
-                for future in as_completed(futures):
-                    try:
-                        path, exists, abs_path = future.result(timeout=5)
-                        path_cache[path] = (exists, abs_path)
-                    except Exception:
-                        path = futures[future]
-                        path_cache[path] = (
-                            False,
-                            MatUtils.to_absolute(path, source_root, source_images),
-                        )
-        else:
-            for path in unique_paths:
-                _, exists, abs_path = resolve_and_check(path)
-                path_cache[path] = (exists, abs_path)
-
-        warn_long = self._warn_path_length_enabled()
-        length_limit = FileUtils.path_length_limit()
-        # Reset per rebuild; the formatter fills it as it paints, so the caller
-        # reads it only after apply_formatting.
-        self._over_long_paths = set()
-
-        def format_if_invalid(item, value, row, col, *_):
-            path = str(value).strip()
-            dep = self._lightmap_rows.get(path)
-            if dep is not None:
-                # A lightmap row carries its own verdict: the engine already
-                # resolved it the way the export will. Red = nowhere; amber =
-                # found, but not where the marker says (stale hint -- the
-                # export ships it and Auto-Resolve / Find & Copy heal it).
-                found = dep.get("path")
-                stale = bool(found) and dep.get("found_by") != "hint"
-                widget.format_item(
-                    item,
-                    key="invalid" if not found else ("warning" if stale else "reset"),
-                )
-                objects = ", ".join(o.rsplit("|", 1)[-1] for o in dep["objects"])
-                if not found:
-                    line = f"Missing lightmap:\n{path}"
-                    if dep.get("note"):
-                        line += f"\n{dep['note']}"
-                elif stale:
-                    line = f"Recorded folder no longer holds it; found at:\n{found}"
-                else:
-                    line = found
-                item.setToolTip(
-                    f"{line}\n\nBake marker on {len(dep['objects'])} object(s): "
-                    f"{objects}"
-                )
-                return
-            if path in path_cache:
-                exists, abs_path = path_cache[path]
+        workspace, source_images = self._project_roots()
+        resolved = {}
+        unresolved = []
+        for node in node_names:
+            path = self.stored_path(node)
+            abs_path = (
+                MatUtils.to_absolute(path, workspace, source_images) if path else ""
+            )
+            if (
+                abs_path
+                and not MatUtils.has_path_token(abs_path)
+                and os.path.isfile(abs_path)
+            ):
+                resolved.setdefault(os.path.basename(abs_path).lower(), abs_path)
             else:
-                abs_path = MatUtils.to_absolute(path, source_root, source_images)
-                exists = self._texture_on_disk(abs_path)
-                path_cache[path] = (exists, abs_path)
-            # A missing file outranks an over-long one: it's the harder failure,
-            # and an over-long path is usually WHY it went missing.
-            over_long = warn_long and len(abs_path) > length_limit
-            if over_long:
-                self._over_long_paths.add(path)
-            widget.format_item(
-                item,
-                key="invalid" if not exists else ("warning" if over_long else "reset"),
-            )
-            tooltip_lines = [abs_path if exists else f"Missing file:\n{abs_path}"]
-            if over_long:
-                tooltip_lines.append(
-                    f"Path is {len(abs_path)} characters — over this OS's "
-                    f"{length_limit}-character limit."
+                unresolved.append(node)
+        return resolved, unresolved
+
+    def unresolved_file_nodes(self, file_nodes):
+        """The nodes whose stored path does not resolve -- what a Find & Copy
+        search folder is for. Re-read on every call: a Resolve Missing pass since
+        must not still count the textures it fixed."""
+        return self._partition_resolved_sources([str(n) for n in file_nodes])[1]
+
+    def find_and_copy_textures(
+        self, file_nodes, answers, lightmaps=(), dry_run=False, progress=None
+    ) -> bool:
+        """Collect sources, relocate them into one directory, repath the nodes.
+
+        The answers arrive as a plain dict -- from a panel, from a test, from
+        anything that can name the values -- so the work is reachable and
+        checkable without a window in front of it. A source row with no folder
+        in it skips the unresolved nodes and relocates the rest: with 48 of 50
+        paths valid, those 48 must not be lost to the two that are broken.
+
+        *dry_run* reports the same decision without acting on it: the search
+        still runs (reading the disk is the only way to know what would move),
+        but no folder is created, no file is relocated and no plug is written.
+        Both passes derive the destination paths through the one
+        :meth:`_plan_remap` call, so a preview cannot promise a path the commit
+        would not write.
+
+        Parameters:
+            file_nodes: The nodes to relocate textures for.
+            answers: ``source_dir``, ``dest_dir``, ``mode`` (``"Copy"`` /
+                ``"Move"``, any case).
+            lightmaps: The lightmap dependency records in scope
+                (:meth:`lightmap_dependencies`): relocated after the textures,
+                by the same folders, their bake markers repointed.
+            dry_run: Report the plan; change nothing.
+            progress: ``progress(text)`` -> a context manager yielding a
+                ``callback(done, total)`` for the search and the copy; ``None``:
+                no progress.
+
+        Returns:
+            bool: whether there was anything to do -- the signal a panel's Apply
+            button is armed from, so a preview that found nothing offers nothing.
+        """
+        node_names = [str(n) for n in file_nodes]
+        source_dir = answers.get("source_dir") or ""
+        dest_dir = answers.get("dest_dir") or ""
+        # Normalized HERE: a mode read straight off a combo ("Copy" / "Move")
+        # has to mean the same thing on every path in.
+        relocate_mode = (
+            "move" if str(answers.get("mode", "")).lower() == "move" else "copy"
+        )
+        lightmaps = list(lightmaps or [])
+        resolved, unresolved = self._partition_resolved_sources(node_names)
+
+        found_textures = []
+        if unresolved and source_dir:
+            # find_texture_files ticks per directory so a marquee advances
+            # during the walk.
+            with self._progress(progress, f"Searching {source_dir}…") as tick:
+                found_textures = MatUtils.find_texture_files(
+                    file_nodes=unresolved,
+                    source_dir=source_dir,
+                    recursive=True,
+                    progress_callback=tick,
                 )
-            fn_item = widget.item(row, 2)
-            fn_name = str(fn_item.text()).strip() if fn_item else ""
-            previous = self._previous_paths.get(fn_name) if fn_name else None
-            if previous and previous != path:
-                tooltip_lines.append(f"Previous: {previous}")
-            item.setToolTip("\n\n".join(tooltip_lines))
-
-        widget.set_column_formatter(1, format_if_invalid)
-
-    # ------------------------------------------------------------------
-    # Context resolution helpers
-    # ------------------------------------------------------------------
-
-    def _file_nodes_from_selection(self, selection):
-        contexts = self._get_selected_contexts(selection)
-        if not contexts:
-            return []
-        nodes = []
-        for ctx in contexts:
-            nodes.extend(ctx.get("file_nodes") or [])
-        return list(dict.fromkeys(nodes))
-
-    # Path primitives: ``MatUtils.to_absolute`` / ``MatUtils.to_project_relative``
-    # (promoted from this class 2026-08-20 — the Scene Exporter's relative-path
-    # task needed the same rule). They own WHICH relative form is emitted and
-    # the order it resolves in; both were rebuilt 2026-08-25 around the only
-    # form Maya keeps across a scene reload.
-
-    def _resolve_context(self, shader_name, file_node_data):
-        shader_name = str(shader_name).strip() if shader_name else ""
-        shader_node = shader_name if shader_name else None
-
-        if isinstance(file_node_data, (list, tuple)):
-            file_node_data = next(
-                (v for v in file_node_data if v and cmds.objExists(str(v))),
-                None,
+        elif unresolved:
+            self._log(
+                f"No search folder — skipping {len(unresolved)} unresolved "
+                f"texture(s); continuing with {len(resolved)} valid path(s)."
             )
 
-        material_file_nodes = []
-        if file_node_data:
-            material_file_nodes = [file_node_data]
-        elif shader_node:
-            # listHistory directly on the shader is much faster than
-            # rebuilding the entire scene-wide mapping via get_file_nodes.
+        if unresolved and source_dir:
+            # Name what the search did NOT find, by node: a run that found 46 of
+            # 48 read as a success, and the export then failed on the two.
+            found_names = {os.path.basename(p).lower() for p in found_textures}
+            not_found = [
+                node
+                for node in unresolved
+                if not self._landed(
+                    os.path.basename(self.stored_path(node)), found_names
+                )
+            ]
+            if not_found:
+                self._log(
+                    f"{len(not_found)} of {len(unresolved)} unresolved "
+                    f"texture(s) not found under {source_dir} — their file "
+                    "nodes keep their current path",
+                    "warning",
+                    items=[
+                        f"{node}:  "
+                        f"{os.path.basename(self.stored_path(node)) or '<no path>'}"
+                        for node in not_found
+                    ],
+                )
+
+        if not resolved and not found_textures and not lightmaps:
+            self._log("No textures found.", "warning")
+            return False
+
+        # Dedup by basename, newest mtime wins: walks can return several matches
+        # per name (versioned copies, sync-client conflict copies), and two
+        # workers racing on one destination deadlock against a sync client. A
+        # valid path outranks every walk hit of that name.
+        by_basename = {}
+        for fpath in found_textures:
+            bn = os.path.basename(fpath).lower()
+            if bn in resolved:
+                continue
             try:
-                history = (
-                    cmds.ls(cmds.listHistory(shader_node) or [], type="file") or []
-                )
-                material_file_nodes = list(dict.fromkeys(history))
-            except Exception:
-                material_file_nodes = []
+                mtime = os.path.getmtime(fpath)
+            except OSError:
+                mtime = 0.0
+            existing = by_basename.get(bn)
+            if existing is None or mtime > existing[0]:
+                by_basename[bn] = (mtime, fpath)
+        if found_textures and len(by_basename) < len(found_textures):
+            self._log(
+                f"{len(found_textures)} candidates found, deduped to "
+                f"{len(by_basename)} unique basenames (newest wins)."
+            )
+        deduped = list(resolved.values()) + [v[1] for v in by_basename.values()]
 
-        return {
-            "shader_name": shader_name,
-            "shader_node": shader_node,
-            "file_node": file_node_data,
-            "file_nodes": material_file_nodes,
+        # Created if missing: a folder that does not exist yet is a normal
+        # answer to "put them here".
+        if not dry_run:
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except OSError as e:
+                self._log(f"Cannot create '{dest_dir}': {e}", "error")
+                return False
+
+        # Sources already in the destination need no file op -- a Move would be
+        # a self-copy, which shutil rejects -- and skip straight to the repath.
+        dest_key = os.path.normcase(os.path.abspath(dest_dir))
+        in_place, to_relocate = [], []
+        for src in deduped:
+            same_dir = (
+                os.path.normcase(os.path.dirname(os.path.abspath(src))) == dest_key
+            )
+            (in_place if same_dir else to_relocate).append(src)
+
+        if dry_run:
+            return self._report_find_and_copy_plan(
+                node_names,
+                dest_dir,
+                relocate_mode,
+                in_place,
+                to_relocate,
+                lightmap_plan=self._plan_lightmaps(
+                    lightmaps, source_dir, dest_dir, relocate_mode
+                ),
+            )
+
+        copied = []
+        if to_relocate:
+            relocate_verb = "Moving" if relocate_mode == "move" else "Copying"
+            with self._progress(progress, f"{relocate_verb} textures…") as tick:
+                copied = MatUtils.move_texture_files(
+                    found_files=to_relocate,
+                    new_dir=dest_dir,
+                    delete_old=(relocate_mode == "move"),
+                    progress_callback=tick,
+                )
+            if not copied and not in_place and not lightmaps:
+                self._log(f"No textures {relocate_verb.lower()}.", "warning")
+                return False
+
+        if deduped:
+            self._log(
+                f"Find & {relocate_mode.title()} — sources: {len(resolved)} from "
+                f"valid path(s), {len(by_basename)} found by search; "
+                f"{len(copied)} relocated, {len(in_place)} already at destination."
+            )
+
+        landed = [dst for _src, dst in copied] + list(in_place)
+        copied_basenames = {
+            os.path.basename(p).lower(): os.path.basename(p) for p in landed
         }
+        remap = self._plan_remap(node_names, dest_dir, copied_basenames)
 
-    def _get_selected_contexts(
+        if remap:
+            cmds.undoInfo(openChunk=True, chunkName="Remap Found Textures")
+            try:
+                count = 0
+                unchanged = 0
+                for node_name, path, final_path in remap:
+                    if final_path == path:
+                        # Already the stored form -- rewriting it would dirty
+                        # every plug, reload every texture and report them all
+                        # as remapped.
+                        unchanged += 1
+                        continue
+                    Attributes.set_plug_literal(
+                        f"{node_name}.fileTextureName", final_path
+                    )
+                    self.previous_paths[node_name] = path
+                    count += 1
+                self._log(
+                    f"Remapped {count} file nodes.", "success" if count else "info"
+                )
+                if unchanged:
+                    self._log(f"{unchanged} already pointed at the destination.")
+            finally:
+                cmds.undoInfo(closeChunk=True)
+        elif deduped:
+            self._log("No file nodes matched the copied textures.", "warning")
+
+        if lightmaps:
+            self._relocate_lightmaps(lightmaps, source_dir, dest_dir, relocate_mode)
+
+        # The honest close: what is STILL broken after this run, by node,
+        # re-partitioned from the live plugs.
+        if node_names:
+            _still_ok, still_unresolved = self._partition_resolved_sources(node_names)
+            if still_unresolved:
+                self._log(
+                    f"{len(still_unresolved)} texture(s) still unresolved after "
+                    "this run — the export's path check will fail on them",
+                    "warning",
+                    items=[
+                        f"{node}:  {self.stored_path(node) or '<no path>'}"
+                        for node in still_unresolved
+                    ],
+                )
+        return True
+
+    @staticmethod
+    def _progress(progress, text):
+        """``progress(text)``, or a context yielding no callback when there is none."""
+        if progress is not None:
+            return progress(text)
+        import contextlib
+
+        return contextlib.nullcontext(None)
+
+    def _plan_remap(self, node_names, dest_dir, basenames):
+        """``[(node, stored path, final path)]`` for every node a relocation repaths.
+
+        The ONE place a destination path is derived, so a preview cannot promise
+        a path the committed pass would not write. Flattened deliberately: the
+        files land in *dest_dir*'s root.
+
+        *basenames* maps each landed file's lower-case basename to its name as
+        it landed. The search matches names case-insensitively, so a stored
+        ``WOOD.png`` can land as ``Wood.png``; the node takes the landed spelling,
+        the only one a case-sensitive filesystem opens.
+        """
+        workspace, source_images = self._project_roots()
+        plan = []
+        for node_name in node_names:
+            try:
+                path = cmds.getAttr(f"{node_name}.fileTextureName")
+            except Exception:
+                continue
+            name = os.path.basename(path or "")
+            if not name or not self._landed(name, basenames):
+                continue
+            final_path = MatUtils.to_project_relative(
+                os.path.join(dest_dir, basenames.get(name.lower(), name)),
+                workspace,
+                source_images,
+            )
+            plan.append((node_name, path, final_path))
+        return plan
+
+    @staticmethod
+    def _landed(basename: str, landed) -> bool:
+        """Did a file for *basename* land -- literally, or as tiles of its set?
+
+        *landed* holds the lower-case basenames of the files copied or already
+        at the destination. A tokened stored name (``rock.<UDIM>.png``) is never
+        among them literally -- its TILES are -- so it is matched as the pattern
+        the token table spells (:meth:`MatUtils.token_wildcard`).
+        """
+        lower = basename.lower()
+        if not MatUtils.has_path_token(lower):
+            return lower in landed
+        import fnmatch
+
+        pattern = MatUtils.token_wildcard(lower, None).lower()
+        return any(fnmatch.fnmatchcase(name, pattern) for name in landed)
+
+    def _report_find_and_copy_plan(
         self,
-        selection=None,
-        require_file_nodes: bool = True,
-        warn_on_empty: bool = False,
+        node_names,
+        dest_dir,
+        relocate_mode,
+        in_place,
+        to_relocate,
+        lightmap_plan=None,
     ):
-        table = getattr(self.ui, "tbl000", None)
-        if table is None:
-            return []
+        """Report what a live pass WOULD do, having written nothing.
 
-        if selection is None:
-            selection = table.get_selection(
-                columns=self._ROW_SELECTION_COLUMNS,
-                include_current=True,
+        Every line comes from the same values the commit acts on -- the
+        partitioned source lists, :meth:`_plan_remap`, and the lightmap plan the
+        engine's own dry run returned.
+        """
+        verb = "Move" if relocate_mode == "move" else "Copy"
+        basenames = {
+            os.path.basename(p).lower(): os.path.basename(p)
+            for p in (*in_place, *to_relocate)
+        }
+        remap = self._plan_remap(node_names, dest_dir, basenames)
+        changed = [row for row in remap if row[2] != row[1]]
+        lightmaps_change = bool(
+            lightmap_plan and (lightmap_plan["relocate"] or lightmap_plan["in_place"])
+        )
+
+        if not to_relocate and not changed and not lightmaps_change:
+            self._log(
+                "Dry run — nothing would change: every texture is already at "
+                "the destination and every path already stored in its final form.",
+                "warning",
+            )
+            self._report_lightmap_plan(lightmap_plan, dest_dir, verb)
+            return False
+
+        if to_relocate:
+            self._log(
+                f"Dry run — would {verb.lower()} {len(to_relocate)} texture(s) "
+                f"into {dest_dir}"
+                + (f" ({len(in_place)} already there)" if in_place else ""),
+                items=self._plan_lines(
+                    f"{os.path.basename(p)}  ←  {os.path.dirname(p)}"
+                    for p in to_relocate
+                ),
+            )
+        elif in_place:
+            self._log(
+                f"Dry run — all {len(in_place)} texture(s) are already at the "
+                "destination; only the stored paths would change."
             )
 
-        if not selection:
-            if warn_on_empty:
-                cmds.warning("No row selected.")
-            return []
+        if changed:
+            self._log(
+                f"Would repath {len(changed)} file node(s)",
+                items=self._plan_lines(
+                    f"{node}:  {old}  →  {new}" for node, old, new in changed
+                ),
+            )
+        unchanged = len(remap) - len(changed)
+        if unchanged:
+            self._log(f"{unchanged} node(s) already point at the destination.")
 
-        contexts = []
-        for entry in selection:
-            # A lightmap row: no shader, no file node -- the record itself is
-            # the context. Commands that require file nodes skip it (and say
-            # so through the existing "no valid file nodes" path).
-            path_value = str(self._selection_value(entry, "path") or "").strip()
-            lightmap = self._lightmap_rows.get(path_value)
-            if lightmap is not None:
-                if require_file_nodes:
-                    continue
-                contexts.append(
-                    {
-                        "shader_name": "",
-                        "shader_node": None,
-                        "file_node": None,
-                        "file_nodes": [],
-                        "lightmap": lightmap,
-                    }
-                )
-                continue
-            shader_value = self._selection_value(entry, "shader")
-            file_node_value = self._selection_value(entry, "file_node")
-            context = self._resolve_context(shader_value, file_node_value)
-            if require_file_nodes and not context["file_nodes"]:
-                continue
-            contexts.append(context)
+        self._report_lightmap_plan(lightmap_plan, dest_dir, verb)
 
-        if require_file_nodes and not contexts:
-            if warn_on_empty:
-                cmds.warning("No valid file nodes found in the selected row(s).")
-            return []
-        return contexts
+        self._log(
+            f"Nothing has been written — press Apply to {verb.lower()} and "
+            "repath exactly this.",
+            "warning",
+        )
+        return True
 
-    def _selection_value(self, entry, key: str):
-        # A row object carries its cells in a ``values`` DICT; a plain dict's
-        # ``values`` is the builtin method, so probe it by shape, not by name
-        # -- otherwise a dict entry raised AttributeError here and the two
-        # dict branches below were unreachable.
-        values = getattr(entry, "values", None)
-        if isinstance(values, dict):
-            return values.get(key)
-        if hasattr(entry, "get"):
-            try:
-                value = entry.get(key)
-                if value is not None:
-                    return value
-            except TypeError:
-                pass
-        column = self._ROW_SELECTION_COLUMNS.get(key)
-        if column is not None and isinstance(entry, dict):
-            return entry.get(column)
-        return None
+    @classmethod
+    def _plan_lines(cls, lines):
+        """*lines* capped at :attr:`_PLAN_PREVIEW_ROWS`, with the remainder counted.
+
+        A truncated listing that does not SAY it was truncated reads as the whole
+        plan, which is the one thing a preview must never do.
+        """
+        listed = list(lines)
+        if len(listed) <= cls._PLAN_PREVIEW_ROWS:
+            return listed
+        hidden = len(listed) - cls._PLAN_PREVIEW_ROWS
+        return listed[: cls._PLAN_PREVIEW_ROWS] + [f"… and {hidden} more"]
 
     # ------------------------------------------------------------------
-    # Cell editing
+    # Repath one node / a typed path
     # ------------------------------------------------------------------
 
-    def _is_file_rename(self, stored: str, typed: str) -> bool:
+    def set_texture_path(self, file_node, path: str, relative: bool = False) -> str:
+        """Point *file_node* at *path* -- Browse for File, or a typed path.
+
+        Parameters:
+            file_node: The node to repath.
+            path: The new path.
+            relative: Store *path* in its project-relative form when it has one
+                (a picked file); ``False`` stores it as given (a typed path).
+
+        Returns:
+            str: The path now stored.
+
+        Raises:
+            ValueError: The node is gone.
+            RuntimeError: The plug refused the path.
+        """
+        if not self.node_exists(file_node):
+            raise ValueError(f"File node '{file_node}' no longer exists.")
+        current = self.stored_path(file_node)
+        new_path = MatUtils.to_project_relative(path) if relative else path
+        with CoreUtils.undo_chunk("Set Texture Path"):
+            Attributes.set_plug_literal(f"{file_node}.fileTextureName", new_path)
+        if current and current != new_path:
+            self.previous_paths[str(file_node)] = current
+        self._log(f"{file_node}: '{current}' -> '{new_path}'")
+        return new_path
+
+    def is_file_rename(self, stored: str, typed: str, file_node=None) -> bool:
         """Whether a typed path renames *stored*'s file rather than repointing.
 
         Same folder, another name, the old file on disk and the new one not:
         there is nothing to point at, so the edit means "call it this". A typed
-        path naming a file that exists stays a repoint, and so does an edit of
-        a file outside the scene's project (``DataNodes.scene_project_root``,
-        the boundary Keep Names In Sync keeps) -- another project may read it,
-        so a path edit must not rename a shared library texture; the warning
-        says so. Rename File, which asks for the rename, still renames it.
+        path naming a file that exists stays a repoint, and so does an edit of a
+        file outside the scene's project (``DataNodes.scene_project_root``, the
+        boundary Keep Names In Sync keeps) -- another project may read it, so a
+        path edit must not rename a shared library texture; the warning says so.
+        Rename File, which asks for the rename, still renames it.
+
+        *file_node* is accepted for the hosts' one signature (blendertk resolves
+        a linked image against its library).
         """
         if not stored or not typed:
             return False
@@ -3900,170 +1325,554 @@ class TexturePathEditorSlots:
         project = DataNodes.scene_project_root()
         if project and FileUtils.is_under(os.path.abspath(old), project):
             return True
-        cmds.warning(
-            f"{os.path.basename(old)} is outside this project -- another may "
-            "read it, so a typed path does not rename it (Rename File does)."
+        self._log(
+            f"{os.path.basename(old)} is outside this project -- another may read "
+            "it, so a typed path does not rename it (Rename File does).",
+            "warning",
         )
         return False
 
-    def handle_cell_edit(self, row: int, col: int):
-        if col in self._INFO_COLUMNS:  # facts about the file, not edits
-            return
-        tbl = self.ui.tbl000
-        item = tbl.item(row, col)
-        if not item:
-            return
-        new_value = item.text()
-        UserRole = self.sb.QtCore.Qt.UserRole
+    def apply_path_edit(self, file_node, typed: str, shader=None, sync=None) -> str:
+        """A path typed into *file_node*'s row: rename its file, or repoint it.
 
-        def _restore_text(target_item, original):
-            tbl.blockSignals(True)
-            try:
-                target_item.setText(original)
-            finally:
-                tbl.blockSignals(False)
+        Only the file name changed, to one nothing is at (:meth:`is_file_rename`):
+        the file is renamed and every reader follows (:meth:`rename_texture`;
+        with *sync*, Keep Names In Sync follows *shader*, the row's). Anything
+        else repoints the node at the typed path, as typed.
 
-        def _rename_node(label):
-            old_name = item.data(UserRole)
-            if not old_name:
-                _restore_text(item, new_value)
-                return
-            if new_value == old_name:
-                return
-            if not cmds.objExists(old_name):
-                cmds.warning(f"{label} '{old_name}' no longer exists; cannot rename.")
-                _restore_text(item, old_name)
-                return
-            try:
-                actual = cmds.rename(old_name, new_value)
-            except Exception as e:
-                cmds.warning(f"Failed to rename {label}: {e}")
-                _restore_text(item, old_name)
-                return
-            item.setData(UserRole, actual)
-            if actual != new_value:
-                _restore_text(item, actual)
-            om.MGlobal.displayInfo(f"Renamed {label} '{old_name}' -> '{actual}'")
+        Returns:
+            str: ``"renamed"`` or ``"repathed"``.
+
+        Raises:
+            ValueError, OSError, RuntimeError: The rename or the repath was
+                refused; nothing changed.
+        """
+        typed = str(typed or "").strip()
+        stored = self.stored_path(file_node)
+        if self.is_file_rename(stored, typed, file_node):
+            name = os.path.basename(typed.replace("\\", "/"))
+            self.rename_texture(
+                {"file_node": file_node, "shader_node": shader}, name, sync=sync
+            )
+            return "renamed"
+        self.set_texture_path(file_node, typed)
+        return "repathed"
+
+    # ------------------------------------------------------------------
+    # Renaming -- a texture file, nodes, and the names kept in sync
+    # ------------------------------------------------------------------
+
+    def rename_texture(self, context, new_name: str, sync=None) -> bool:
+        """Rename the texture file *context* names to *new_name*.
+
+        With *sync* -- Keep Names In Sync's ``(shader affix, file node affix)``,
+        each ``(prefix, suffix)`` -- a new base name for a file of the material's
+        own texture set renames the whole material instead (:meth:`_sync_names`);
+        any other rename -- another set's map, a new map type -- renames that
+        file alone and says so (:meth:`_sync_carries`). A lightmap row's bake
+        markers are re-stamped with the name (:meth:`rename_lightmap`).
+
+        Parameters:
+            context: ``{"file_node", "shader_node"}`` (a texture row: the shader
+                Keep Names In Sync follows, ``None``: none), or ``{"lightmap":
+                record}``.
+            new_name: The new file NAME, no folder.
+            sync: ``None`` (Keep Names In Sync off) or the two affixes.
+
+        Returns:
+            bool: ``True`` (a refusal raises).
+
+        Raises:
+            ValueError, OSError, RuntimeError: The name was refused; nothing
+                changed.
+        """
+        new_name = str(new_name or "").strip()
+        dep = context.get("lightmap")
+        if dep is not None:
+            self.rename_lightmap(dep, new_name)
             return True
-
-        # A lightmap row: the path cell repoints the bake markers (folder only
-        # -- the map is what the bake committed); the name cells are labels,
-        # not nodes, and cannot be renamed. Identified through the path cell's
-        # UserRole, which still holds the row's path after the text was edited.
-        path_item = tbl.item(row, 1)
-        row_key = (
-            str(path_item.data(UserRole) or path_item.text()).strip()
-            if path_item is not None
-            else ""
+        node = context["file_node"]
+        stored = self.stored_path(node)
+        shader = context.get("shader_node")
+        syncing = bool(sync) and bool(shader)
+        base = MapFactory.get_base_texture_name(new_name)
+        if syncing and self._sync_carries(
+            shader, base, sync, texture=(stored, new_name)
+        ):
+            self._sync_names(shader, base, sync)
+            return True
+        result = MatUtils.rename_texture_file(stored, new_name)
+        self._log(
+            f"Renamed {os.path.basename(stored)} -> {new_name}; "
+            f"repointed {len(result['nodes'])} file node(s)."
         )
-        lightmap = self._lightmap_rows.get(row_key)
-        if lightmap is not None:
-            if col != 1:
-                cmds.warning("Lightmap rows carry no node to rename.")
-                # Deferred: this runs inside cellChanged, and rebuilding the
-                # table (clear + add) from within its own signal would delete
-                # the item mid-dispatch.
-                self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
-                return
-            typed = new_value.strip().replace("\\", "/")
-            stored = self._lightmap_row_path(lightmap)
-            if lightmap.get("path") and self._is_file_rename(lightmap["path"], typed):
-                # The same folder, a name nothing is at: rename the map (and
-                # re-stamp the markers that bind it by name).
-                if not self._rename_texture(
-                    {"lightmap": lightmap}, os.path.basename(typed)
-                ):
-                    _restore_text(item, stored)
-                return
-            if typed and os.path.basename(typed).lower() != lightmap["map"].lower():
-                cmds.warning(
-                    f"The bake markers name {lightmap['map']!r}; a path to a "
-                    "different map is a re-bake, not a repath."
-                )
-                _restore_text(item, self._lightmap_row_path(lightmap))
-                return
-            if self._repath_lightmap(lightmap, os.path.dirname(typed)):
-                self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
-            else:
-                _restore_text(item, self._lightmap_row_path(lightmap))
-            return
+        if syncing:
+            self._log(
+                self._SYNC_ALONE.format(name=os.path.basename(stored), material=shader),
+                "warning",
+            )
+        return True
 
-        shader_item, fn_item = tbl.item(row, 0), tbl.item(row, 2)
-        context = {
-            "shader_node": (shader_item.data(UserRole) if shader_item else None)
-            or None,
-            "file_node": fn_item.data(UserRole) if fn_item else None,
-        }
-        if col in (0, 2) and self._sync_names_enabled() and context["shader_node"]:
-            # Keep Names In Sync: the edited name sets the base the whole
-            # material follows -- a file node's only as a new base for one of
-            # the set's own textures, else the node alone is renamed. The cell
-            # goes back first; the refresh after the sync shows what landed.
-            old = item.data(UserRole) or ""
-            shader_affix, node_affix = self._sync_affixes()
-            if col == 0:
-                base = StrUtils.strip_known_affix(new_value, *shader_affix)
-            else:
-                base = MapFactory.get_base_texture_name(
-                    StrUtils.strip_known_affix(new_value, *node_affix)
-                )
-            base = base.strip("_")
-            try:
-                if col == 2 and not self._sync_carries(
-                    context, base, node=(context["file_node"], new_value)
-                ):
-                    if _rename_node("file node"):
-                        cmds.warning(
-                            self._SYNC_ALONE.format(
-                                name=old, material=context["shader_node"]
-                            )
-                        )
-                    return
-                _restore_text(item, old)
-                self._sync_names(context, base)
-            except (ValueError, OSError, RuntimeError) as e:
-                _restore_text(item, old)
-                cmds.warning(f"Keep Names In Sync: {e}")
-            self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
-            return
+    def can_rename_shader(self, shader) -> bool:
+        """Whether a shader cell may rename *shader* (any shader in the scene)."""
+        return self.node_exists(shader)
 
-        if col == 0:
-            _rename_node("shader")
-        elif col == 1:
-            file_node = context["file_node"]
-            if not file_node:
-                cmds.warning("No file node associated with this row.")
-                return
-            if not cmds.objExists(file_node):
-                cmds.warning(f"File node '{file_node}' no longer exists.")
-                return
-            stored = cmds.getAttr(f"{file_node}.fileTextureName") or ""
-            if self._is_file_rename(stored, new_value.strip()):
-                # Only the file name changed, to one nothing is at: rename the
-                # file (every reader follows) rather than point at nothing.
-                name = os.path.basename(new_value.strip().replace("\\", "/"))
-                if not self._rename_texture(context, name):
-                    _restore_text(item, stored)
-                return
+    def rename_shader(self, shader, new_name: str, sync=None) -> str:
+        """Rename *shader*; with *sync*, its whole material to the new base.
+
+        Keep Names In Sync takes the typed name with the shader affix stripped
+        as the base the material, its texture set and their file nodes follow.
+
+        Returns:
+            str: The shader's name now (Maya may make it unique).
+
+        Raises:
+            ValueError, OSError, RuntimeError: Refused; nothing changed.
+        """
+        new_name = str(new_name or "").strip()
+        if sync:
+            base = StrUtils.strip_known_affix(new_name, *sync[0]).strip("_")
+            plan = self._sync_names(shader, base, sync)
+            return (plan.get("material") or (shader, shader))[1]
+        return self._rename_node(shader, new_name, "shader")
+
+    def rename_file_node(self, file_node, new_name: str, shader=None, sync=None) -> str:
+        """Rename *file_node*; with *sync*, its material when the name is a new base.
+
+        A file node of the material's own texture set given a new base name
+        renames the whole material (with or without the file node suffix typed);
+        any other name renames the node alone and says so.
+
+        Returns:
+            str: The node's name now.
+
+        Raises:
+            ValueError, OSError, RuntimeError: Refused; nothing changed.
+        """
+        new_name = str(new_name or "").strip()
+        if sync and shader:
+            base = MapFactory.get_base_texture_name(
+                StrUtils.strip_known_affix(new_name, *sync[1])
+            ).strip("_")
+            if self._sync_carries(shader, base, sync, node=(file_node, new_name)):
+                plan = self._sync_names(shader, base, sync)
+                return dict(plan["file_nodes"]).get(file_node, file_node)
+            actual = self._rename_node(file_node, new_name, "file node")
+            self._log(
+                self._SYNC_ALONE.format(name=file_node, material=shader), "warning"
+            )
+            return actual
+        return self._rename_node(file_node, new_name, "file node")
+
+    def _rename_node(self, name, new_name: str, label: str) -> str:
+        """``cmds.rename`` with the editor's refusals; returns the name it got."""
+        if not new_name or new_name == name:
+            return name
+        if not self.node_exists(name):
+            raise ValueError(f"{label} '{name}' no longer exists; cannot rename.")
+        actual = cmds.rename(name, new_name)
+        self._log(f"Renamed {label} '{name}' -> '{actual}'")
+        return actual
+
+    def _sync_plan(self, shader, base: str, sync, dry_run: bool = False) -> dict:
+        """``MatUtils.sync_material_names`` for *shader* at *base*, with *sync*'s
+        affixes and the lightmap records (a real run is one undo chunk)."""
+        shader_affix, node_affix = sync
+        return MatUtils.sync_material_names(
+            shader,
+            base,
+            material_affix=tuple(shader_affix),
+            file_node_affix=tuple(node_affix),
+            dry_run=dry_run,
+            lightmaps=self._lightmap_records(),
+        )
+
+    def _sync_carries(self, shader, base: str, sync, texture=None, node=None) -> bool:
+        """Whether Keep Names In Sync renames *shader*'s whole material for an
+        edit: the sync at *base* (a dry run) gives the edited thing exactly the
+        name typed (case aside) -- *texture* ``(stored path, new file name)`` or
+        *node* ``(file node, new node name)``.
+
+        That holds for a file of the material's own texture set (or its node)
+        whose base alone changed. Syncing to the typed name's base, whatever was
+        typed, renamed the set after an environment cube's new name while the
+        cube kept its own, and a new map type (the base unchanged) renamed
+        nothing.
+
+        Raises:
+            ValueError: The sync refuses *base* (``MatUtils.sync_material_names``).
+        """
+        plan = self._sync_plan(shader, base, sync, dry_run=True)
+        if texture is not None:
+            stored, name = texture
+            path = MatUtils.to_absolute(stored, *self._project_roots())
+            planned = next(
+                (n for old, n in plan["textures"] if FileUtils.is_same_file(old, path)),
+                None,
+            )
+        else:
+            edited, name = node
+            planned = dict(plan["file_nodes"]).get(edited)
+            name = StrUtils.apply_affix(name, *sync[1])
+        return bool(planned) and planned.lower() == name.lower()
+
+    def _sync_names(self, shader, base: str, sync) -> dict:
+        """Name *shader*'s material, its texture set, lightmap and nodes for
+        *base* (``MatUtils.sync_material_names``), and report it."""
+        plan = self._sync_plan(shader, base, sync)
+        changed = int(bool(plan["material"])) + sum(
+            len(plan[key])
+            for key in ("companions", "textures", "file_nodes", "lightmaps")
+        )
+        self._log(
+            f"Names synced to {base!r}: {changed} rename(s) "
+            f"({len(plan['textures'])} texture file(s), "
+            f"{len(plan['lightmaps'])} lightmap(s))."
+        )
+        for reason in plan["skipped"]:
+            self._log(f"Sync Names: {reason}", "warning")
+        return plan
+
+    # ------------------------------------------------------------------
+    # Selection / graph / delete
+    # ------------------------------------------------------------------
+
+    def select_objects(self, shaders=(), lightmaps=()) -> int:
+        """Select the objects wearing *shaders* and those *lightmaps* bind.
+
+        Returns:
+            int: How many objects were selected (none: the selection is left).
+        """
+        objects = []
+        for dep in lightmaps:
+            objects.extend(o for o in dep.get("objects") or [] if cmds.objExists(o))
+        for shader in shaders:
+            if not shader:
+                continue
             try:
-                Attributes.set_plug_literal(f"{file_node}.fileTextureName", new_value)
-                om.MGlobal.displayInfo(f"{file_node}: texture path -> '{new_value}'")
-                tbl.apply_formatting()
-                if self._footer_controller:
-                    self._footer_controller.update()
+                objects.extend(MatUtils.find_by_mat_id(shader, shell=True) or [])
             except Exception as e:
-                cmds.warning(f"Failed to update texture path: {e}")
-        elif col == 2:
-            _rename_node("file node")
+                self._log(f"Failed to query objects for '{shader}': {e}", "warning")
+        objects = list(dict.fromkeys(objects))
+        if objects:
+            cmds.select(objects, r=True)
+        return len(objects)
+
+    def select_file_nodes(self, file_nodes) -> int:
+        """Select *file_nodes* (replacing the selection); returns how many."""
+        nodes = [n for n in dict.fromkeys(file_nodes) if n]
+        if nodes:
+            cmds.select(nodes, r=True)
+        return len(nodes)
+
+    @staticmethod
+    def graph_file_nodes(file_nodes) -> None:
+        """Graph *file_nodes* in the Hypershade."""
+        nodes = [n for n in file_nodes if n]
+        if nodes:
+            MatUtils.graph_materials(nodes)
+
+    def delete_consequences(self, file_nodes):
+        """What deleting *file_nodes* would unwire, as sentences for a confirm.
+
+        Names the materials they feed (through any intermediates), else the
+        other nodes of a live graph (a bump chain that never reaches a surface
+        shader breaks all the same); nothing for an orphan texture.
+        """
+        shaders, other = self._downstream_consumers(file_nodes)
+        if shaders:
+            shown = ", ".join(shaders[:4])
+            if len(shaders) > 4:
+                shown += f", +{len(shaders) - 4} more"
+            return [
+                f"Connected to {len(shaders)} material(s): {shown}.",
+                "Those connections will be broken.",
+            ]
+        if other:
+            return [
+                f"Connected to {len(other)} node(s) in the shading graph.",
+                "Those connections will be broken.",
+            ]
+        return []
+
+    def _downstream_consumers(self, file_nodes) -> tuple:
+        """Return ``(shaders, other)``: what deleting *file_nodes* would unwire.
+
+        ``shaders`` are the surface shaders the textures feed, through any
+        intermediates (``MatUtils.get_connected_shaders``). ``other`` catches
+        the rest of a live graph, and is reported only when no shader was found.
+
+        Excluded: the nodes being deleted (they take each other down) and Maya's
+        default registries (``defaultTextureList1`` ...), which EVERY file node
+        hangs off -- counting those would flag an orphan texture as connected.
+
+        Returns:
+            tuple: ``(sorted shader names, sorted other consumer names)``.
+        """
+
+        # Guard the empty case explicitly rather than lean on what ``cmds.ls``
+        # makes of an empty list.
+        def _long(nodes):
+            nodes = list(nodes)
+            return set(cmds.ls(nodes, long=True) or []) if nodes else set()
+
+        doomed = _long(file_nodes)
+        shaders = set(MatUtils.get_connected_shaders(file_nodes))
+        shader_longs = _long(shaders)
+
+        other = set()
+        for node in file_nodes:
+            for dst in cmds.listConnections(node, source=False, destination=True) or []:
+                dst_long = (cmds.ls(dst, long=True) or [dst])[0]
+                if dst_long in doomed or dst_long in shader_longs:
+                    continue
+                if cmds.ls(dst, defaultNodes=True):
+                    continue
+                other.add(dst)
+
+        return sorted(shaders), sorted(other)
+
+    def delete_file_nodes(self, file_nodes) -> int:
+        """Delete *file_nodes* (one undo step); returns how many."""
+        nodes = [n for n in dict.fromkeys(file_nodes) if n]
+        if not nodes:
+            return 0
+        cmds.delete(nodes)
+        self._log(f"Deleted {len(nodes)} file node(s).")
+        return len(nodes)
+
+    # ------------------------------------------------------------------
+    # Lightmap dependencies -- rows with no file node behind them
+    # ------------------------------------------------------------------
+    #
+    # A committed lightmap is referenced by a bake marker (map basename + the
+    # folder it was baked into), never by a file node, so every file-node
+    # command was blind to it: a migration that copied every texture left the
+    # EXRs behind and the export shipped unlit. The records are
+    # ``LightmapRecords`` (list / heal / relocate + repoint); the editor shows
+    # them as rows and hands the relocation half to Find & Copy.
+
+    @staticmethod
+    def _lightmap_records():
+        """The lightmap record (a class used as a namespace), imported on use:
+        listing file nodes should not load the lightmap package until a
+        lightmap is asked for."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
+
+        return LightmapRecords
+
+    def lightmap_dependencies(self):
+        """The scene's lightmap dependency records (``LightmapRecords``):
+        ``map``, ``dir`` (the recorded folder), ``objects``, ``path`` (where it
+        was found, ``None``: nowhere), ``found_by``, ``note``."""
+        return self._lightmap_records().lightmap_dependencies()
+
+    def lightmap_labels(self, dep):
+        """``(shader, node)`` labels for a lightmap row, read like a texture row.
+
+        Shader column: the material(s) the lightmapped objects wear -- an atlas
+        by material is named after its material, and a per-object map still
+        belongs to one. Node column: the map's stem, what a file node for it
+        would be called (``ROOM_ENV_LightMap``), since none exists. ``""`` for
+        the shader when none is found (the panel shows its own label).
+        """
+        try:
+            mats = MatUtils.get_mats(
+                [o for o in dep.get("objects") or [] if cmds.objExists(o)]
+            )
+        except Exception:  # noqa: BLE001 -- a label must never cost the table
+            mats = []
+        mats = list(dict.fromkeys(str(m) for m in mats or []))
+        shader = ", ".join(mats[:2])
+        if len(mats) > 2:
+            shader += f" (+{len(mats) - 2})"
+        return shader, os.path.splitext(dep["map"])[0]
+
+    @staticmethod
+    def _lightmap_objects(lightmaps):
+        """The transforms the records name -- the records' scope argument."""
+        return list(
+            dict.fromkeys(o for dep in lightmaps for o in (dep.get("objects") or []))
+        )
+
+    @staticmethod
+    def _lightmap_maps(lightmaps):
+        """The file names the records carry -- a relocation's scope: a row IS
+        its file, and the reflection probe's row names no object at all."""
+        return list(dict.fromkeys(dep["map"] for dep in lightmaps))
+
+    def normalize_lightmaps(self, lightmaps, relative: bool) -> int:
+        """Re-spell the scoped lightmap markers' folders (Normalize / Make Absolute).
+
+        Files never move: inside the project the recorded folder becomes
+        workspace-relative (``relative=True``) -- what lets a teammate's copy of
+        the project, mounted on another drive, still resolve it -- or is
+        expanded to absolute (``relative=False``). A scope with no lightmaps is
+        a silent no-op.
+        """
+        if not lightmaps:
+            return 0
+        try:
+            count = self._lightmap_records().normalize_lightmap_paths(
+                self._lightmap_objects(lightmaps), relative=relative
+            )
+        except Exception as e:  # noqa: BLE001 -- the texture half already ran
+            self._log(f"Lightmap folders not rewritten: {e}", "warning")
+            return 0
+        if count:
+            self._log(
+                f"{count} lightmap marker(s) now record their folder "
+                f"{'relative to the project' if relative else 'as an absolute path'}."
+            )
+        return count
+
+    def repath_lightmap(self, dep, folder: str) -> bool:
+        """Point every marker naming *dep*'s map at *folder*.
+
+        The manual counterpart of Find & Copy's relocation (Browse for File and
+        a typed path on a lightmap row): files are not touched, the markers'
+        recorded folder changes and the FBX manifest is republished.
+        """
+        folder = str(folder or "").replace("\\", "/").rstrip("/")
+        if not folder:
+            self._log("A lightmap path needs a folder.", "warning")
+            return False
+        try:
+            count = self._lightmap_records().repath_lightmaps(
+                {dep["map"].lower(): folder}, dep.get("objects")
+            )
+        except Exception as e:  # noqa: BLE001
+            self._log(f"Failed to repath lightmap {dep['map']}: {e}", "warning")
+            return False
+        self._log(f"{dep['map']}: lightmap folder -> '{folder}' ({count} marker(s))")
+        return True
+
+    def rename_lightmap(self, dep, new_name: str) -> None:
+        """Rename a lightmap's file and re-stamp the markers that bind it by name.
+
+        Raises:
+            ValueError, OSError: The map is not on disk, or the name was refused.
+        """
+        if not dep.get("path"):
+            raise ValueError(f"{dep['map']} is not on disk to rename.")
+        with CoreUtils.undo_chunk("Rename Lightmap"):
+            MatUtils.rename_texture_file(dep["path"], new_name)
+            self._lightmap_records().rename_lightmap(dep["map"], new_name)
+        self._log(f"Renamed lightmap {dep['map']} -> {new_name}")
+
+    def lightmap_revert_scope(self, deps):
+        """``(objects, kept)``: the objects reverting *deps* would clear, and those
+        it must leave (none in Maya; blendertk leaves a linked library's)."""
+        return self._lightmap_objects([d for d in deps if d.get("objects")]), []
+
+    def revert_lightmaps(self, objects):
+        """The Lightmap Baker's Revert Selected on *objects*: their markers are
+        cleared and the manifest republished, so nothing is left bound to the
+        map (a legacy atlas UV layout is restored too); the map stays on disk.
+        One undo step. Returns the objects cleared."""
+        return self._lightmap_records().revert(list(objects))
+
+    def _plan_lightmaps(self, lightmaps, source_dir, dest_dir, relocate_mode):
+        """The records' dry run over *lightmaps*, or ``None`` when none are in scope."""
+        if not lightmaps:
+            return None
+        try:
+            return self._lightmap_records().relocate_lightmaps(
+                dest_dir,
+                source_dir=source_dir,
+                mode=relocate_mode,
+                maps=self._lightmap_maps(lightmaps),
+                dry_run=True,
+            )
+        except Exception as e:  # noqa: BLE001 -- a preview must not raise
+            self._log(f"Lightmaps not planned: {e}", "error")
+            return None
+
+    def _report_lightmap_plan(self, plan, dest_dir, verb) -> None:
+        """The dry-run lines for the lightmaps -- same shape as the texture ones."""
+        if not plan:
+            return
+        if plan["relocate"]:
+            self._log(
+                f"Dry run — would {verb.lower()} {len(plan['relocate'])} "
+                f"lightmap(s) into {dest_dir} and repoint their bake markers"
+                + (
+                    f" ({len(plan['in_place'])} already there)"
+                    if plan["in_place"]
+                    else ""
+                ),
+                items=self._plan_lines(
+                    f"{os.path.basename(src)}  ←  {os.path.dirname(src)}"
+                    for src, _dst in plan["relocate"]
+                ),
+            )
+        elif plan["in_place"]:
+            self._log(
+                f"Dry run — all {len(plan['in_place'])} lightmap(s) are already "
+                "at the destination; only the bake markers would change."
+            )
+        if plan["missing"]:
+            self._log(
+                f"{len(plan['missing'])} lightmap(s) found nowhere — their "
+                "markers would keep pointing at the recorded folder",
+                "warning",
+                items=[
+                    f"{dep['map']}  (recorded in {dep['dir'] or '<no folder>'})"
+                    + (f"  {dep['note']}" if dep.get("note") else "")
+                    for dep in plan["missing"]
+                ],
+            )
+
+    def _relocate_lightmaps(self, lightmaps, source_dir, dest_dir, relocate_mode):
+        """Relocate *lightmaps* for real and report; returns whether any landed."""
+        try:
+            result = self._lightmap_records().relocate_lightmaps(
+                dest_dir,
+                source_dir=source_dir,
+                mode=relocate_mode,
+                maps=self._lightmap_maps(lightmaps),
+            )
+        except Exception as e:  # noqa: BLE001 -- the textures already landed
+            self._log(f"Lightmaps not relocated: {e}", "error")
+            return False
+        landed = len(result["copied"]) + len(result["in_place"])
+        if landed:
+            self._log(
+                f"Lightmaps — {len(result['copied'])} relocated, "
+                f"{len(result['in_place'])} already at destination; "
+                f"{result['updated']} bake marker(s) repointed, manifest "
+                "republished.",
+                "success",
+            )
+        failed = len(result["relocate"]) - len(result["copied"])
+        if failed:
+            self._log(
+                f"{failed} lightmap(s) did not copy — see the script editor.",
+                "warning",
+            )
+        if result["missing"]:
+            self._log(
+                f"{len(result['missing'])} lightmap(s) found nowhere — the "
+                "export's path check will fail on them",
+                "warning",
+                items=[
+                    f"{dep['map']}  (recorded in {dep['dir'] or '<no folder>'})"
+                    + (f"  {dep['note']}" if dep.get("note") else "")
+                    for dep in result["missing"]
+                ],
+            )
+        return bool(landed)
 
     # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
 
-    #: ``_log`` level -> the Maya channel that carries it when no panel is
-    #: driving the command. ``cmds.warning`` / ``displayError`` are what put a
-    #: line in front of a user who is not looking at the script editor, so a
-    #: warning must not quietly degrade to an info line off-panel.
+    #: ``_log`` level -> the Maya channel that carries it when no logger is
+    #: lent. ``cmds.warning`` / ``displayError`` are what put a line in front of
+    #: a user who is not looking at the script editor, so a warning must not
+    #: quietly degrade to an info line.
     _MAYA_LOG_CHANNELS = {
         "warning": "warning",
         "error": "error",
@@ -4071,30 +1880,24 @@ class TexturePathEditorSlots:
 
     @staticmethod
     def _joined(message: str, items) -> str:
-        """*message* with its *items* indented under it, as one plain string.
-
-        The fallback for a sink with no ``log_group``: a stdlib logger, or
-        Maya's own channels, where the whole report has to arrive as one
-        string or arrive as N separate lines that read as N separate events.
-        """
+        """*message* with its *items* indented under it, as one plain string --
+        for a sink with no ``log_group``, where the whole report has to arrive
+        as one string or as N lines that read as N separate events."""
         return "\n".join([message, *(f"  {item}" for item in items)])
 
     def _log(self, message: str, level: str = "info", items=None) -> None:
-        """Report one line — or one titled list — of a command's result.
+        """Report one line -- or one titled list -- of a command's result.
 
-        Goes to the driving panel's output pane when there is one — that pane
-        IS the report, and the whole point of having it is not having to look
-        somewhere else for what just happened (its logger keeps a stream
-        handler, so the script editor still sees the same lines) — and to
-        Maya's own channels otherwise, so the same call site works headless
-        and from a test.
+        Goes to :attr:`active_logger` when a caller lent one (a panel's pane IS
+        the report) and to Maya's own channels otherwise, so the same call site
+        works headless and from a test.
 
         ``items`` is a list belonging under *message*. It goes through
         ``log_group`` so the whole thing is ONE record: a widget handler
-        appends a QTextBlock per record, so a line-per-item loop renders as N
-        blank-line-separated paragraphs instead of a list.
+        appends a block per record, so a line-per-item loop renders as N
+        separate paragraphs instead of a list.
         """
-        logger = self._active_logger
+        logger = self.active_logger
         items = list(items) if items else []
         if logger is not None:
             if items and hasattr(logger, "log_group"):
@@ -4115,57 +1918,6 @@ class TexturePathEditorSlots:
             om.MGlobal.displayError(message)
         else:
             om.MGlobal.displayInfo(message)
-
-    # ------------------------------------------------------------------
-    # Footer
-    # ------------------------------------------------------------------
-
-    def _create_footer_controller(self):
-        footer = getattr(self.ui, "footer", None)
-        if not footer:
-            return None
-        return FooterStatusController(
-            footer=footer,
-            resolver=self._footer_status_text,
-            default_text="",
-            truncate_kwargs={"length": 96, "mode": "middle"},
-        )
-
-    def _footer_status_text(self) -> str:
-        """Footer line: the texture directory every path command resolves against.
-
-        Labelled, because a bare path in a status strip reads as "some path" —
-        the label is what makes a wrong project obvious at a glance.
-
-        The label is the resolved folder's own name, not a fixed word: the
-        ``sourceImages`` rule may map anywhere (a blendertk-promoted project
-        maps it to ``textures``), and a footer reading SOURCEIMAGES over a
-        path ending in ``/textures`` would be the panel disagreeing with
-        itself. Whatever the project calls it is what the footer says.
-        """
-        path = self._resolve_source_images_path()
-        if not path:
-            return ""
-        label = FileUtils.format_path(path, "dir").upper()
-        return f"{label}: {path}" if label else path
-
-    def _resolve_source_images_path(self) -> str:
-        return EnvUtils.get_env_info("sourceimages") or ""
-
-    def _project_roots(self):
-        """``(workspace, sourceimages)`` — both roots the path converters take.
-
-        ``MatUtils.to_absolute`` / ``to_project_relative`` look either one up
-        themselves when it is not handed over, and that lookup goes through
-        ``cmds.workspace``. Resolving the pair ONCE, here, is what keeps a
-        per-row Maya call out of the table refresh and keeps ``cmds`` off the
-        thread pool in :meth:`setup_formatting` — so callers that loop pass
-        both down rather than letting the converters ask per path.
-        """
-        return (
-            EnvUtils.get_env_info("workspace") or "",
-            self._resolve_source_images_path(),
-        )
 
 
 # --------------------------------------------------------------------------------------------

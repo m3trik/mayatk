@@ -148,7 +148,7 @@ DEFAULT_INCLUDE = {
     "env_utils.workspace_manager": "WorkspaceManager",
     "env_utils.workspace_map": "WorkspaceMap",
     "env_utils.namespace_sandbox": "NamespaceSandbox",
-    "env_utils.reference_manager._reference_manager": "ReferenceManager",
+    "env_utils.reference_manager._reference_manager": ["ReferenceManager", "AssemblyManager"],
     # ``ScriptConsole`` is the class this module DEFINES; the previous
     # "ScriptOutput" entry named uitk's widget, which the module merely imports
     # — so ``mtk.ScriptOutput`` resolved to a uitk class leaking through this
@@ -193,8 +193,8 @@ DEFAULT_INCLUDE = {
     "mat_utils.render_opacity.attribute_mode": "OpacityAttributeMode",
     "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
-    # ``texture_path_editor`` likewise defines only its ``*Slots`` panel, which the
-    # handler discovers — nothing to register here.
+    # Texture Path Editor's engine (its panel is tentacle's shared tool).
+    "mat_utils.texture_path_editor": "TexturePathEditor",
     # ``shader_templates`` is a PACKAGE whose ``__init__`` is docstring-only, so the
     # class has to be named through its inner module, exactly as its
     # ``render_opacity`` / ``image_to_plane`` siblings above do.
@@ -576,6 +576,18 @@ MOVED_NAMES = {
     ),
     "ShotsController": (
         "tentacle.slots.tools._shots.controller.ShotsController",
+        "0.30.0",
+    ),
+    "ReferenceManagerSlots": (
+        "tentacle.slots.tools.reference_manager.ReferenceManagerSlots",
+        "0.30.0",
+    ),
+    "ReferenceManagerController": (
+        "tentacle.slots.tools._reference_manager.controller.ReferenceManagerController",
+        "0.30.0",
+    ),
+    "TexturePathEditorSlots": (
+        "tentacle.slots.tools.texture_path_editor.TexturePathEditorSlots",
         "0.30.0",
     ),
 }

@@ -3,14 +3,16 @@
 """Reference Manager engine — Maya file references, assemblies and workspaces.
 
 :class:`ReferenceManager` (over :class:`~mayatk.env_utils.workspace_manager.WorkspaceManager`)
-lists, adds, removes and converts scene references; :class:`AssemblyManager`
-handles assembly definitions. The panel's controller and slots live beside it
-(``reference_manager_controller.py``, ``reference_manager_slots.py``).
+lists, adds, removes and converts scene references, and owns the scene-file
+operations a browser runs (open / close / save / rename / delete; foreign rows baked
+through the blender_bridge); :class:`AssemblyManager` handles assembly definitions.
+Its panel is tentacle's shared Reference Manager (``slots/tools/reference_manager.py``),
+which composes one and passes its progress, bake and report collaborators in;
+blendertk's ``ReferenceManager`` mirrors it over linked libraries.
 """
 
 import os
-import re
-from typing import Optional
+from typing import Callable, ContextManager, List, Optional
 
 try:
     import maya.cmds as cmds
@@ -24,8 +26,23 @@ from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.env_utils.fbx_utils import FbxUtils
-from mayatk.env_utils.usd import UsdUtils
+from mayatk.env_utils.usd import UsdReadRefused, UsdUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
+
+# Scratch twins of foreign scenes opened "as new" (see ReferenceManager.open_scene): one
+# per source under the system temp dir, age-swept, discarded on close/next open while
+# still untouched. Process-wide, like the open scene itself; lazily built (no temp-dir
+# lookup at import). Mirror of blendertk's.
+_OPENED_SCRATCH_PREFIX = "mtk_opened"
+_opened_scratches = None
+
+
+def _scratch_twins():
+    """The ``ptk.ScratchTwins`` store (``<temp>/mtk_opened_<hash>/<stem>_<ext>.ma``)."""
+    global _opened_scratches
+    if _opened_scratches is None:
+        _opened_scratches = ptk.ScratchTwins(_OPENED_SCRATCH_PREFIX, extension=".ma")
+    return _opened_scratches
 
 
 class _FileRef:
@@ -220,7 +237,7 @@ class _ReferenceManagerInternal(object):
         return bool(path) and os.path.splitext(str(path))[1].lower() == ".fbx"
 
     @staticmethod
-    def _bake_source(referenced_path) -> Optional[str]:
+    def bake_source(referenced_path) -> Optional[str]:
         """The scene *referenced_path* was baked from, or None.
 
         A foreign row, and an FBX no one take reads whole (:meth:`add_reference`),
@@ -238,34 +255,17 @@ class _ReferenceManagerInternal(object):
 
     @classmethod
     def _bake_source_key(cls, referenced_path) -> Optional[str]:
-        """:meth:`_bake_source`, normalized for comparison."""
-        source = cls._bake_source(referenced_path)
+        """:meth:`bake_source`, normalized for comparison."""
+        source = cls.bake_source(referenced_path)
         return os.path.normcase(os.path.normpath(source)) if source else None
 
     @classmethod
-    def _row_key(cls, referenced_path) -> str:
+    def row_key(cls, referenced_path) -> str:
         """Normalized path of the row a reference to *referenced_path* stands
         for: its bake's source (:meth:`_bake_source_key`), else the file itself."""
         return cls._bake_source_key(referenced_path) or os.path.normcase(
             os.path.normpath(referenced_path)
         )
-
-    @staticmethod
-    def _display_name(path: str, hide_extension: bool, hide_suffix: str) -> str:
-        """The table label for *path* — its basename, less the extension and/or a
-        TRAILING ``hide_suffix``.
-
-        End-anchored on the stem, never a substring pass: the suffix field holds a
-        naming token (``_LOC``), and removing it wherever it appears rewrites the
-        middle of a name — ``ITA_LOCKHANDLE.ma`` listed as ``ITAKHANDLE``. The
-        extension is split off first so the token is still at the end when the
-        column is showing it, and ``endswith`` matches the filter above it
-        (``chk_filter_suffix``), so a row shown for its suffix hides that same one.
-        """
-        stem, ext = os.path.splitext(os.path.basename(path))
-        if hide_suffix and stem.endswith(hide_suffix):
-            stem = stem[: -len(hide_suffix)]
-        return stem if hide_extension else f"{stem}{ext}"
 
     @staticmethod
     def _merge_namespace_into_root(namespace: str) -> bool:
@@ -393,31 +393,81 @@ class _ReferenceManagerInternal(object):
 class ReferenceManager(
     WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal
 ):
-    """Core Maya scene reference management functionality.
+    """Maya's Reference Manager engine: the workspace's scene files, the scene's
+    references, and the scene-file operations a browser runs on them.
 
     Features:
-    - Add/remove references with namespace management
-    - Import references into the scene
-    - Update references from source files
-    - Convert references to assemblies
+    - Add/remove references with namespace management; import them (unlink).
+    - Update references from source files; display overrides.
+    - Open / close / save / rename / delete scene files; foreign (Blender) rows baked
+      through the blender_bridge, and opened as scratch twins.
 
-    This class provides the core Maya reference functionality without any UI dependencies.
-    For UI integration, use ReferenceManagerController and ReferenceManagerSlots.
+    No UI: a panel composes one, handing it its collaborators (:meth:`__init__`), and
+    calls its API -- tentacle's shared Reference Manager is that panel. blendertk's
+    ``ReferenceManager`` is the same surface over linked libraries.
     """
 
     # Widen the workspace-file scan to every natively referenceable type -- FBX through the
-    # FBX plugin, every USD spelling through mayaUsd's translator. The panel's Include Types
+    # FBX plugin, every USD spelling through mayaUsd's translator. A browser's Include Types
     # row filters this cached superset, so toggling a type never re-scans disk.
     SCENE_FILE_TYPES = ("*.ma", "*.mb", "*.fbx") + tuple(
         f"*{ext}" for ext in ptk.USD_EXTENSIONS
     )
+    #: Extensions referenced natively -- exactly what the workspace scan lists.
+    NATIVE_EXTENSIONS = tuple(t.lstrip("*") for t in SCENE_FILE_TYPES)
+    #: Foreign (cross-DCC) rows: baked through the blender_bridge before they can be
+    #: referenced or opened (:meth:`bake_scene`).
+    FOREIGN_EXTENSIONS = (".blend",)
+    #: Rows Unlink and Import brings in with no reference behind them: a foreign row
+    #: converts; a USD row imports natively -- the one way in for a stage whose skins
+    #: a live read refuses (``UsdUtils.live_read_options``).
+    IMPORT_EXTENSIONS = (*FOREIGN_EXTENSIONS, *ptk.USD_EXTENSIONS)
+    #: The Include Types a browser lists by default: Maya's own scene types.
+    INCLUDE_DEFAULTS = (".ma", ".mb")
+    #: What Save writes (:meth:`save_scene`).
+    SCENE_SAVE_EXTENSION = ".ma"
+    #: How a foreign scene's rig logic can travel (``bake_scene`` / ``import_scene``
+    #: ``rig_mode``) -- the choices a browser offers when the scene has some. No
+    #: ``"raw"``: both Blender exporters sample the EVALUATED scene, so on this
+    #: direction raw converts exactly like bake.
+    RIG_MODES = ("rig", "bake")
+    #: Where a browser's header presets (naming / filter settings) are saved.
+    PRESET_DIR = "mayatk/reference_manager"
 
-    def __init__(self, log_level="WARNING"):
+    _progress = None
+    _report = None
+
+    def __init__(
+        self,
+        log_level="WARNING",
+        *,
+        progress: Optional[Callable[[str], ContextManager]] = None,
+        bake_for_reference: Optional[Callable[..., Optional[str]]] = None,
+        report: Optional[Callable[[str], None]] = None,
+    ):
+        """Build the engine; a panel passes its collaborators in (blendertk's takes
+        the same, so a panel builds either host's engine one way).
+
+        Parameters:
+            log_level: The logger's level.
+            progress: ``progress(text)`` -> a context manager yielding a
+                ``progress(current, total, message)`` callback (or None): the scope
+                the first read of an FBX's takes runs in (a large file's take layout
+                takes seconds). A panel passes its footer progress; default, none.
+            bake_for_reference: Replaces :meth:`_bake_for_reference` --
+                ``(path, project=None) -> bake path or None`` -- the bake a multi-take
+                FBX's reference and a foreign row's open read (a panel runs it in its
+                progress, asking how a rig travels, and shows its errors).
+            report: ``report(message)``: puts an outcome the user must see in front
+                of them (a panel's message box) -- a USD row refused for a live read,
+                a per-scene folder that kept its old name. Default: logged only.
+        """
         super().__init__()
         self.set_log_level(log_level)
-        self._filter_text = ""
-        self._filter_enabled = True
-        self.prefilter_regex = re.compile(r".+\.\d{4}\.(ma|mb)$")
+        self._progress = progress
+        self._report = report
+        if bake_for_reference is not None:
+            self._bake_for_reference = bake_for_reference
 
     @property
     def current_references(self):
@@ -425,142 +475,6 @@ class ReferenceManager(
         Returns a list of _FileRef objects.
         """
         return _ReferenceManagerInternal._list_file_refs()
-
-    def _matches_prefilter_regex(self, filename):
-        """Check if a file is an auto-save file based on its name."""
-        return bool(self.prefilter_regex.match(filename))
-
-    def _extract_strip_patterns(self, filter_text: str, delimiter=(",", ";")) -> list:
-        """Extract the core patterns to strip from wildcard filter text.
-
-        For example:
-        - '*_v001*' -> ['_v001']
-        - 'character_*' -> ['character_']
-        - '*' -> []
-        - '*_module.ma;JET*' -> ['_module.ma', 'JET']
-        - 'test_*_rig' -> ['test_'] (takes the longest contiguous part)
-
-        Parameters:
-            filter_text (str): The filter text possibly containing multiple patterns.
-            delimiter (str or tuple): Delimiter(s) used to split patterns.
-
-        Returns:
-            list: List of core patterns to strip from filenames.
-        """
-        import re
-
-        if not filter_text:
-            return []
-
-        # Split by delimiters first
-        if isinstance(delimiter, tuple):
-            pattern = "|".join(re.escape(d) for d in delimiter)
-            patterns = [p.strip() for p in re.split(pattern, filter_text) if p.strip()]
-        elif delimiter in filter_text:
-            patterns = [p.strip() for p in filter_text.split(delimiter) if p.strip()]
-        else:
-            patterns = [filter_text]
-
-        strip_patterns = []
-        for pattern in patterns:
-            # If pattern is just wildcards, skip
-            if pattern.replace("*", "").replace("?", "") == "":
-                continue
-
-            # Remove leading wildcards
-            while pattern.startswith("*") or pattern.startswith("?"):
-                pattern = pattern[1:]
-
-            # Remove trailing wildcards
-            while pattern.endswith("*") or pattern.endswith("?"):
-                pattern = pattern[:-1]
-
-            # If there are still wildcards in the middle, take the longest contiguous part
-            if "*" in pattern or "?" in pattern:
-                parts = [part for part in pattern.replace("?", "*").split("*") if part]
-                if parts:
-                    pattern = max(parts, key=len)
-                else:
-                    pattern = ""
-
-            if pattern:
-                strip_patterns.append(pattern)
-
-        return strip_patterns
-
-    @staticmethod
-    def _text_matches_filter(
-        text: str, filter_patterns: list, ignore_case: bool = True
-    ) -> bool:
-        """Check if text matches ANY of the pre-split filter patterns via fnmatch.
-
-        Parameters:
-            text: The string to test (e.g. a filename).
-            filter_patterns: Already-split list of glob patterns.
-            ignore_case: Case-insensitive matching.
-
-        Returns:
-            True if the text matches at least one pattern.
-        """
-        from fnmatch import fnmatchcase
-
-        if not text or not filter_patterns:
-            return False
-        t = text.lower() if ignore_case else text
-        for pattern in filter_patterns:
-            p = pattern.lower() if ignore_case else pattern
-            if fnmatchcase(t, p):
-                return True
-        return False
-
-    @staticmethod
-    def _matches_notes_filter(
-        notes_text: str, filter_text: str, ignore_case: bool = True
-    ) -> bool:
-        """Check if notes/comments text matches the filter patterns.
-
-        Notes are often comma or semicolon-delimited (e.g. "Layout, Speedrun"),
-        so the filter is checked against the full notes string as well as each
-        individual delimited segment.
-
-        Parameters:
-            notes_text: The notes/comments string from the file metadata.
-            filter_text: The filter string, possibly with wildcards and delimiters.
-            ignore_case: Whether to match case-insensitively.
-
-        Returns:
-            True if any filter pattern matches the notes text.
-        """
-        from fnmatch import fnmatchcase
-
-        if not notes_text or not filter_text:
-            return False
-
-        # Split filter_text into individual patterns (same delimiters as filter_list)
-        filter_patterns = [filter_text]
-        for delim in (",", ";"):
-            expanded = []
-            for p in filter_patterns:
-                expanded.extend(s.strip() for s in p.split(delim) if s.strip())
-            filter_patterns = expanded
-
-        # Split notes into individual segments for matching
-        note_segments = [notes_text]
-        for delim in (",", ";"):
-            expanded = []
-            for seg in note_segments:
-                expanded.extend(s.strip() for s in seg.split(delim) if s.strip())
-            note_segments = expanded
-
-        # Match: each filter pattern against the full notes string AND each segment
-        candidates = [notes_text] + note_segments
-        for pattern in filter_patterns:
-            p = pattern.lower() if ignore_case else pattern
-            for candidate in candidates:
-                c = candidate.lower() if ignore_case else candidate
-                if fnmatchcase(c, p):
-                    return True
-        return False
 
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:
@@ -575,7 +489,7 @@ class ReferenceManager(
         take selector pinned; any other FBX (``FbxUtils._native_read_gap``: takes
         merged, one parked, a cover listed first) through a cached ``.ma`` bake,
         which maps back to the FBX (:meth:`_bake_source_key`) and follows it when
-        it is re-exported (:meth:`_follow_bake_sources`) -- a native FBX reference
+        it is re-exported (:meth:`follow_bake_sources`) -- a native FBX reference
         plays one take, whichever the session's selector names, at every load.
 
         Returns:
@@ -605,8 +519,8 @@ class ReferenceManager(
 
         # Already referenced -- the file itself, or through the bake that stands in
         # for it (either side may be a bake: a foreign row adds its bake's path).
-        row = self._row_key(file_path)
-        if any(self._row_key(ref.path) == row for ref in self.current_references):
+        row = self.row_key(file_path)
+        if any(self.row_key(ref.path) == row for ref in self.current_references):
             return True
 
         # A USD layer reads through mayaUsd's translator, NAMED -- left to pick one by
@@ -646,7 +560,7 @@ class ReferenceManager(
 
         # A bake (a foreign row's, a multi-take FBX's) is a project file: named
         # through the project, so the scene keeps it when the project moves.
-        if self._bake_source(target):
+        if self.bake_source(target):
             target = self._reference_spelling(target)
         try:
             cmds.file(target, reference=True, namespace=sanitized_namespace, **read)
@@ -680,16 +594,28 @@ class ReferenceManager(
 
     def _refuse_live_read(self, file_path: str, error: Exception) -> bool:
         """Report why *file_path* cannot be read live -- referenced or opened -- and
-        return False, the caller's result for it. A hook: the panel's controller also
-        puts *error* in front of the user."""
+        return False, the caller's result for it. A click did nothing, so the user
+        must learn why (``report=``); Unlink and Import is named only for a stage the
+        import CAN read (:class:`UsdReadRefused`), a damaged layer reads for neither."""
         cmds.warning(str(error))
+        if self._report is not None:
+            message = str(error)
+            if isinstance(error, UsdReadRefused):
+                message += (
+                    "\n\nUnlink and Import brings it in as local data instead."
+                )
+            self._report(message)
         return False
 
     def _read_fbx_takes(self, file_path: str) -> Optional[str]:
         """What a native reference of the FBX *file_path* misses, its take
-        selector pinned for the read (``FbxUtils._native_read``). A hook: the
-        panel's controller reads a file the first time under its busy footer."""
-        return FbxUtils._native_read(file_path, self.logger)
+        selector pinned for the read (``FbxUtils._native_read``). The first read of
+        a version runs in the panel's progress (``progress=``); a version read
+        before answers at once."""
+        if self._progress is None or FbxUtils._native_read_known(file_path):
+            return FbxUtils._native_read(file_path, self.logger)
+        with self._progress(f"Reading the takes of {os.path.basename(file_path)}"):
+            return FbxUtils._native_read(file_path, self.logger)
 
     @staticmethod
     def _has_current_bake(file_path: str) -> bool:
@@ -720,7 +646,7 @@ class ReferenceManager(
             return os.path.relpath(path, root).replace("\\", "/")
         return path
 
-    def _follow_bake_sources(self) -> list:
+    def follow_bake_sources(self) -> list:
         """Keep every bake-backed reference in its project, on its source as the
         source is NOW.
 
@@ -745,7 +671,7 @@ class ReferenceManager(
                 path = ref.path
             except RuntimeError:
                 continue
-            source = self._bake_source(path)
+            source = self.bake_source(path)
             if source:
                 baked_refs.append((ref, path, source))
         # Source versions a refresh failed or was stopped on: retried once the
@@ -816,21 +742,19 @@ class ReferenceManager(
 
         return BlenderSceneImport().purge_unused_bakes(dry_run=dry_run)
 
-    def _bake_for_reference(self, file_path: str) -> Optional[str]:
-        """The cached ``.ma`` a reference reads in place of the FBX *file_path*,
-        or None with a warning.
+    def _bake_for_reference(self, file_path: str, project=None) -> Optional[str]:
+        """The cached ``.ma`` a reference reads in place of the FBX *file_path*
+        (or that a foreign row's open copies), or None with a warning.
 
-        ``BlenderSceneImport.bake_scene``, the foreign rows' bake: a fresh mayapy
-        imports the file as :meth:`FbxUtils.import_scene` does -- its takes
-        merged, an alternative parked in Key Stash, where it rides the reference
-        and lands in this scene's on an import (:meth:`import_references`) --
-        and saves it. A hook: the panel's controller runs it in its footer
-        progress.
+        :meth:`bake_scene`, the foreign rows' bake: a fresh mayapy imports the
+        file as :meth:`FbxUtils.import_scene` does -- its takes merged, an
+        alternative parked in Key Stash, where it rides the reference and lands
+        in this scene's on an import (:meth:`import_references`) -- and saves it,
+        into *project*'s bake cache (default the open scene's). A hook: a panel
+        runs it in its footer progress (``bake_for_reference=``).
         """
-        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
-
         try:
-            return BlenderSceneImport().bake_scene(file_path)
+            return self.bake_scene(file_path, project=project)
         except Exception as e:  # noqa: BLE001 — reported; the reference is not made
             cmds.warning(f"Could not bake {file_path} for a reference: {e}")
             return None
@@ -1077,8 +1001,8 @@ class ReferenceManager(
 
     def update_references(self):
         """Update all references to reflect the latest changes from the original files
-        -- a bake-backed one through a fresh bake of its source (:meth:`_follow_bake_sources`)."""
-        moved = {ref._ref_node for ref in self._follow_bake_sources()}
+        -- a bake-backed one through a fresh bake of its source (:meth:`follow_bake_sources`)."""
+        moved = {ref._ref_node for ref in self.follow_bake_sources()}
         for ref in self.current_references:
             if ref._ref_node not in moved:
                 ref.load()
@@ -1260,3 +1184,500 @@ class ReferenceManager(
             ):
                 cmds.delete(group)
         return failed
+
+    # ------------------------------------------------------------------ foreign rows
+    @classmethod
+    def is_foreign(cls, path) -> bool:
+        """True if *path* is a foreign (Blender) scene -- a cross-DCC row baked through
+        the blender_bridge before it can be referenced or opened."""
+        return (
+            bool(path)
+            and os.path.splitext(str(path))[1].lower() in cls.FOREIGN_EXTENSIONS
+        )
+
+    @classmethod
+    def needs_conversion(cls, path) -> bool:
+        """True if bringing *path* in runs a conversion in the other DCC (a headless
+        Blender for a ``.blend``) -- the rows whose conversion a browser asks about.
+        A USD row imports natively: nothing to convert, nothing to ask."""
+        return cls.is_foreign(path)
+
+    @staticmethod
+    def scene_has_complex_animation(path: str) -> bool:
+        """True if the foreign scene *path* carries rig logic (constraints, IK,
+        drivers) a Transfer-rig conversion could carry and a bake would flatten
+        (``BlenderSceneImport.scene_has_complex_animation``)."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        return BlenderSceneImport.scene_has_complex_animation(path)
+
+    @staticmethod
+    def find_foreign_scenes(
+        root_dir: str, recursive: bool = False, extensions=None
+    ) -> List[str]:
+        """The foreign scenes under *root_dir* (``BlenderSceneImport.find_scenes``)."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        return BlenderSceneImport.find_scenes(
+            root_dir, recursive=recursive, extensions=extensions
+        )
+
+    def bake_scene(self, path: str, **kwargs) -> str:
+        """Bake the foreign scene (or an FBX) *path* to a cached ``.ma`` and return its
+        path (``BlenderSceneImport.bake_scene``: ``via``, ``rig_mode``, ``progress``,
+        ``project``, ...)."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        return BlenderSceneImport().bake_scene(path, **kwargs)
+
+    def import_scene(self, path: str, **kwargs) -> list:
+        """Import *path* as local data with no reference behind it
+        (``BlenderSceneImport.import_scene``: a ``.blend`` converts through a headless
+        Blender; a USD layer imports natively, its skins neutralized for the read).
+        Returns the nodes brought in."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        return BlenderSceneImport().import_scene(path, **kwargs)
+
+    def bake_project_root(self) -> Optional[str]:
+        """The project a reference's bake goes in: the open scene's
+        (``DataNodes.scene_project_root``: an unsaved scene's is the active
+        project) -- what :meth:`bake_scene` defaults to."""
+        try:
+            return DataNodes.scene_project_root()
+        except Exception:  # noqa: BLE001 - no Maya (mock tests)
+            return None
+
+    @staticmethod
+    def foreign_scratch_path(path: str) -> str:
+        """The deterministic scratch ``.ma`` a foreign row opens as
+        (``<temp>/mtk_opened_<hash>/<stem>_<ext>.ma``: ``scene.blend`` opens as
+        ``scene_blend.ma``, so the title bar and the Save-As default say what it was
+        converted from, and it can never shadow a sibling ``scene.ma``; the hash of
+        the source's full path keeps same-named scenes in different projects apart).
+        ``ptk.ScratchTwins`` owns the naming, the age sweep and the discard."""
+        return _scratch_twins().path_for(path)
+
+    def discard_stale_scratches(self):
+        """Discard every untouched scratch twin that is no longer the open scene (one
+        the user saved into is kept: ``ptk.ScratchTwins.discard_except``)."""
+        _scratch_twins().discard_except(self.current_scene())
+
+    # ------------------------------------------------------------------ scene files
+    def current_scene(self) -> str:
+        """The open scene's path; '' when it has never been saved
+        (``EnvUtils.saved_scene_path``: batch Maya's phantom ``untitled`` is none)."""
+        try:
+            return EnvUtils.saved_scene_path()
+        except Exception:  # noqa: BLE001 - no Maya (mock tests)
+            return ""
+
+    def scene_modified(self) -> bool:
+        """True if the open scene has unsaved changes (``file -q -modified``)."""
+        try:
+            return bool(cmds.file(q=True, modified=True))
+        except Exception:  # noqa: BLE001 - no Maya (mock tests)
+            return False
+
+    def save_open_scene(self) -> Optional[bool]:
+        """Flush the open scene to its own file so its unsaved edits reach disk.
+
+        Returns True when the file on disk is up to date (nothing to save, or
+        saved), and None when the scene cannot be written where it came from: never
+        saved, or opened from a format Maya only reads (an ``.fbx`` or USD row keeps
+        that file as its scene name, which ``EnvUtils.SCENE_SAVE_TYPES`` has no save
+        type for) -- a browser then saves it under a new name instead.
+
+        Raises:
+            RuntimeError: The save failed.
+        """
+        path = self.current_scene()
+        file_type = EnvUtils.SCENE_SAVE_TYPES.get(os.path.splitext(path)[1].lower())
+        if not file_type:
+            return None
+        if not self.scene_modified():
+            return True
+        cmds.file(save=True, type=file_type)
+        self.logger.info(f"Saved the open scene: {path}")
+        return True
+
+    def save_scene(self, path: str) -> str:
+        """Save the open scene as *path* in Maya's own format, by its extension (an
+        unknown one saves ASCII); the scene is renamed to it. Returns the path;
+        raises RuntimeError on failure."""
+        file_type = EnvUtils.SCENE_SAVE_TYPES.get(
+            os.path.splitext(path)[1].lower(), "mayaAscii"
+        )
+        cmds.file(rename=path)
+        cmds.file(save=True, type=file_type)
+        self.logger.info(f"Saved scene to: {path}")
+        return path
+
+    def new_scene(self) -> bool:
+        """Discard the current file and start an empty scene (Maya's ``file -new``).
+
+        The 'close' counterpart of :meth:`open_scene` -- Maya has no null document,
+        so closing a scene means replacing it with a fresh empty one. Callers guard
+        unsaved changes first; ``force`` then skips Maya's own prompt. An untouched
+        scratch twin the scene was goes with it. True on success. Mirror of
+        blendertk's.
+        """
+        try:
+            cmds.file(new=True, force=True)
+        except Exception as e:  # noqa: BLE001 - reported to the caller as False
+            self.logger.error(f"Failed to start a new scene: {e}")
+            return False
+        self.logger.info("Started a new (empty) scene.")
+        self.discard_stale_scratches()
+        return True
+
+    def is_current(self, path, current=None) -> bool:
+        """True if *path*'s scene is the one open: the file itself, or -- a foreign row
+        -- its scratch twin (so a second Open click on either closes it). Pass
+        *current* (normalized) to reuse one query across a listing. Mirror of
+        blendertk's."""
+        if not path:
+            return False
+        if current is None:
+            scene = self.current_scene()
+            current = os.path.normcase(os.path.normpath(scene)) if scene else ""
+        if not current:
+            return False
+        target = self.foreign_scratch_path(path) if self.is_foreign(path) else path
+        return os.path.normcase(os.path.normpath(target)) == current
+
+    def open_scene(self, file_path: str, set_workspace: bool = True) -> bool:
+        """Open a scene file, optionally setting the workspace to match the file.
+
+        A USD row opens through mayaUsd's translator, read the way ``add_reference``
+        reads it (:meth:`UsdUtils.live_read_options`) -- a stage the reader would
+        crash on is refused before the session is touched (reported, False).
+
+        A foreign (Blender) row has no Maya file to open: its bake
+        (:meth:`_bake_for_reference`, baked into the SOURCE's project -- the scene
+        opened next is the one that reads it) is copied to a scratch twin
+        (:meth:`foreign_scratch_path`) opened as a new scene standing in for its
+        source (``DataNodes.set_scene_source``) -- never the bake itself, which a save
+        would write over for every scene referencing the row.
+
+        Parameters:
+            file_path (str): Path to the scene file to open.
+            set_workspace (bool): Set Maya's project to the workspace containing the
+                file -- for a foreign row, its SOURCE (the scratch lives in temp).
+
+        Returns:
+            (bool): True once opened; False when it was refused or a foreign row's
+            bake did not come (both reported).
+
+        Raises:
+            FileNotFoundError: The scene file does not exist.
+            OSError: A foreign row's scratch copy could not be written.
+            RuntimeError: Maya could not open it.
+        """
+        self.logger.debug(f"Opening scene: {file_path}")
+        workspace_source = file_path
+        if self.is_foreign(file_path):
+            # Baked into the SOURCE's project, not the open scene's: the scene opened
+            # next is the one that reads it (the browsed folder decides an unmarked
+            # source's, as it does the notes').
+            home = ptk.Workspace.for_scene(
+                file_path,
+                session_root=getattr(self, "_current_working_dir", None) or None,
+            )
+            baked = self._bake_for_reference(
+                file_path, project=home.root if home is not None else None
+            )
+            if not baked:
+                return False
+            try:
+                scratch = _scratch_twins().create(file_path, baked)
+            except OSError as e:
+                raise OSError(
+                    f"the working copy of its bake could not be written ({e})"
+                ) from e
+            file_path = scratch
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Scene file not found: {file_path}")
+
+        read = {}
+        if self._is_usd(file_path):
+            try:
+                read = UsdUtils.live_read_options(file_path)
+            except RuntimeError as e:
+                return self._refuse_live_read(file_path, e)
+        elif self._is_fbx(file_path):
+            # The plugin opens the ONE take the session's sticky selector names:
+            # pinned to the per-file -1 (an index past the file's takes opened an
+            # empty scene). A file that take does not read whole opens in part.
+            gap = self._read_fbx_takes(file_path)
+            if gap:
+                self.logger.warning(
+                    f"{os.path.basename(file_path)} ({gap}) opens with its last take "
+                    "only; reference the row to read every take."
+                )
+        else:  # a scene that references an FBX reads it under the selector too
+            FbxUtils._default_import_take(if_loaded=True)
+
+        cmds.file(file_path, open=True, force=True, **read)
+        conform = UsdUtils.stage_conform(file_path) if read else None
+        if conform:  # a USD row in another unit or up axis
+            roots = [
+                r
+                for r in UsdUtils.top_transforms(cmds.ls(assemblies=True))
+                if not any(
+                    cmds.camera(s, q=True, startupCamera=True)
+                    for s in cmds.listRelatives(r, shapes=True, type="camera") or []
+                )
+            ]
+            UsdUtils.conform_roots(
+                roots,
+                conform,
+                f"{os.path.splitext(os.path.basename(file_path))[0]}_conform",
+            )
+        # Loading a scene that carries references resolves/applies reference edits during
+        # the open, which leaves Maya's 'modified' flag set though the user made no edits;
+        # that stale flag made an immediate close/reference toggle falsely prompt about
+        # unsaved changes. Interactive Maya applies some edits deferred, so a second clear
+        # is scheduled on idle below. A genuine user edit re-sets the flag.
+        cmds.file(modified=False)
+        self.logger.info(f"Opened scene: {file_path}")
+        # The previous scene is gone: drop any untouched foreign scratch twin it was.
+        _scratch_twins().discard_except(file_path)
+        if file_path != workspace_source:
+            # The scratch stands in for its source: the scene's project is the
+            # source's, not the temp folder (DataNodes.scene_project_root).
+            DataNodes.set_scene_source(file_path, workspace_source)
+
+        if set_workspace:
+            try:
+                new_workspace = EnvUtils.find_workspace_using_path(workspace_source)
+                if new_workspace:
+                    current_workspace = cmds.workspace(q=True, rd=True)
+                    if os.path.normcase(
+                        os.path.normpath(current_workspace)
+                    ) != os.path.normcase(os.path.normpath(new_workspace)):
+                        cmds.workspace(new_workspace, openWorkspace=True)
+                        self.logger.info(f"Set workspace to: {new_workspace}")
+                else:
+                    self.logger.warning(f"No workspace found for: {workspace_source}")
+            except Exception as e:  # noqa: BLE001 - the open itself stands
+                self.logger.error(f"Failed to set workspace: {e}")
+
+        # Second, deferred clear: interactive Maya applies deferred reference edits (and
+        # fires a browser's SceneOpened refresh) AFTER this returns, both of which re-set
+        # the flag on the just-loaded scene. Lowest priority, so it runs after them.
+        # No-op in batch/standalone (no idle loop), where the clear above suffices.
+        try:
+            cmds.evalDeferred(lambda: cmds.file(modified=False), lowestPriority=True)
+        except Exception as e:  # noqa: BLE001 — best-effort; the sync clear stands
+            self.logger.debug(f"Deferred modified-clear could not be scheduled: {e}")
+        return True
+
+    def _is_workspace_structure(self, folder) -> bool:
+        """True if *folder* is the browsed workspace or its scenes folder, or holds
+        either: the project's own structure, never one scene's folder however it is
+        named, so a rename never moves it and a delete never removes it. The name test
+        alone let a scene named for its folder claim it -- ``scenes_final.ma`` loose in
+        the scenes root, ``proj_v01.ma`` at the root of project ``proj``."""
+        workspace = self.current_working_dir
+        if not workspace:
+            return False
+        folder = os.path.normcase(os.path.abspath(folder))
+        inside = os.path.join(folder, "")
+        for root in (workspace, ptk.Workspace.load(workspace).scene_dir):
+            root = os.path.normcase(os.path.abspath(root))
+            if root == folder or root.startswith(inside):
+                return True
+        return False
+
+    def rename_scene_file(self, old_path: str, new_path: str, folder=None):
+        """Rename a scene file on disk, carrying everything keyed to its old name: the
+        metadata sidecar, Maya's incremental-save folder, and -- with *folder* -- the
+        per-scene folder that holds it. Returns the final path, or None if the rename
+        was aborted.
+
+        Renaming the **open** scene is save-then-reopen: unsaved edits are flushed to
+        the old file first (a save afterwards would just re-create the old name), and
+        the renamed file is re-opened at the end, so the session never points at a
+        filename that no longer exists.
+
+        *folder* is the new name for the per-scene folder (``{name}`` in a browser's
+        folder structure); it is applied only when the folder is the scene's alone:
+        named for the file's base, not the project's own structure
+        (:meth:`_is_workspace_structure`) and holding no other scene
+        (:meth:`_holds_other_scenes`). A folder that cannot follow is reported
+        (``report=``), since the scene itself was renamed. ``OSError`` from the file
+        rename and ``RuntimeError`` from the open scene's save propagate; a failed
+        sidecar / increments move is logged and the file rename stands.
+        """
+        # Only Maya's own scene types round-trip through save-then-reopen. An .fbx or
+        # USD row can also be the open scene (Maya opens both through their
+        # translators), but saving it would write Maya scene data over it -- those
+        # rename on disk only.
+        ext = os.path.splitext(old_path)[1].lower()
+        is_open = ext in EnvUtils.SCENE_SAVE_TYPES and self.is_current(old_path)
+        if is_open and not self.save_open_scene():
+            return None
+
+        os.rename(old_path, new_path)
+        self.logger.info(f"Renamed {old_path} to {new_path}")
+
+        old_sidecar = old_path + ".metadata.json"
+        if os.path.exists(old_sidecar):
+            new_sidecar = new_path + ".metadata.json"
+            try:
+                os.rename(old_sidecar, new_sidecar)
+                self.logger.info(f"Renamed sidecar {old_sidecar} to {new_sidecar}")
+            except OSError as e:
+                self.logger.warning(f"Failed to rename sidecar: {e}")
+
+        # Maya's Incremental Save keeps its versions in a folder beside the scene, keyed
+        # by the scene's FILENAME. Left behind it detaches from the scene it belongs to
+        # -- and a later scene that reuses the old name silently inherits that history.
+        old_increments = ptk.Workspace.backup_dir(old_path)
+        if os.path.isdir(old_increments):
+            new_increments = ptk.Workspace.backup_dir(new_path)
+            try:
+                os.rename(old_increments, new_increments)
+                self.logger.info(
+                    f"Moved incremental saves {old_increments} to {new_increments}"
+                )
+            except OSError as e:
+                self.logger.warning(f"Failed to move the incremental-save folder: {e}")
+
+        final_path = new_path
+        if folder:
+            old_dir = os.path.dirname(old_path)
+            parent_dir_name = os.path.basename(old_dir)
+            old_base = os.path.splitext(os.path.basename(old_path))[0]
+            # The folder is the scene's own when it is named for it -- case-
+            # insensitively ("hero_v01.ma" in "Hero") -- is not the project's own
+            # structure, AND holds no other scene. The file (and its increments)
+            # already moved.
+            if (
+                old_base.lower().startswith(parent_dir_name.lower())
+                and not self._is_workspace_structure(old_dir)
+                and not self._holds_other_scenes(old_dir, new_path)
+            ):
+                new_folder_path = os.path.join(os.path.dirname(old_dir), folder)
+                skipped = None
+                if os.path.exists(new_folder_path) and not ptk.FileUtils.is_same_file(
+                    new_folder_path, old_dir
+                ):
+                    skipped = f"{new_folder_path} already exists"
+                else:
+                    try:
+                        os.rename(old_dir, new_folder_path)
+                        self.logger.info(
+                            f"Renamed folder {old_dir} to {new_folder_path}"
+                        )
+                        final_path = os.path.join(
+                            new_folder_path, os.path.basename(new_path)
+                        )
+                    except OSError as e:
+                        skipped = str(e)
+                if skipped:
+                    # Report it: the scene itself WAS renamed, so staying silent leaves
+                    # the file under the old scene's folder with nothing to explain it.
+                    self.logger.warning(f"Cannot rename folder {old_dir}: {skipped}")
+                    if self._report is not None:
+                        self._report(
+                            "Renamed the scene, but its folder kept the old name:\n"
+                            f"{skipped}"
+                        )
+            else:
+                self.logger.debug(
+                    f"Folder '{parent_dir_name}' is not '{old_base}''s alone (named "
+                    "for another scene, or holds others); skipping its rename"
+                )
+
+        if is_open:
+            # Re-open last, after any folder move, so the session lands on the final path.
+            self.open_scene(final_path)
+        return final_path
+
+    @staticmethod
+    def _discard(path: str, permanent: bool) -> Optional[bool]:
+        """*path* to the trash, or -- *permanent* -- deleted. True when it is gone,
+        ``None`` when the trash would not take it (it is untouched)."""
+        if permanent:
+            os.remove(path)
+            return True
+        return None if ptk.FileUtils.move_to_trash(path) is None else True
+
+    def remove_scene_file(
+        self, path: str, permanent: bool = False, use_folder: bool = False
+    ) -> Optional[bool]:
+        """Remove one scene with its metadata sidecar -- to the trash, or *permanent*
+        -- and, with *use_folder* (``{name}`` in a browser's folder structure), its
+        per-scene folder once that is empty.
+
+        Returns:
+            True when it is gone; ``None`` when the trash would not take it (nothing
+            touched); False when it could not be removed (logged).
+        """
+        try:
+            if self._discard(path, permanent) is None:
+                return None
+            where = (
+                "Deleted" if permanent else f"Moved to the {ptk.FileUtils.trash_name()}"
+            )
+            self.logger.info(f"{where}: {path}")
+
+            # The file's metadata sidecar goes with it (ptk.Metadata's
+            # "<file>.metadata.json" convention), the same way, so it neither
+            # outlives the scene it describes nor misses a restore of it.
+            sidecar = path + ".metadata.json"
+            if os.path.exists(sidecar):
+                try:
+                    if self._discard(sidecar, permanent) is None:
+                        self.logger.warning(
+                            f"Kept sidecar {sidecar}: no trash takes it."
+                        )
+                except OSError as e:
+                    self.logger.warning(f"Could not remove sidecar {sidecar}: {e}")
+
+            if use_folder:
+                parent_dir = os.path.dirname(path)
+                # The per-scene folder goes only when ALL of these hold (a permanent
+                # delete cannot be taken back, and a restore from the trash puts the
+                # scene back where it was):
+                # 1. Ownership: the folder is named for this scene (case-insensitive:
+                #    Windows filenames -- "Env_v1.ma" in folder "env" is scene-owned).
+                # 2. Not the project's own structure: "scenes_final.ma" loose in a
+                #    scenes root named "scenes" passes (1), and must never take the
+                #    root (or the workspace) with it.
+                # 3. Empty, now the scene and its sidecar are gone. Anything left keeps
+                #    it -- another version, a subfolder, and every file that is not a
+                #    Maya scene: the prompt named one file, so rmdir, never rmtree.
+                file_base = os.path.splitext(os.path.basename(path))[0].lower()
+                parent_name = os.path.basename(os.path.normpath(parent_dir)).lower()
+                owns_folder = bool(parent_name) and file_base.startswith(parent_name)
+                try:
+                    leftovers = os.listdir(parent_dir)
+                except OSError:
+                    leftovers = None  # cannot inspect: leave the folder alone
+
+                if (
+                    owns_folder
+                    and leftovers == []
+                    and not self._is_workspace_structure(parent_dir)
+                ):
+                    try:
+                        os.rmdir(parent_dir)
+                        self.logger.info(f"Deleted empty scene folder: {parent_dir}")
+                    except OSError as e:
+                        self.logger.warning(
+                            f"Could not remove scene folder {parent_dir}: {e}"
+                        )
+                else:
+                    self.logger.debug(
+                        f"Keeping folder '{parent_dir}'; not scene-owned, the "
+                        f"project's own structure, not empty, or it could not "
+                        f"be inspected (owns={owns_folder}, left={leftovers})."
+                    )
+        except Exception as e:  # noqa: BLE001 - reported to the caller as False
+            self.logger.error(f"Delete failed for {path}: {e}")
+            return False
+        return True

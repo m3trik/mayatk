@@ -607,15 +607,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class AssemblyManager`
   - methods: current_references, create_assembly_definition, set_active_representation, convert_references_to_assemblies
 - `class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`
-  - methods: current_references, sanitize_namespace, add_reference, purge_unused_bakes, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references
-
-### `env_utils/reference_manager/reference_manager_controller.py` — Reference Manager controller — the panel-facing layer over the engine.
-- `class ReferenceManagerController(ReferenceManager, pythontk.LoggingMixin)`
-  - methods: scene_notes, current_working_dir, block_table_selection_method, prepare_item_for_edit, restore_item_display, is_item_being_edited, handle_item_selection, sync_selection_to_references, update_current_dir, set_workspace, set_maya_project, refresh_file_list, update_table, open_scene, new_scene, unreference_all, unlink_all, unlink_references, convert_to_assembly, save_scene, rename_scene, delete_scene
-
-### `env_utils/reference_manager/reference_manager_slots.py` — Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
-- `class ReferenceManagerSlots(pythontk.HelpMixin, pythontk.LoggingMixin)`
-  - methods: header_init, tbl000_init, tbl000_item_double_clicked, tbl000_item_changed, tbl000_editor_closed, btn_open_file_location, txt000_init, txt001_init, txt001, cmb000_init, cmb000, chk000, chk003, chk_ignore_case, chk_filter_suffix, chk_hide_suffix, chk_hide_extension, chk_show_notes_column, txt_suffix, txt_subfolder_structure, chk_filter_folder_structure, b000, b006, b001, btn_open_scene, btn_toggle_reference, btn_copy_path, btn_unlink_import, btn_save_scene, btn_refresh, btn_convert_assembly, btn_unlink_import_all, btn_unreference_all
+  - methods: current_references, sanitize_namespace, add_reference, follow_bake_sources, purge_unused_bakes, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references, is_foreign, needs_conversion, scene_has_complex_animation, find_foreign_scenes, bake_scene, import_scene, bake_project_root, foreign_scratch_path, discard_stale_scratches, current_scene, scene_modified, save_open_scene, save_scene, new_scene, is_current, open_scene, rename_scene_file, remove_scene_file, bake_source, row_key
 
 ### `env_utils/scene_exporter/_scene_exporter.py`
 - `class SceneExporter(pythontk.SceneExporterBase)`
@@ -934,9 +926,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class TextureBaker(pythontk.LoggingMixin)`
   - methods: arnold_available, ensure_arnold, render_panorama, default_output_dir, resolve_meshes, bake, arnold_translation_guard, gpu_available, assign_to_diffuse, restore_diffuse_connections
 
-### `mat_utils/texture_path_editor.py`
-- `class TexturePathEditorSlots`
-  - methods: header_init, tb_set_texture_directory_init, tb_normalize_paths_init, tb_resolve_missing_textures_init, tbl000_init, open_source_images, reload_scene_textures, tb_set_texture_directory, tb_find_and_copy_textures, tb_normalize_paths, make_paths_absolute, tb_resolve_missing_textures, select_textures_for_objects, select_broken_paths, select_absolute_paths, row_browse_for_file, row_rename_file, select_material, select_file_node, row_show_in_hypershade, delete_file_node, refresh_texture_table, cleanup_scene_callbacks, setup_formatting, handle_cell_edit
+### `mat_utils/texture_path_editor.py` — Texture Path Editor engine: the scene's texture paths and the commands that fix them.
+- `class TexturePathEditor`
+  - methods: texture_dir, resolve_path, is_absolute_path, rows, file_nodes, node_exists, stored_path, selected_file_nodes, reload_textures, set_texture_directory, make_paths_absolute, normalize_paths, resolve_missing_textures, unresolved_file_nodes, find_and_copy_textures, set_texture_path, is_file_rename, apply_path_edit, rename_texture, can_rename_shader, rename_shader, rename_file_node, select_objects, select_file_nodes, graph_file_nodes, delete_consequences, delete_file_nodes, lightmap_dependencies, lightmap_labels, normalize_lightmaps, repath_lightmap, rename_lightmap, lightmap_revert_scope, revert_lightmaps
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(pythontk.HelpMixin)`

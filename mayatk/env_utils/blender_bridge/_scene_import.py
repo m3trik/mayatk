@@ -2343,7 +2343,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         file nodes name in temp -- which the age sweep deletes -- copied to the
         source's media folder (:meth:`_media_home`) and named there
         (:meth:`_rehome_ma_media`). The caller repoints its reference there
-        (:meth:`ReferenceManager._follow_bake_sources`).
+        (:meth:`ReferenceManager.follow_bake_sources`).
         """
         source = self.bake_source(baked_path)
         if not source or not os.path.isfile(baked_path):

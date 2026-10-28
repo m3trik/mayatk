@@ -116,8 +116,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`env_utils/namespace_sandbox.py`](#env_utils--namespace_sandbox)
 - [`env_utils/pm_doctor.py`](#env_utils--pm_doctor) — Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
 - [`env_utils/reference_manager/_reference_manager.py`](#env_utils--reference_manager--_reference_manager) — Reference Manager engine — Maya file references, assemblies and workspaces.
-- [`env_utils/reference_manager/reference_manager_controller.py`](#env_utils--reference_manager--reference_manager_controller) — Reference Manager controller — the panel-facing layer over the engine.
-- [`env_utils/reference_manager/reference_manager_slots.py`](#env_utils--reference_manager--reference_manager_slots) — Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
 - [`env_utils/scene_exporter/_scene_exporter.py`](#env_utils--scene_exporter--_scene_exporter)
 - [`env_utils/scene_exporter/task_manager.py`](#env_utils--scene_exporter--task_manager) — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
 - [`env_utils/scene_state.py`](#env_utils--scene_state) — Read named sections of live-scene state for transport.
@@ -185,7 +183,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/substance_bridge/templates/reimport.py`](#mat_utils--substance_bridge--templates--reimport) — Update the running Painter's open project from a fresh FBX export.
 - [`mat_utils/substance_bridge/templates/render.py`](#mat_utils--substance_bridge--templates--render) — Render the current Painter project via Iray (JS body unverified).
 - [`mat_utils/texture_baker.py`](#mat_utils--texture_baker) — Bake an object's shaded surface (material under scene lighting) to a texture.
-- [`mat_utils/texture_path_editor.py`](#mat_utils--texture_path_editor)
+- [`mat_utils/texture_path_editor.py`](#mat_utils--texture_path_editor) — Texture Path Editor engine: the scene's texture paths and the commands that fix them.
 - [`node_utils/_node_utils.py`](#node_utils--_node_utils)
 - [`node_utils/attributes/_attributes.py`](#node_utils--attributes--_attributes) — Consolidated attribute utilities for Maya.
 - [`node_utils/attributes/channels/_channels.py`](#node_utils--attributes--channels--_channels) — Channels — Maya attribute query / mutation logic.
@@ -2259,15 +2257,16 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
 
 Reference Manager engine — Maya file references, assemblies and workspaces.
 
-- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L88)**
+- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L105)**
   - `AssemblyManager.current_references(cls)` *(class)* — Get the current scene references.
   - `AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str` *(class)* — Create an assembly definition for the given file path.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
-- **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L393)** — Core Maya scene reference management functionality.
+- **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L393)** — Maya's Reference Manager engine: the workspace's scene files, the scene's
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool` — Reference *file_path* under *namespace* (sanitized;
+  - `ReferenceManager.follow_bake_sources(self) -> list` — Keep every bake-backed reference in its project, on its source as the
   - `ReferenceManager.purge_unused_bakes(self, dry_run: bool = False) -> list` — Remove the bakes in the open scene's project that no scene references
   - `ReferenceManager.import_references(self, namespaces=None, namespace_mode='remove', scene_data='merge')` — Import referenced objects into the scene, making their data local.
   - `ReferenceManager.update_references(self)` — Update all references to reflect the latest changes from the original files
@@ -2275,75 +2274,26 @@ Reference Manager engine — Maya file references, assemblies and workspaces.
   - `ReferenceManager.get_reference_display_mode(self, ref) -> str` — Return the active display mode for the reference's top-level transforms.
   - `ReferenceManager.set_reference_display_mode(self, ref, mode: str) -> bool` — Set the display override mode on the reference's top-level transforms.
   - `ReferenceManager.remove_references(self, namespaces=None)` — Remove references based on their namespaces.
-
-<a id="env_utils--reference_manager--reference_manager_controller"></a>
-### `env_utils/reference_manager/reference_manager_controller.py`
-
-Reference Manager controller — the panel-facing layer over the engine.
-
-- **[`class ReferenceManagerController(ReferenceManager, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager/reference_manager_controller.py#L48)** — Controller that bridges Maya reference functionality with UI interactions.
-  - `ReferenceManagerController.scene_notes(self) -> 'ptk.SceneNotes'` *(property)* — The Notes column's store (:class:`pythontk.SceneNotes`: one file per
-  - `ReferenceManagerController.current_working_dir(self)` *(property)*
-  - `ReferenceManagerController.block_table_selection_method(method)`
-  - `ReferenceManagerController.prepare_item_for_edit(self, item)` — Prepare an item for editing by showing the full filename.
-  - `ReferenceManagerController.restore_item_display(self, item)` — Restore the item to its display name after editing.
-  - `ReferenceManagerController.is_item_being_edited(self, item)` — Check if an item is currently being edited.
-  - `ReferenceManagerController.handle_item_selection(self)`
-  - `ReferenceManagerController.sync_selection_to_references(self)` — Sync the table selection to match current scene references.
-  - `ReferenceManagerController.update_current_dir(self, text: Optional[str] = None)`
-  - `ReferenceManagerController.set_workspace(self, workspace_path: str, invalidate: bool = True) -> bool` — Set the current workspace for browsing and refresh the file list.
-  - `ReferenceManagerController.set_maya_project(self)` — Set Maya's project (workspace) to the browsed workspace — the explicit
-  - `ReferenceManagerController.refresh_file_list(self, invalidate=False)` — Refresh the file list for the table widget.
-  - `ReferenceManagerController.update_table(self, file_names, file_list)`
-  - `ReferenceManagerController.open_scene(self, file_path: str, set_workspace: bool = True)` — Open a scene file, optionally setting the workspace to match the file.
-  - `ReferenceManagerController.new_scene(self)` — Discard the current file and start an empty scene (Maya's ``file -new``).
-  - `ReferenceManagerController.unreference_all(self)`
-  - `ReferenceManagerController.unlink_all(self)`
-  - `ReferenceManagerController.unlink_references(self, namespaces)` — Unlink specific references.
-  - `ReferenceManagerController.convert_to_assembly(self)`
-  - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
-  - `ReferenceManagerController.rename_scene(self)` — Rename the scene file at the right-clicked row.
-  - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row: to the Recycle Bin
-
-<a id="env_utils--reference_manager--reference_manager_slots"></a>
-### `env_utils/reference_manager/reference_manager_slots.py`
-
-Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
-
-- **[`class ReferenceManagerSlots(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager/reference_manager_slots.py#L31)** — UI event handlers and widget initialization for the Reference Manager interface.
-  - `ReferenceManagerSlots.header_init(self, widget)` — Initialize the header for the reference manager.
-  - `ReferenceManagerSlots.tbl000_init(self, widget)` — Table setup: (re)wire signals every show, one-time context-menu build, then populate.
-  - `ReferenceManagerSlots.tbl000_item_double_clicked(self, item)` — Handle double-click to prepare item for editing.
-  - `ReferenceManagerSlots.tbl000_item_changed(self, item)` — Handle item changes when user renames a file via inline edit.
-  - `ReferenceManagerSlots.tbl000_editor_closed(self, editor, hint)` — Handle when the rename editor is closed.
-  - `ReferenceManagerSlots.btn_open_file_location(self)` — Open the containing folder of the right-clicked scene file in the file explorer.
-  - `ReferenceManagerSlots.txt000_init(self, widget)` — Initialize the text input for the current working directory with pin values.
-  - `ReferenceManagerSlots.txt001_init(self, widget)` — Initialize the filter text input with filtering options.
-  - `ReferenceManagerSlots.txt001(self, text)` — Handle the filter text input.
-  - `ReferenceManagerSlots.cmb000_init(self, widget)`
-  - `ReferenceManagerSlots.cmb000(self, index, widget)` — Handle workspace selection changes.
-  - `ReferenceManagerSlots.chk000(self, checked)` — Handle the recursive search toggle.
-  - `ReferenceManagerSlots.chk003(self, checked)` — Handle the ignore empty workspaces toggle.
-  - `ReferenceManagerSlots.chk_ignore_case(self, checked)` — Handle the ignore case checkbox.
-  - `ReferenceManagerSlots.chk_filter_suffix(self, checked)` — Handle the filter by suffix checkbox.
-  - `ReferenceManagerSlots.chk_hide_suffix(self, checked)` — Handle the hide suffix checkbox.
-  - `ReferenceManagerSlots.chk_hide_extension(self, checked)` — Handle the hide extension checkbox.
-  - `ReferenceManagerSlots.chk_show_notes_column(self, checked)` — Toggle visibility of the Notes (metadata) column.
-  - `ReferenceManagerSlots.txt_suffix(self, text)` — Suffix edited: re-filter if a suffix-dependent option is on.
-  - `ReferenceManagerSlots.txt_subfolder_structure(self, text)` — Folder structure edited: re-filter if a dependent option is on.
-  - `ReferenceManagerSlots.chk_filter_folder_structure(self, checked)` — Handle the filter by folder structure checkbox.
-  - `ReferenceManagerSlots.b000(self)` — Browse for a root directory.
-  - `ReferenceManagerSlots.b006(self)` — Open the current directory in the file explorer.
-  - `ReferenceManagerSlots.b001(self)` — Set dir to current workspace.
-  - `ReferenceManagerSlots.btn_open_scene(self)` — Open the scene file at the right-clicked row — a **reopen** (reload from disk) when
-  - `ReferenceManagerSlots.btn_toggle_reference(self)` — Toggle reference state for the right-clicked row.
-  - `ReferenceManagerSlots.btn_copy_path(self)` — Copy the right-clicked row's full file path to the clipboard.
-  - `ReferenceManagerSlots.btn_unlink_import(self)` — Unlink and import at the right-clicked row — covers both cases (mirror of Blender).
-  - `ReferenceManagerSlots.btn_save_scene(self)` — Save the current scene to the workspace.
-  - `ReferenceManagerSlots.btn_refresh(self)` — Refresh the file list.
-  - `ReferenceManagerSlots.btn_convert_assembly(self)` — Convert all references to assemblies.
-  - `ReferenceManagerSlots.btn_unlink_import_all(self)` — Unlink and import all references.
-  - `ReferenceManagerSlots.btn_unreference_all(self)` — Remove all references from the scene.
+  - `ReferenceManager.is_foreign(cls, path) -> bool` *(class)* — True if *path* is a foreign (Blender) scene -- a cross-DCC row baked through
+  - `ReferenceManager.needs_conversion(cls, path) -> bool` *(class)* — True if bringing *path* in runs a conversion in the other DCC (a headless
+  - `ReferenceManager.scene_has_complex_animation(path: str) -> bool` *(static)* — True if the foreign scene *path* carries rig logic (constraints, IK,
+  - `ReferenceManager.find_foreign_scenes(root_dir: str, recursive: bool = False, extensions=None) -> List[str]` *(static)* — The foreign scenes under *root_dir* (``BlenderSceneImport.find_scenes``).
+  - `ReferenceManager.bake_scene(self, path: str, **kwargs) -> str` — Bake the foreign scene (or an FBX) *path* to a cached ``.ma`` and return its
+  - `ReferenceManager.import_scene(self, path: str, **kwargs) -> list` — Import *path* as local data with no reference behind it
+  - `ReferenceManager.bake_project_root(self) -> Optional[str]` — The project a reference's bake goes in: the open scene's
+  - `ReferenceManager.foreign_scratch_path(path: str) -> str` *(static)* — The deterministic scratch ``.ma`` a foreign row opens as
+  - `ReferenceManager.discard_stale_scratches(self)` — Discard every untouched scratch twin that is no longer the open scene (one
+  - `ReferenceManager.current_scene(self) -> str` — The open scene's path;
+  - `ReferenceManager.scene_modified(self) -> bool` — True if the open scene has unsaved changes (``file -q -modified``).
+  - `ReferenceManager.save_open_scene(self) -> Optional[bool]` — Flush the open scene to its own file so its unsaved edits reach disk.
+  - `ReferenceManager.save_scene(self, path: str) -> str` — Save the open scene as *path* in Maya's own format, by its extension (an
+  - `ReferenceManager.new_scene(self) -> bool` — Discard the current file and start an empty scene (Maya's ``file -new``).
+  - `ReferenceManager.is_current(self, path, current=None) -> bool` — True if *path*'s scene is the one open: the file itself, or -- a foreign row
+  - `ReferenceManager.open_scene(self, file_path: str, set_workspace: bool = True) -> bool` — Open a scene file, optionally setting the workspace to match the file.
+  - `ReferenceManager.rename_scene_file(self, old_path: str, new_path: str, folder=None)` — Rename a scene file on disk, carrying everything keyed to its old name: the
+  - `ReferenceManager.remove_scene_file(self, path: str, permanent: bool = False, use_folder: bool = False) -> Optional[bool]` — Remove one scene with its metadata sidecar -- to the trash, or *permanent*
+  - `ReferenceManager.bake_source(referenced_path) -> Optional[str]` *(static)* — The scene *referenced_path* was baked from, or None.
+  - `ReferenceManager.row_key(cls, referenced_path) -> str` *(class)* — Normalized path of the row a reference to *referenced_path* stands
 
 <a id="env_utils--scene_exporter--_scene_exporter"></a>
 ### `env_utils/scene_exporter/_scene_exporter.py`
@@ -3551,32 +3501,43 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 <a id="mat_utils--texture_path_editor"></a>
 ### `mat_utils/texture_path_editor.py`
 
-- **[`class TexturePathEditorSlots`](mayatk/mayatk/mat_utils/texture_path_editor.py#L27)**
-  - `TexturePathEditorSlots.header_init(self, widget)` — Initialize the header menu.
-  - `TexturePathEditorSlots.tb_set_texture_directory_init(self, widget)` — Populate the Set Directory option-box with the relocate-mode combobox.
-  - `TexturePathEditorSlots.tb_normalize_paths_init(self, widget)` — Populate the Normalize Paths option-box with the external-mode combobox.
-  - `TexturePathEditorSlots.tb_resolve_missing_textures_init(self, widget)` — Populate the Resolve Missing option-box with the strategy checkboxes.
-  - `TexturePathEditorSlots.tbl000_init(self, widget)`
-  - `TexturePathEditorSlots.open_source_images(self)` — Open the project's sourceimages directory.
-  - `TexturePathEditorSlots.reload_scene_textures(self)` — Force Maya to re-read all scene textures from disk.
-  - `TexturePathEditorSlots.tb_set_texture_directory(self, widget=None)` — Repath file nodes (selection or all) under a chosen directory.
-  - `TexturePathEditorSlots.tb_find_and_copy_textures(self, widget=None)` — Open the Find & Copy panel over the current scope.
-  - `TexturePathEditorSlots.tb_normalize_paths(self, widget=None)` — Rewrite paths inside the project to relative.
-  - `TexturePathEditorSlots.make_paths_absolute(self)` — Rewrite relative paths (selection or all) to absolute.
-  - `TexturePathEditorSlots.tb_resolve_missing_textures(self, widget=None)` — Resolve missing textures with configurable cascade strategies.
-  - `TexturePathEditorSlots.select_textures_for_objects(self)` — Select table rows whose textures are used by the scene selection.
-  - `TexturePathEditorSlots.select_broken_paths(self)` — Select rows whose texture file is missing.
-  - `TexturePathEditorSlots.select_absolute_paths(self)` — Select rows whose path is absolute (regardless of validity).
-  - `TexturePathEditorSlots.row_browse_for_file(self, selection=None)` — Open a file dialog and repath the selected row's file node.
-  - `TexturePathEditorSlots.row_rename_file(self, selection=None)` — Rename one row's texture file, edited in its own cell.
-  - `TexturePathEditorSlots.select_material(self, selection=None)` — Select scene objects assigned to the materials of selected rows.
-  - `TexturePathEditorSlots.select_file_node(self, selection=None)` — Select the file nodes from the selected rows.
-  - `TexturePathEditorSlots.row_show_in_hypershade(self, selection=None)` — Graph the selected file node(s) in Hypershade.
-  - `TexturePathEditorSlots.delete_file_node(self, selection=None)` — Delete the selected file node(s);
-  - `TexturePathEditorSlots.refresh_texture_table(self)` — Manual refresh trigger from the header refresh button.
-  - `TexturePathEditorSlots.cleanup_scene_callbacks(self)` — Clean up scene-change subscriptions via ScriptJobManager.
-  - `TexturePathEditorSlots.setup_formatting(self, widget)`
-  - `TexturePathEditorSlots.handle_cell_edit(self, row: int, col: int)`
+Texture Path Editor engine: the scene's texture paths and the commands that fix them.
+
+- **[`class TexturePathEditor`](mayatk/mayatk/mat_utils/texture_path_editor.py#L43)** — The Texture Path Editor's scene half: file nodes, their paths, and the
+  - `TexturePathEditor.texture_dir(self) -> str` — The project's texture folder (the ``sourceImages`` rule), ``""`` if none.
+  - `TexturePathEditor.resolve_path(self, path: str, file_node=None)` — ``(exists, absolute path)`` for a stored or typed *path*.
+  - `TexturePathEditor.is_absolute_path(path: str) -> bool` *(static)* — Whether *path* is stored absolute -- a Normalize Paths candidate.
+  - `TexturePathEditor.rows(self, exclude_arnold: bool = False)` — One row per (shader, file node): what the editor's table lists.
+  - `TexturePathEditor.file_nodes(self, exclude_arnold: bool = False)` — Every file node in the scene -- the "all" scope of a path command.
+  - `TexturePathEditor.node_exists(node) -> bool` *(static)* — Whether *node* (a file node or shader name) is still in the scene.
+  - `TexturePathEditor.stored_path(node) -> str` *(static)* — The node's stored ``.ftn``, or "" when the plug cannot be read.
+  - `TexturePathEditor.selected_file_nodes(self)` — The file nodes the scene selection's materials read.
+  - `TexturePathEditor.reload_textures() -> None` *(static)* — Force Maya to re-read every scene texture from disk.
+  - `TexturePathEditor.set_texture_directory(self, file_nodes, target_dir: str, relocate_mode: str = 'rewrite', allow_missing: bool = False) -> int` — Repath each file node so its texture lives directly under *target_dir*.
+  - `TexturePathEditor.make_paths_absolute(self, file_nodes) -> int` — Rewrite relative texture paths to absolute -- inverse of Normalize Paths.
+  - `TexturePathEditor.normalize_paths(self, file_nodes, external_mode: str = 'rewrite') -> int` — Rewrite (selected) paths inside the project to relative.
+  - `TexturePathEditor.resolve_missing_textures(self, modes, file_nodes=None) -> int` — Rebind missing textures to files found under sourceimages.
+  - `TexturePathEditor.unresolved_file_nodes(self, file_nodes)` — The nodes whose stored path does not resolve -- what a Find & Copy
+  - `TexturePathEditor.find_and_copy_textures(self, file_nodes, answers, lightmaps=(), dry_run=False, progress=None) -> bool` — Collect sources, relocate them into one directory, repath the nodes.
+  - `TexturePathEditor.set_texture_path(self, file_node, path: str, relative: bool = False) -> str` — Point *file_node* at *path* -- Browse for File, or a typed path.
+  - `TexturePathEditor.is_file_rename(self, stored: str, typed: str, file_node=None) -> bool` — Whether a typed path renames *stored*'s file rather than repointing.
+  - `TexturePathEditor.apply_path_edit(self, file_node, typed: str, shader=None, sync=None) -> str` — A path typed into *file_node*'s row: rename its file, or repoint it.
+  - `TexturePathEditor.rename_texture(self, context, new_name: str, sync=None) -> bool` — Rename the texture file *context* names to *new_name*.
+  - `TexturePathEditor.can_rename_shader(self, shader) -> bool` — Whether a shader cell may rename *shader* (any shader in the scene).
+  - `TexturePathEditor.rename_shader(self, shader, new_name: str, sync=None) -> str` — Rename *shader*;
+  - `TexturePathEditor.rename_file_node(self, file_node, new_name: str, shader=None, sync=None) -> str` — Rename *file_node*;
+  - `TexturePathEditor.select_objects(self, shaders=(), lightmaps=()) -> int` — Select the objects wearing *shaders* and those *lightmaps* bind.
+  - `TexturePathEditor.select_file_nodes(self, file_nodes) -> int` — Select *file_nodes* (replacing the selection);
+  - `TexturePathEditor.graph_file_nodes(file_nodes) -> None` *(static)* — Graph *file_nodes* in the Hypershade.
+  - `TexturePathEditor.delete_consequences(self, file_nodes)` — What deleting *file_nodes* would unwire, as sentences for a confirm.
+  - `TexturePathEditor.delete_file_nodes(self, file_nodes) -> int` — Delete *file_nodes* (one undo step);
+  - `TexturePathEditor.lightmap_dependencies(self)` — The scene's lightmap dependency records (``LightmapRecords``):
+  - `TexturePathEditor.lightmap_labels(self, dep)` — ``(shader, node)`` labels for a lightmap row, read like a texture row.
+  - `TexturePathEditor.normalize_lightmaps(self, lightmaps, relative: bool) -> int` — Re-spell the scoped lightmap markers' folders (Normalize / Make Absolute).
+  - `TexturePathEditor.repath_lightmap(self, dep, folder: str) -> bool` — Point every marker naming *dep*'s map at *folder*.
+  - `TexturePathEditor.rename_lightmap(self, dep, new_name: str) -> None` — Rename a lightmap's file and re-stamp the markers that bind it by name.
+  - `TexturePathEditor.lightmap_revert_scope(self, deps)` — ``(objects, kept)``: the objects reverting *deps* would clear, and those
+  - `TexturePathEditor.revert_lightmaps(self, objects)` — The Lightmap Baker's Revert Selected on *objects*: their markers are
 
 <a id="node_utils--_node_utils"></a>
 ### `node_utils/_node_utils.py`
