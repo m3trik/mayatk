@@ -648,10 +648,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/workspace_map.py`
 - `class WorkspaceMap(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin)`
   - methods: current_working_dir, recursive_search, workspace_data, invalidate_workspace_data, get_workspace_tree_data, get_filtered_workspaces, create_project, mark_root_as_project
-- `class WorkspaceMapController(WorkspaceMap, pythontk.LoggingMixin)`
-  - methods: update_current_dir, refresh_tree, selected_workspace, open_selected_workspace
-- `class WorkspaceMapSlots(pythontk.HelpMixin, pythontk.LoggingMixin)`
-  - methods: header_init, txt000_init, txt001_init, tree000_init, filter_workspaces, chk000, browse_directory, set_to_workspace, btn_open_workspace, btn_explore_folder, new_project, mark_root, save_template
 
 ### `light_utils/_light_utils.py` — Light utilities — building real scene lights from the geometry that represents them.
 - `class LightUtils(_LightUtilsInternal, pythontk.HelpMixin)`
@@ -668,8 +664,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `light_utils/light_rig.py` — Light Rig manager: save, manage, swap and restore named light rigs.
 - `class LightRig(_LightRigInternal, pythontk.LoggingMixin)`
   - methods: store, aim_rotation, normalize, fixture_overrides, diff, fingerprint, capture, applied, compare, scene_rigs, can_swap_back, remove, apply, swap_back, names, load, save, delete, rename, landed_overrides
-- `class LightRigSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: refresh, header_init, cmb000_init, cmb000, b000, b001, open_rig_folder, prompt_save
 
 ### `light_utils/lightmap_baker/_probe_placement.py` — Where a lightmap bake's reflection probe stands -- Maya's scene for the placement.
 - `class ProbePlacement(pythontk.ProbePlacement)`
@@ -690,9 +684,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(pythontk.LoggingMixin, _ArnoldBridgeInternal)`
-  - methods: add, remove, rebuild, temporary, get_bridge, has_bridge, authored_plug, unrenderable_materials
-- `class ArnoldBridgeSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: header_init, cmb000_init, b000, b001, select_bridged
+  - methods: add, remove, rebuild, temporary, get_bridge, has_bridge, authored_plug, unrenderable_materials, base_materials, select_bridged
 
 ### `mat_utils/bake_sets.py` — Scene-stored bake sets: named object sets the bake tools read.
 - `class BakeSet`

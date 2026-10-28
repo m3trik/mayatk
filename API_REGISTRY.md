@@ -2458,7 +2458,7 @@ Push the Maya selection to a live browser / WebXR preview.
 <a id="env_utils--workspace_map"></a>
 ### `env_utils/workspace_map.py`
 
-- **[`class WorkspaceMap(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L13)** — Maps and displays Maya workspaces in a tree structure.
+- **[`class WorkspaceMap(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L13)** — Maps Maya workspaces for a tree view (the Workspace Map panel: tentacle's
   - `WorkspaceMap.current_working_dir(self)` *(property)* — Get the current working directory for workspace discovery.
   - `WorkspaceMap.recursive_search(self)` *(property)* — Whether to search recursively for workspaces.
   - `WorkspaceMap.workspace_data(self) -> Dict[str, Dict]` *(property)* — Get cached workspace data, rebuilding if needed.
@@ -2467,25 +2467,6 @@ Push the Maya selection to a live browser / WebXR preview.
   - `WorkspaceMap.get_filtered_workspaces(self, filter_text: str = None) -> List[Dict]` — Get a filtered list of workspaces.
   - `WorkspaceMap.create_project(self, name: str) -> Optional[ptk.Workspace]` — Create a project named *name* under the current root, built from the
   - `WorkspaceMap.mark_root_as_project(self) -> Optional[ptk.Workspace]` — Mark the current ROOT directory as a shared Maya/Blender project —
-- **[`class WorkspaceMapController(WorkspaceMap, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L242)** — Controller for the WorkspaceMap UI components.
-  - `WorkspaceMapController.update_current_dir(self, text: Optional[str] = None)` — Update the current working directory from UI input.
-  - `WorkspaceMapController.refresh_tree(self, invalidate: bool = False)` — Refresh the workspace tree.
-  - `WorkspaceMapController.selected_workspace(self) -> Optional[Dict]` — The workspace record under the tree cursor, or None (a directory
-  - `WorkspaceMapController.open_selected_workspace(self) -> Optional[str]` — Set Maya's project to the selected workspace.
-- **[`class WorkspaceMapSlots(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L370)** — UI slots for the WorkspaceMap interface.
-  - `WorkspaceMapSlots.header_init(self, widget)` — Project creation actions + header help text.
-  - `WorkspaceMapSlots.txt000_init(self, widget)` — Initialize the directory input widget.
-  - `WorkspaceMapSlots.txt001_init(self, widget)` — Initialize the filter input widget.
-  - `WorkspaceMapSlots.tree000_init(self, widget)` — Initialize the workspace tree widget.
-  - `WorkspaceMapSlots.filter_workspaces(self, text)` — Handle filter text changes.
-  - `WorkspaceMapSlots.chk000(self, checked)` — Handle recursive search toggle.
-  - `WorkspaceMapSlots.browse_directory(self)` — Browse for a root directory.
-  - `WorkspaceMapSlots.set_to_workspace(self)` — Set directory to current Maya workspace.
-  - `WorkspaceMapSlots.btn_open_workspace(self)` — Open selected workspace in Maya.
-  - `WorkspaceMapSlots.btn_explore_folder(self)` — Open selected workspace folder in file explorer.
-  - `WorkspaceMapSlots.new_project(self)` — Create a project under the root directory from the ACTIVE template.
-  - `WorkspaceMapSlots.mark_root(self)` — Promote the ROOT directory to a shared Maya/Blender project.
-  - `WorkspaceMapSlots.save_template(self)` — Publish the ACTIVE project's file rules as a named workspace template.
 
 <a id="light_utils--_light_utils"></a>
 ### `light_utils/_light_utils.py`
@@ -2555,7 +2536,7 @@ Light layers: each light of a rig baked alone, the raw material of a look match.
 
 Light Rig manager: save, manage, swap and restore named light rigs.
 
-- **[`class LightRig(_LightRigInternal, pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/light_rig.py#L641)** — Save, manage, swap and restore named light rigs (see the module docstring).
+- **[`class LightRig(_LightRigInternal, pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/light_rig.py#L640)** — Save, manage, swap and restore named light rigs (see the module docstring).
   - `LightRig.store(self) -> 'ptk.PresetStore'` *(property)* — The rig library.
   - `LightRig.aim_rotation(pos, aim) -> List[float]` *(static)* — World rotation (xyz, degrees) pointing a light's -Z from *pos* at *aim*.
   - `LightRig.normalize(cls, payload: Dict[str, Any]) -> Dict[str, Any]` *(class)* — *payload* in the canonical form (module docstring);
@@ -2576,15 +2557,6 @@ Light Rig manager: save, manage, swap and restore named light rigs.
   - `LightRig.delete(self, name: str) -> bool` — Delete a saved rig (a locked one stays).
   - `LightRig.rename(self, old: str, new: str) -> bool` — Rename a saved rig;
   - `LightRig.landed_overrides(cls, payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Dict[str, Any]]], List[str]]` *(class)* — *payload*'s overrides as they land: ``({section: {node: {attr:
-- **[`class LightRigSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/light_rig.py#L1296)** — Switchboard slots for ``light_rig.ui``: a thin driver over :class:`LightRig`.
-  - `LightRigSlots.refresh(self) -> None` — Re-read the library, select the scene's rig, and report the scene.
-  - `LightRigSlots.header_init(self, widget) -> None`
-  - `LightRigSlots.cmb000_init(self, widget) -> None`
-  - `LightRigSlots.cmb000(self, index, widget) -> None` — Show the picked rig (picking never changes the scene).
-  - `LightRigSlots.b000(self) -> None` — Apply the picked rig: it replaces the scene's rig (Swap Back returns).
-  - `LightRigSlots.b001(self) -> None` — Swap Back: return to the rig the last Apply replaced.
-  - `LightRigSlots.open_rig_folder(self) -> None` — Header menu: the folder the rig library lives in.
-  - `LightRigSlots.prompt_save(self) -> None` — ＋: save the scene's rig under a new (or existing) name.
 
 <a id="light_utils--lightmap_baker--_probe_placement"></a>
 ### `light_utils/lightmap_baker/_probe_placement.py`
@@ -2760,12 +2732,8 @@ Arnold render-bridge management.
   - `ArnoldBridge.has_bridge(self, material: str) -> bool` — True if any of *material*'s shading groups has an Arnold bridge.
   - `ArnoldBridge.authored_plug(plug: str) -> str` *(static)* — The plug *plug* follows: a bridge's ``emission`` resolves to the
   - `ArnoldBridge.unrenderable_materials(cls) -> List[str]` *(class)* — The materials Arnold would render as error magenta as the scene
-- **[`class ArnoldBridgeSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L862)** — Switchboard slots for the ``arnold_bridge.ui`` panel.
-  - `ArnoldBridgeSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
-  - `ArnoldBridgeSlots.cmb000_init(self, widget) -> None` — Populate the Scope combobox (Selected Objects is the default).
-  - `ArnoldBridgeSlots.b000(self) -> None` — Add Network.
-  - `ArnoldBridgeSlots.b001(self) -> None` — Remove Network.
-  - `ArnoldBridgeSlots.select_bridged(self) -> None` — Header action: select every base material that has a bridge.
+  - `ArnoldBridge.base_materials() -> List[str]` *(static)* — Every scene material a bridge can serve: the scene's materials minus
+  - `ArnoldBridge.select_bridged(self) -> List[str]` — Select every base material that has a bridge (never the bridge
 
 <a id="mat_utils--bake_sets"></a>
 ### `mat_utils/bake_sets.py`

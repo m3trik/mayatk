@@ -14989,7 +14989,7 @@
       "classes": [
         {
           "name": "WorkspaceMap",
-          "summary": "Maps and displays Maya workspaces in a tree structure.",
+          "summary": "Maps Maya workspaces for a tree view (the Workspace Map panel: tentacle's",
           "line": 13,
           "bases": [
             "WorkspaceManager",
@@ -15003,7 +15003,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Get the current working directory for workspace discovery.",
-              "line": 32,
+              "line": 33,
               "deprecated": false
             },
             {
@@ -15012,7 +15012,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Whether to search recursively for workspaces.",
-              "line": 44,
+              "line": 45,
               "deprecated": false
             },
             {
@@ -15021,7 +15021,7 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Dict]",
               "summary": "Get cached workspace data, rebuilding if needed.",
-              "line": 55,
+              "line": 56,
               "deprecated": false
             },
             {
@@ -15030,7 +15030,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Scan for workspaces and build data cache.",
-              "line": 61,
+              "line": 62,
               "deprecated": false
             },
             {
@@ -15039,7 +15039,7 @@
               "kind": "method",
               "signature": "(self, filter_text: str = None) -> Dict",
               "summary": "Get workspace data organized for tree display.",
-              "line": 153,
+              "line": 154,
               "deprecated": false
             },
             {
@@ -15048,7 +15048,7 @@
               "kind": "method",
               "signature": "(self, filter_text: str = None) -> List[Dict]",
               "summary": "Get a filtered list of workspaces.",
-              "line": 190,
+              "line": 191,
               "deprecated": false
             },
             {
@@ -15057,7 +15057,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> Optional[ptk.Workspace]",
               "summary": "Create a project named *name* under the current root, built from the",
-              "line": 214,
+              "line": 215,
               "deprecated": false
             },
             {
@@ -15066,182 +15066,7 @@
               "kind": "method",
               "signature": "(self) -> Optional[ptk.Workspace]",
               "summary": "Mark the current ROOT directory as a shared Maya/Blender project —",
-              "line": 225,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "WorkspaceMapController",
-          "summary": "Controller for the WorkspaceMap UI components.",
-          "line": 242,
-          "bases": [
-            "WorkspaceMap",
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "update_current_dir",
-              "qualname": "WorkspaceMapController.update_current_dir",
-              "kind": "method",
-              "signature": "(self, text: Optional[str] = None)",
-              "summary": "Update the current working directory from UI input.",
-              "line": 257,
-              "deprecated": false
-            },
-            {
-              "name": "refresh_tree",
-              "qualname": "WorkspaceMapController.refresh_tree",
-              "kind": "method",
-              "signature": "(self, invalidate: bool = False)",
-              "summary": "Refresh the workspace tree.",
-              "line": 336,
-              "deprecated": false
-            },
-            {
-              "name": "selected_workspace",
-              "qualname": "WorkspaceMapController.selected_workspace",
-              "kind": "method",
-              "signature": "(self) -> Optional[Dict]",
-              "summary": "The workspace record under the tree cursor, or None (a directory",
-              "line": 347,
-              "deprecated": false
-            },
-            {
-              "name": "open_selected_workspace",
-              "qualname": "WorkspaceMapController.open_selected_workspace",
-              "kind": "method",
-              "signature": "(self) -> Optional[str]",
-              "summary": "Set Maya's project to the selected workspace.",
-              "line": 358,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "WorkspaceMapSlots",
-          "summary": "UI slots for the WorkspaceMap interface.",
-          "line": 370,
-          "bases": [
-            "pythontk.HelpMixin",
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "WorkspaceMapSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Project creation actions + header help text.",
-              "line": 401,
-              "deprecated": false
-            },
-            {
-              "name": "txt000_init",
-              "qualname": "WorkspaceMapSlots.txt000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the directory input widget.",
-              "line": 487,
-              "deprecated": false
-            },
-            {
-              "name": "txt001_init",
-              "qualname": "WorkspaceMapSlots.txt001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the filter input widget.",
-              "line": 530,
-              "deprecated": false
-            },
-            {
-              "name": "tree000_init",
-              "qualname": "WorkspaceMapSlots.tree000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the workspace tree widget.",
-              "line": 541,
-              "deprecated": false
-            },
-            {
-              "name": "filter_workspaces",
-              "qualname": "WorkspaceMapSlots.filter_workspaces",
-              "kind": "method",
-              "signature": "(self, text)",
-              "summary": "Handle filter text changes.",
-              "line": 569,
-              "deprecated": false
-            },
-            {
-              "name": "chk000",
-              "qualname": "WorkspaceMapSlots.chk000",
-              "kind": "method",
-              "signature": "(self, checked)",
-              "summary": "Handle recursive search toggle.",
-              "line": 574,
-              "deprecated": false
-            },
-            {
-              "name": "browse_directory",
-              "qualname": "WorkspaceMapSlots.browse_directory",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Browse for a root directory.",
-              "line": 601,
-              "deprecated": false
-            },
-            {
-              "name": "set_to_workspace",
-              "qualname": "WorkspaceMapSlots.set_to_workspace",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Set directory to current Maya workspace.",
-              "line": 618,
-              "deprecated": false
-            },
-            {
-              "name": "btn_open_workspace",
-              "qualname": "WorkspaceMapSlots.btn_open_workspace",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open selected workspace in Maya.",
-              "line": 623,
-              "deprecated": false
-            },
-            {
-              "name": "btn_explore_folder",
-              "qualname": "WorkspaceMapSlots.btn_explore_folder",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open selected workspace folder in file explorer.",
-              "line": 629,
-              "deprecated": false
-            },
-            {
-              "name": "new_project",
-              "qualname": "WorkspaceMapSlots.new_project",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Create a project under the root directory from the ACTIVE template.",
-              "line": 638,
-              "deprecated": false
-            },
-            {
-              "name": "mark_root",
-              "qualname": "WorkspaceMapSlots.mark_root",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Promote the ROOT directory to a shared Maya/Blender project.",
-              "line": 654,
-              "deprecated": false
-            },
-            {
-              "name": "save_template",
-              "qualname": "WorkspaceMapSlots.save_template",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Publish the ACTIVE project's file rules as a named workspace template.",
-              "line": 674,
+              "line": 226,
               "deprecated": false
             }
           ]
@@ -15691,7 +15516,7 @@
         {
           "name": "LightRig",
           "summary": "Save, manage, swap and restore named light rigs (see the module docstring).",
-          "line": 641,
+          "line": 640,
           "bases": [
             "_LightRigInternal",
             "pythontk.LoggingMixin"
@@ -15703,7 +15528,7 @@
               "kind": "property",
               "signature": "(self) -> 'ptk.PresetStore'",
               "summary": "The rig library.",
-              "line": 741,
+              "line": 740,
               "deprecated": false
             },
             {
@@ -15712,7 +15537,7 @@
               "kind": "staticmethod",
               "signature": "(pos, aim) -> List[float]",
               "summary": "World rotation (xyz, degrees) pointing a light's -Z from *pos* at *aim*.",
-              "line": 749,
+              "line": 748,
               "deprecated": false
             },
             {
@@ -15721,7 +15546,7 @@
               "kind": "classmethod",
               "signature": "(cls, payload: Dict[str, Any]) -> Dict[str, Any]",
               "summary": "*payload* in the canonical form (module docstring);",
-              "line": 759,
+              "line": 758,
               "deprecated": false
             },
             {
@@ -15730,7 +15555,7 @@
               "kind": "classmethod",
               "signature": "(cls, fixtures: Optional[List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]",
               "summary": "The overrides that put each fixture in its mode (``ptk.LightRigFixture``):",
-              "line": 787,
+              "line": 786,
               "deprecated": false
             },
             {
@@ -15739,7 +15564,7 @@
               "kind": "classmethod",
               "signature": "(cls, a: Dict[str, Any], b: Dict[str, Any], tolerance: float = 0.0001) -> List[str]",
               "summary": "What changes from rig *a* to rig *b*, one line each (empty when they match).",
-              "line": 863,
+              "line": 862,
               "deprecated": false
             },
             {
@@ -15748,7 +15573,7 @@
               "kind": "classmethod",
               "signature": "(cls, payload: Dict[str, Any]) -> str",
               "summary": "A short hash of a rig's lights, blind to float noise (what \"edited\" compares).",
-              "line": 934,
+              "line": 933,
               "deprecated": false
             },
             {
@@ -15757,7 +15582,7 @@
               "kind": "method",
               "signature": "(self, group: Optional[str] = None) -> Dict[str, Any]",
               "summary": "The lights under *group* as a payload (their overrides are not included:",
-              "line": 943,
+              "line": 942,
               "deprecated": false
             },
             {
@@ -15766,7 +15591,7 @@
               "kind": "method",
               "signature": "(self, group: Optional[str] = None) -> Tuple[Optional[str], bool]",
               "summary": "``(rig name, edited since)`` for the rig in *group*;",
-              "line": 1000,
+              "line": 999,
               "deprecated": false
             },
             {
@@ -15775,7 +15600,7 @@
               "kind": "method",
               "signature": "(self, rig: Union[str, Dict[str, Any]], group: Optional[str] = None) -> List[str]",
               "summary": "What applying *rig* would change in the scene, one line each (empty: nothing).",
-              "line": 1010,
+              "line": 1009,
               "deprecated": false
             },
             {
@@ -15784,7 +15609,7 @@
               "kind": "method",
               "signature": "(self) -> List[Tuple[str, Optional[str]]]",
               "summary": "``(group, rig name)`` for every rig group in the scene.",
-              "line": 1053,
+              "line": 1052,
               "deprecated": false
             },
             {
@@ -15793,7 +15618,7 @@
               "kind": "method",
               "signature": "(self, group: Optional[str] = None) -> bool",
               "summary": "Whether :meth:`swap_back` has a rig to return to (in *group*, or any group).",
-              "line": 1061,
+              "line": 1060,
               "deprecated": false
             },
             {
@@ -15802,7 +15627,7 @@
               "kind": "method",
               "signature": "(self, group: Optional[str] = None) -> List[str]",
               "summary": "Delete *group*, its lights, and the filters and textures only they used.",
-              "line": 1069,
+              "line": 1068,
               "deprecated": false
             },
             {
@@ -15811,7 +15636,7 @@
               "kind": "method",
               "signature": "(self, rig: Union[str, Dict[str, Any]], group: Optional[str] = None, snapshot: bool = True, name: Optional[str] = None) -> Dict[str, Any]",
               "summary": "Swap the scene's rig for *rig* (a library name or a payload).",
-              "line": 1083,
+              "line": 1082,
               "deprecated": false
             },
             {
@@ -15820,7 +15645,7 @@
               "kind": "method",
               "signature": "(self, group: Optional[str] = None) -> Dict[str, Any]",
               "summary": "Return to the rig the last :meth:`apply` replaced in *group* (again to toggle back).",
-              "line": 1134,
+              "line": 1133,
               "deprecated": false
             },
             {
@@ -15829,7 +15654,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "The saved rigs, sorted.",
-              "line": 1237,
+              "line": 1236,
               "deprecated": false
             },
             {
@@ -15838,7 +15663,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> Dict[str, Any]",
               "summary": "A saved rig's payload.",
-              "line": 1241,
+              "line": 1240,
               "deprecated": false
             },
             {
@@ -15847,7 +15672,7 @@
               "kind": "method",
               "signature": "(self, name: str, description: Optional[str] = None, group: Optional[str] = None, force: bool = False) -> str",
               "summary": "Save the rig in *group* as *name*;",
-              "line": 1246,
+              "line": 1245,
               "deprecated": false
             },
             {
@@ -15856,7 +15681,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> bool",
               "summary": "Delete a saved rig (a locked one stays).",
-              "line": 1287,
+              "line": 1286,
               "deprecated": false
             },
             {
@@ -15865,7 +15690,7 @@
               "kind": "method",
               "signature": "(self, old: str, new: str) -> bool",
               "summary": "Rename a saved rig;",
-              "line": 1291,
+              "line": 1290,
               "deprecated": false
             },
             {
@@ -15874,90 +15699,7 @@
               "kind": "classmethod",
               "signature": "(cls, payload: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Dict[str, Any]]], List[str]]",
               "summary": "*payload*'s overrides as they land: ``({section: {node: {attr:",
-              "line": 353,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "LightRigSlots",
-          "summary": "Switchboard slots for ``light_rig.ui``: a thin driver over :class:`LightRig`.",
-          "line": 1296,
-          "bases": [
-            "pythontk.LoggingMixin",
-            "pythontk.HelpMixin"
-          ],
-          "members": [
-            {
-              "name": "refresh",
-              "qualname": "LightRigSlots.refresh",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Re-read the library, select the scene's rig, and report the scene.",
-              "line": 1340,
-              "deprecated": false
-            },
-            {
-              "name": "header_init",
-              "qualname": "LightRigSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 1390,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000_init",
-              "qualname": "LightRigSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 1418,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000",
-              "qualname": "LightRigSlots.cmb000",
-              "kind": "method",
-              "signature": "(self, index, widget) -> None",
-              "summary": "Show the picked rig (picking never changes the scene).",
-              "line": 1446,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "LightRigSlots.b000",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Apply the picked rig: it replaces the scene's rig (Swap Back returns).",
-              "line": 1461,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "LightRigSlots.b001",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Swap Back: return to the rig the last Apply replaced.",
-              "line": 1487,
-              "deprecated": false
-            },
-            {
-              "name": "open_rig_folder",
-              "qualname": "LightRigSlots.open_rig_folder",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Header menu: the folder the rig library lives in.",
-              "line": 1499,
-              "deprecated": false
-            },
-            {
-              "name": "prompt_save",
-              "qualname": "LightRigSlots.prompt_save",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "＋: save the scene's rig under a new (or existing) name.",
-              "line": 1557,
+              "line": 352,
               "deprecated": false
             }
           ]
@@ -17308,61 +17050,23 @@
               "summary": "The materials Arnold would render as error magenta as the scene",
               "line": 376,
               "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "ArnoldBridgeSlots",
-          "summary": "Switchboard slots for the ``arnold_bridge.ui`` panel.",
-          "line": 862,
-          "bases": [
-            "pythontk.LoggingMixin",
-            "pythontk.HelpMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ArnoldBridgeSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Configure the header menu and help text.",
-              "line": 884,
-              "deprecated": false
             },
             {
-              "name": "cmb000_init",
-              "qualname": "ArnoldBridgeSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Populate the Scope combobox (Selected Objects is the default).",
-              "line": 929,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "ArnoldBridgeSlots.b000",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Add Network.",
-              "line": 936,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "ArnoldBridgeSlots.b001",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Remove Network.",
-              "line": 940,
+              "name": "base_materials",
+              "qualname": "ArnoldBridge.base_materials",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "Every scene material a bridge can serve: the scene's materials minus",
+              "line": 402,
               "deprecated": false
             },
             {
               "name": "select_bridged",
-              "qualname": "ArnoldBridgeSlots.select_bridged",
+              "qualname": "ArnoldBridge.select_bridged",
               "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Header action: select every base material that has a bridge.",
-              "line": 944,
+              "signature": "(self) -> List[str]",
+              "summary": "Select every base material that has a bridge (never the bridge",
+              "line": 412,
               "deprecated": false
             }
           ]

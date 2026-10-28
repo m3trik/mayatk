@@ -216,8 +216,8 @@ DEFAULT_INCLUDE = {
     "mat_utils.emissive_groups": "EmissiveGroups",
     # Render utils
     "render_utils._render_utils": "RenderUtils",
-    # Light utils. Lightmap Baker's panel is tentacle's shared tool; the Light Rigs
-    # panel (``LightRigSlots``) is discovered by MayaUiHandler, not registered here.
+    # Light utils. Lightmap Baker's and Light Rigs' panels are tentacle's tools
+    # (Light Rigs is Maya-only: tentacle's slots/tools HOSTS).
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
     # The bake's Exclude / Isolate sets (the shared panel's rows read them).
     "mat_utils.bake_sets": ["BakeSourceSet", "LightmapExcludeSet", "LightmapIsolateSet"],
@@ -588,6 +588,23 @@ MOVED_NAMES = {
     ),
     "TexturePathEditorSlots": (
         "tentacle.slots.tools.texture_path_editor.TexturePathEditorSlots",
+        "0.30.0",
+    ),
+    "ArnoldBridgeSlots": (
+        "tentacle.slots.tools.arnold_bridge.ArnoldBridgeSlots",
+        "0.30.0",
+    ),
+    "LightRigSlots": (
+        "tentacle.slots.tools.light_rig.LightRigSlots",
+        "0.30.0",
+    ),
+    "WorkspaceMapSlots": (
+        "tentacle.slots.tools.workspace_map.WorkspaceMapSlots",
+        "0.30.0",
+    ),
+    # The Workspace Map's tree controller folded into the shared panel.
+    "WorkspaceMapController": (
+        "tentacle.slots.tools.workspace_map.WorkspaceMapSlots",
         "0.30.0",
     ),
 }

@@ -132,7 +132,6 @@ EXIT_USAGE = 3
 # offenders here so they skip the wasted crash/relaunch cycle.
 GUI_REQUIRED = {
     "test_sequencer": "Qt table classes hard-crash mayapy (0xC0000409)",
-    "test_light_rig_panel": "loads the light_rig panel through MayaUiHandler (a GUI Maya)",
     "test_shot_manifest": (
         "shots adapters register OpenMaya/scriptJob callbacks that "
         "segfault without a real Maya event loop"
