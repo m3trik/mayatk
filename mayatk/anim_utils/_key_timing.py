@@ -1402,6 +1402,24 @@ class _KeyTimingInternal:
         return True
 
     @classmethod
+    def _repair_fractional_keys(cls, objects, method, recursive, on_move=None):
+        """Body of :meth:`AnimUtils.repair_fractional_keys`."""
+        curves = cls.get_anim_curves(objects=objects, recursive=recursive)
+        # Resolved to curves, not passed as objects: only get_anim_curves walks
+        # descendants, and its None is the scene (snap_keys_to_frames' is the
+        # selection). Driven-key curves hold driver values, not frames.
+        curves = (cmds.ls(curves, type=list(cls.TIME_CURVE_TYPES)) or []) if curves else []
+        if not curves:
+            return {"curves": 0, "snapped": 0, "off_frame": 0}
+        snapped = cls.snap_keys_to_frames(curves, method=method, on_move=on_move)
+        times = cls.get_keyframe_times(curves) or []
+        return {
+            "curves": len(curves),
+            "snapped": snapped or 0,
+            "off_frame": sum(1 for t in times if t != int(t)),
+        }
+
+    @classmethod
     def _snap_keys_to_frames(
         cls,
         objects,

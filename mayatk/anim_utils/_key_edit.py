@@ -485,6 +485,20 @@ class _KeyEditInternal:
             cmds.warning("No valid transform nodes found.")
             return 0
 
+        if when == "current":  # on the playhead, whatever the keyed range
+            frame = cmds.currentTime(query=True) + offset
+            value = 1 if visible else 0
+            for obj in objects:
+                crv, replaced = (
+                    cls._keyed_over(f"{obj}.visibility", [(frame, value)])
+                    if on_replace is not None
+                    else (None, [])
+                )
+                cmds.setKeyframe(obj, attribute="visibility", time=frame, value=value)
+                if replaced:
+                    on_replace(crv, replaced)
+            return len(objects)
+
         # Collect keyframe data for each object
         obj_keyframe_data = []
 

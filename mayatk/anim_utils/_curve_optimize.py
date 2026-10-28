@@ -622,6 +622,8 @@ class _CurveOptimizeInternal:
         if extremes:
             value_tolerance = 0.001
 
+        if objects is None:  # the whole scene
+            objects = cmds.ls(type="transform") or []
         # Convert the input objects into curves once (avoid 3 redundant calls)
         if isinstance(objects, str):
             objects = [objects]

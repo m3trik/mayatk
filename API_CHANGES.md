@@ -921,9 +921,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (476)
+## Added (479)
 
+- `anim_utils/_anim_utils.py::AnimUtils.copied_key_counts(copied_data: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, int]`
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
+- `anim_utils/_anim_utils.py::AnimUtils.repair_fractional_keys(cls, objects: Optional[Union[str, List[str]]] = None, method: str = 'nearest', recursive: bool = True, on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None) -> Dict[str, int]`
+- `anim_utils/_anim_utils.py::AnimUtils.set_key_interpolation(cls, objects=None, interpolation: str = 'stepped', keys='auto', tangent: str = 'out') -> dict`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.delete_tweens(self, tweens: List[Target]) -> List[str]`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.has_setup(self) -> bool`
@@ -1443,8 +1446,17 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (23)
+## Signature changed (26)
 
+- `anim_utils/_anim_utils.py::AnimUtils.fit_playback_range`
+  - was: `(objects=None, padding: float = 0) -> bool`
+  - now: `(objects=None, padding: float = 0) -> Optional[Tuple[float, float]]`
+- `anim_utils/_anim_utils.py::AnimUtils.optimize_keys`
+  - was: `(cls, objects: Union[str, List[str]], value_tolerance: float = 0.001, *, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, through_blends: bool = True, on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None) -> List[str]`
+  - now: `(cls, objects: Optional[Union[str, List[str]]] = None, value_tolerance: float = 0.001, *, remove_flat_keys: bool = True, remove_static_curves: bool = True, simplify_keys: bool = False, recursive: bool = True, quiet: bool = False, stats: Optional[dict] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, through_blends: bool = True, on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None) -> List[str]`
+- `anim_utils/_anim_utils.py::AnimUtils.transfer_keyframes`
+  - was: `(cls, objects: List[str], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None)`
+  - now: `(cls, objects: Optional[List[str]] = None, relative: bool = False, transfer_tangents: bool = False, optimize: bool = False, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None)`
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
   - now: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, select: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`

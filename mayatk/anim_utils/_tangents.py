@@ -491,6 +491,38 @@ class _TangentInternal:
         if lock:
             cmds.keyTangent(attr_name, time=(time,), edit=True, lock=True)
 
+    #: ``AnimUtils.set_key_interpolation``'s non-stepped types -> Maya tangent types.
+    _KEY_TANGENT_TYPES = {"linear": "linear", "smooth": "auto"}
+
+    @classmethod
+    def _set_key_interpolation(cls, objects, interpolation, keys, tangent):
+        """Body of :meth:`AnimUtils.set_key_interpolation`."""
+        tangent_type = cls._KEY_TANGENT_TYPES.get(interpolation)
+        if tangent_type is None and interpolation != "stepped":
+            raise ValueError(f"Unknown interpolation: {interpolation!r}")
+        mode = {None: "all", "current_time": "current_frame"}.get(keys, keys)
+        resolved = cls.resolve_keys(objects, mode=mode)
+        curves = resolved["curves"]
+        if not curves:
+            if keys == "selected":
+                raise ValueError("No keys selected in the Graph Editor.")
+            return {"curves": 0, "objects": 0}
+        if tangent_type is None:
+            return cls.step_keys(
+                objects=resolved["objects"], keys=curves, tangent=tangent
+            )
+        sides = {"in": ("inTangentType",), "out": ("outTangentType",)}.get(
+            tangent, ("inTangentType", "outTangentType")
+        )
+        kwargs = {side: tangent_type for side in sides}
+        for curve, times in curves.items():
+            if times is None:
+                cmds.keyTangent(curve, edit=True, **kwargs)
+                continue
+            for t in times:
+                cmds.keyTangent(curve, edit=True, time=(t, t), **kwargs)
+        return {"curves": len(curves), "objects": len(resolved["objects"])}
+
     @classmethod
     def _step_keys(cls, objects, keys, tangent, resolution_order):
         """Body of :meth:`AnimUtils.step_keys`."""

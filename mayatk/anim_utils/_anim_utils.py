@@ -621,6 +621,39 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
+    def repair_fractional_keys(
+        cls,
+        objects: Optional[Union[str, List[str]]] = None,
+        method: str = "nearest",
+        recursive: bool = True,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
+    ) -> Dict[str, int]:
+        """Snap every key on a fractional frame back onto a whole one, over the
+        Repair pass's scope: *objects* and (``recursive``) their descendants, or the
+        whole scene for ``None`` -- where :meth:`snap_keys_to_frames` acts on the
+        objects in hand. Twin of blendertk's.
+
+        Driven-key (unitless) curves are left alone: their 0.25 / 0.5 are driver
+        values, not frames. A key whose whole frame is taken stays put
+        (:meth:`snap_keys_to_frames`' contract; merging would discard the tangents
+        of the key already there).
+
+        Parameters:
+            objects: The objects to repair; ``None`` is the whole scene.
+            method: Any :meth:`pythontk.MathUtils.round_value` mode.
+            recursive: Include the objects' descendants.
+            on_move: As :meth:`snap_keys_to_frames`'.
+
+        Returns:
+            dict: ``{"curves": int, "snapped": int, "off_frame": int}`` -- the time
+            curves scanned, the keys snapped, and the times still off a whole frame.
+        """
+        return cls._repair_fractional_keys(
+            objects=objects, method=method, recursive=recursive, on_move=on_move
+        )
+
+    @classmethod
+    @CoreUtils.undoable
     def reduce_to_extremes(
         cls,
         objects: Optional[Union[str, List[str]]] = None,
@@ -692,7 +725,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
     @CoreUtils.undoable
     def optimize_keys(
         cls,
-        objects: Union[str, List[str]],
+        objects: Optional[Union[str, List[str]]] = None,
         value_tolerance: float = 0.001,
         *,
         remove_flat_keys: bool = True,
@@ -716,7 +749,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         tolerance falls back to the default.
 
         Parameters:
-            objects (str, node, or list): The objects to optimize.
+            objects (str, node, or list): The objects to optimize; ``None`` is every
+                transform in the scene.
             value_tolerance (float): Tolerance for value comparison; negative
                 selects extremes mode.
             remove_flat_keys (bool): Whether to remove redundant flat keys.
@@ -1019,6 +1053,40 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             keys=keys,
             tangent=tangent,
             resolution_order=resolution_order,
+        )
+
+    @classmethod
+    @CoreUtils.undoable
+    def set_key_interpolation(
+        cls,
+        objects=None,
+        interpolation: str = "stepped",
+        keys="auto",
+        tangent: str = "out",
+    ) -> dict:
+        """Set the interpolation of the chosen keys: the Animation panel's Step
+        Tangents, over :meth:`step_keys` for ``"stepped"``. Twin of blendertk's.
+
+        Parameters:
+            objects: Transforms / anim curves; ``None`` is the selection.
+            interpolation: ``"stepped"`` (``step`` / ``stepnext``), ``"linear"`` or
+                ``"smooth"`` (``auto`` tangents).
+            keys: Which keys: ``"auto"`` (:meth:`resolve_keys`' cascade: the
+                selected keys, the Channel Box attributes, the keys on the current
+                frame, then all), ``"selected"`` (the keys picked in the Graph
+                Editor; refused when none are), ``"current_time"`` (the keys on the
+                current frame), or ``"all"`` / ``None``.
+            tangent: The side(s) set: ``"out"``, ``"in"`` or ``"both"``.
+
+        Returns:
+            dict: ``{"curves": int, "objects": int}`` counts.
+
+        Raises:
+            ValueError: ``keys="selected"`` with no key selected, or an unknown
+                *interpolation*.
+        """
+        return cls._set_key_interpolation(
+            objects=objects, interpolation=interpolation, keys=keys, tangent=tangent
         )
 
     @staticmethod
@@ -1501,6 +1569,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 - "both": At both start and end
                 - "before_start": One frame before the start
                 - "after_end": One frame after the end
+                - "current": On the current frame, whatever the keyed range
                 Default is "start".
             offset (int): Frame offset to apply to the keyframe timing. Positive values move
                 keys later, negative values move keys earlier. Default is 0.
@@ -1608,7 +1677,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
     @CoreUtils.undoable
     def transfer_keyframes(
         cls,
-        objects: List[str],
+        objects: Optional[List[str]] = None,
         relative: bool = False,
         transfer_tangents: bool = False,
         optimize: bool = False,
@@ -1622,6 +1691,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
         Parameters:
             objects (List[str]): List of objects. The first object is the source, and the rest are targets.
+                ``None`` is the selection (the first selected the source), refused with
+                ``ValueError`` when it holds fewer than two objects.
             relative (bool): If True, apply keyframes relative to the current values of the target objects.
             transfer_tangents (bool): If True, transfer the tangent handles along with the keyframes.
             optimize (bool): If True, run optimize_keys on the source before transferring.
@@ -2025,6 +2096,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
             # Use with absolute=True to add padding around actual keyframes
             tie_keyframes(absolute=True, padding=10)  # Adds 10 frame hold before/after animation
+
+        Returns:
+            int: The bookend keys inserted (twin of blendertk's).
         """
         return AnimUtils._tie_keyframes(
             objects=objects,
@@ -2248,6 +2322,18 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         )
 
     @staticmethod
+    def copied_key_counts(
+        copied_data: Optional[Dict[str, Dict[str, Any]]],
+    ) -> Dict[str, int]:
+        """What a :meth:`copy_keys` buffer holds, for a panel's report: a multi-key
+        attribute counts its keys, a value one. Twin of blendertk's.
+
+        Returns:
+            dict: ``{"keys": int, "attributes": int, "objects": int}``.
+        """
+        return AnimUtils._copied_key_counts(copied_data)
+
+    @staticmethod
     @CoreUtils.undoable
     def paste_keys(
         objects=None,
@@ -2328,7 +2414,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
     def fit_playback_range(
         objects=None,
         padding: float = 0,
-    ) -> bool:
+    ) -> Optional[Tuple[float, float]]:
         """Set the playback range to encompass keyframes on all (or given) scene objects.
 
         Queries every keyed object in the scene (or a supplied list) and adjusts
@@ -2341,7 +2427,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             padding: Extra frames to add before the first and after the last key.
 
         Returns:
-            True if the range was updated, False if no keyframes were found.
+            The ``(start, end)`` set, or None when no keyframes were found
+            (twin of blendertk's).
         """
         return AnimUtils._fit_playback_range(objects=objects, padding=padding)
 

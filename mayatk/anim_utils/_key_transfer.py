@@ -40,6 +40,13 @@ class _KeyTransferInternal:
         on_delete=None,
     ):
         """Body of :meth:`AnimUtils.transfer_keyframes`."""
+        if objects is None:
+            objects = cmds.ls(selection=True, long=True)
+            if len(objects) < 2:
+                raise ValueError(
+                    "Transfer Keys needs a source and a target: select the source "
+                    "first, then the target object(s)."
+                )
         resolved_objects = cmds.ls(objects, long=True)
         if len(resolved_objects) < 2:
             cmds.warning("Please provide at least one source and one target object.")
@@ -157,6 +164,17 @@ class _KeyTransferInternal:
                     )
         for crv, replaced in replacements:
             on_replace(crv, replaced)
+
+    @staticmethod
+    def _copied_key_counts(copied_data):
+        """Body of :meth:`AnimUtils.copied_key_counts`."""
+        counts = {"keys": 0, "attributes": 0, "objects": 0}
+        for attributes in (copied_data or {}).values():
+            counts["objects"] += 1
+            for data in attributes.values():
+                counts["attributes"] += 1
+                counts["keys"] += len(data) if isinstance(data, list) else 1
+        return counts
 
     @classmethod
     def _copy_keys(cls, objects, mode, resolution_order, tangent_detail):

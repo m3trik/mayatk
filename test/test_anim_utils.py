@@ -7175,5 +7175,134 @@ class TestGetKeyCurves(MayaTkTestCase):
         )
 
 
+class TestAnimationPanelOps(MayaTkTestCase):
+    """The operations tentacle's composed Animation panel calls (twins in blendertk)."""
+
+    def _keyed(self, name, attr="translateX", keys=((1, 0.0), (10, 10.0))):
+        node = cmds.polyCube(name=name)[0]
+        for t, v in keys:
+            cmds.setKeyframe(node, attribute=attr, time=t, value=v)
+        return node
+
+    def _curve(self, node, attr="translateX"):
+        return cmds.listConnections(f"{node}.{attr}", type="animCurve")[0]
+
+    def test_set_key_interpolation_linear_sets_the_chosen_sides(self):
+        node = self._keyed("interp_linear")
+        cmds.select(node, replace=True)
+        result = AnimUtils.set_key_interpolation(
+            None, interpolation="linear", keys="all", tangent="both"
+        )
+        crv = self._curve(node)
+        self.assertEqual(result["curves"], 1)
+        self.assertEqual(
+            set(cmds.keyTangent(crv, query=True, outTangentType=True)), {"linear"}
+        )
+        self.assertEqual(
+            set(cmds.keyTangent(crv, query=True, inTangentType=True)), {"linear"}
+        )
+
+    def test_set_key_interpolation_stepped_steps_the_out_side(self):
+        node = self._keyed("interp_step")
+        cmds.select(node, replace=True)
+        AnimUtils.set_key_interpolation(None, interpolation="stepped", keys="all")
+        self.assertEqual(
+            set(cmds.keyTangent(self._curve(node), query=True, outTangentType=True)),
+            {"step"},
+        )
+
+    def test_set_key_interpolation_refuses_selected_with_no_keys_picked(self):
+        node = self._keyed("interp_none")
+        cmds.select(node, replace=True)
+        cmds.selectKey(clear=True)
+        with self.assertRaises(ValueError):
+            AnimUtils.set_key_interpolation(None, keys="selected")
+
+    def test_repair_fractional_keys_reports_and_reaches_descendants(self):
+        root = self._keyed("frac_root", keys=((1.3, 0.0), (4.8, 1.0)))
+        child = self._keyed("frac_child", keys=((2.2, 0.0), (9.0, 1.0)))
+        cmds.parent(child, root)
+        report = AnimUtils.repair_fractional_keys([root])
+        self.assertEqual(report["curves"], 2)
+        self.assertEqual(report["snapped"], 3)
+        self.assertEqual(report["off_frame"], 0)
+        self.assertEqual(
+            sorted(cmds.keyframe(self._curve(root), query=True, timeChange=True)),
+            [1.0, 5.0],
+        )
+
+    def test_repair_fractional_keys_on_an_unanimated_selection_finds_no_curves(self):
+        elsewhere = self._keyed("frac_elsewhere", keys=((1.3, 0.0),))
+        bare = cmds.polyCube(name="frac_bare")[0]
+        report = AnimUtils.repair_fractional_keys([bare])
+        self.assertEqual(report, {"curves": 0, "snapped": 0, "off_frame": 0})
+        self.assertEqual(
+            cmds.keyframe(self._curve(elsewhere), query=True, timeChange=True), [1.3]
+        )
+
+    def test_copied_key_counts(self):
+        counts = AnimUtils.copied_key_counts(
+            {"a": {"tx": [{"time": 1}, {"time": 2}], "ty": 1.0}, "b": {"tz": 0.0}}
+        )
+        self.assertEqual(counts, {"keys": 4, "attributes": 3, "objects": 2})
+        self.assertEqual(
+            AnimUtils.copied_key_counts({}), {"keys": 0, "attributes": 0, "objects": 0}
+        )
+
+    def test_transfer_keyframes_none_reads_the_selection(self):
+        source = self._keyed("xfer_src", keys=((1, 0.0), (10, 5.0)))
+        target = cmds.polyCube(name="xfer_tgt")[0]
+        cmds.select([source, target], replace=True)
+        AnimUtils.transfer_keyframes(None)
+        self.assertEqual(
+            sorted(cmds.keyframe(f"{target}.translateX", query=True, timeChange=True)),
+            [1.0, 10.0],
+        )
+
+    def test_transfer_keyframes_none_refuses_a_lone_object(self):
+        cmds.select(self._keyed("xfer_alone"), replace=True)
+        with self.assertRaises(ValueError):
+            AnimUtils.transfer_keyframes(None)
+
+    def test_tie_keyframes_answers_the_bookends_it_inserted(self):
+        node = self._keyed("tie_count", keys=((5, 0.0), (10, 1.0)))
+        cmds.playbackOptions(minTime=1, maxTime=20)
+        self.assertEqual(AnimUtils.tie_keyframes([node]), 2)
+        self.assertEqual(AnimUtils.tie_keyframes([node]), 0, "already tied")
+
+    def test_fit_playback_range_answers_the_range_it_set(self):
+        node = self._keyed("fit_range", keys=((3, 0.0), (42, 1.0)))
+        self.assertEqual(AnimUtils.fit_playback_range([node]), (3.0, 42.0))
+        bare = cmds.polyCube(name="fit_bare")[0]
+        self.assertIsNone(AnimUtils.fit_playback_range([bare]))
+
+    def test_set_visibility_keys_current_keys_the_playhead(self):
+        node = cmds.polyCube(name="vis_current")[0]  # no keyed range needed
+        cmds.currentTime(7)
+        self.assertEqual(
+            AnimUtils.set_visibility_keys([node], visible=False, when="current"), 1
+        )
+        self.assertEqual(
+            cmds.keyframe(f"{node}.visibility", query=True, timeChange=True), [7.0]
+        )
+
+    def test_scale_keys_auto_narrows_uniform_to_the_selected_keys(self):
+        node = self._keyed("scale_auto", keys=((0, 0.0), (10, 1.0), (30, 2.0)))
+        crv = self._curve(node)
+        cmds.selectKey(crv, time=(0, 10), replace=True)
+        mtk.ScaleKeys.scale_keys(
+            objects=[node], factor=2.0, keys="auto", snap_mode="none"
+        )
+        times = sorted(cmds.keyframe(crv, query=True, timeChange=True))
+        self.assertIn(30.0, times, "the unselected key moved")
+        self.assertNotIn(60.0, times, "the unselected key was scaled too")
+
+    def test_optimize_keys_none_is_the_scene(self):
+        node = self._keyed("opt_scene", attr="translateY", keys=((0, 0.0), (10, 0.0)))
+        stats = {}
+        AnimUtils.optimize_keys(None, quiet=True, stats=stats)
+        self.assertGreater(stats.get("curves_before", 0), 0)
+        self.assertFalse(cmds.listConnections(f"{node}.translateY", type="animCurve"))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
