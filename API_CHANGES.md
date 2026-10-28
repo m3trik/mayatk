@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (261)
+## Moved out (296)
 
 - `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
 - `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.b000` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
@@ -147,6 +147,27 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/snap.py::SnapSlots.b002` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.b002_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.header_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.add_hdr` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.clear_network` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.cmb000` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.cmb000_init` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.ctx_reveal_in_explorer` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.ctx_select_file_node` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.ctx_select_skydome` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.ctx_select_transform` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.hdr_map` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.hdr_map_preview` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.hdr_map_visibility` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.header_init` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.open_sourceimages` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.slider000` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.spn_diffuse` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.spn_exposure` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.spn_intensity` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.spn_resolution` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.spn_samples` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/hdr_manager.py::HdrManagerSlots.spn_specular` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b000` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b001` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
@@ -193,6 +214,20 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/mat_updater.py::MatUpdaterSlots.move_to_folder` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
 - `mat_utils/mat_updater.py::MatUpdaterSlots.selection_mode` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
 - `mat_utils/mat_updater.py::MatUpdaterSlots.shader_type` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b000` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b001` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b002` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.cmb002_init` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.header_init` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl000` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl001` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl002` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl_graph_material` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl_open_templates_dir` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.refresh_templates` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.rename_template_safe` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.source_images_dir` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.b001_init` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.header_init` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
@@ -266,7 +301,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008_init` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 
-## Added (65)
+## Added (68)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/key_stash/_key_stash.py::KeyStash.select_clip_objects(self, clip_id: int) -> List[str]`
@@ -289,6 +324,8 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/duplicate_radial.py::DuplicateRadial.regroup_copies(copies: Dict[str, List[str]]) -> None`
 - `edit_utils/dynamic_pipe.py::DynamicPipe.from_selection(cls, **kwargs) -> 'DynamicPipe'`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `light_utils/hdr_manager.py::HdrManager.defer_apply(callback: Callable[[], None]) -> None`
+- `light_utils/hdr_manager.py::HdrManager.select(self, part: str = 'skydome') -> Optional[str]`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups(class)`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups.add_members(self, store: str, face_map: FaceMap) -> None`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups.carrier_weights(self, prefix: str) -> List[str]`
@@ -319,6 +356,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/mat_updater.py::MatUpdater.selected_materials(cls, shader_type: Optional[str] = None) -> List[str]`
 - `mat_utils/mat_updater.py::MatUpdater.shader_type_choices() -> List[Tuple[str, str]]`
 - `mat_utils/mat_updater.py::MatUpdater.texture_root() -> str`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplates.suggested_name(nodes) -> str`
 - `nurbs_utils/curve_to_tube.py::CurveToTube.describe(tubes) -> str`
 - `nurbs_utils/image_tracer.py::BluePencilMixin.open_blue_pencil() -> None`
 - `rig_utils/telescope_rig.py::TelescopeRig.partition_selection(cls, selection: Optional[List[str]] = None) -> Tuple[Optional[str], List[str], Optional[str]]`
@@ -379,11 +417,14 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `mat_utils/emissive_groups.py::EmissiveGroups.transfer_out`
 - `mat_utils/emissive_groups.py::EmissiveGroups.validate`
 
-## Signature changed (3)
+## Signature changed (4)
 
 - `edit_utils/bridge.py::Bridge.bridge`
   - was: `(edges, **kwargs)`
   - now: `(edges, *, curve_type=None, divisions=None, smoothing_angle=None, offset=None, taper=None, twist=None, cleanup_curves=False, **kwargs)`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplates.restore_template`
+  - was: `(file_path, texture_paths=None, name=None, logger=None)`
+  - now: `(cls, file_path, texture_paths=None, name=None, logger=None)`
 - `rig_utils/telescope_rig.py::TelescopeRig.teardown`
   - was: `(self, bundle: Optional[TelescopeRigBundle] = None) -> bool`
   - now: `(self, bundle: Union[TelescopeRigBundle, List[TelescopeRigBundle], None] = None) -> bool`

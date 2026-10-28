@@ -181,6 +181,7 @@ DEFAULT_INCLUDE = {
     "env_utils.unity_bridge._unity_bridge": "UnityBridge",
     # Material utils
     "mat_utils.game_shader": "GameShader",
+    "light_utils.hdr_manager": "HdrManager",
     "mat_utils.arnold_bridge": "ArnoldBridge",
     "mat_utils.render_opacity.render_effects": "RenderEffects",
     "mat_utils.render_opacity.attribute_mode": "OpacityAttributeMode",
@@ -442,6 +443,14 @@ MOVED_NAMES = {
     ),
     "MatUpdaterSlots": (
         "tentacle.slots.tools.mat_updater.MatUpdaterSlots",
+        "0.30.0",
+    ),
+    "HdrManagerSlots": (
+        "tentacle.slots.tools.hdr_manager.HdrManagerSlots",
+        "0.30.0",
+    ),
+    "ShaderTemplatesSlots": (
+        "tentacle.slots.tools.shader_templates.ShaderTemplatesSlots",
         "0.30.0",
     ),
 }

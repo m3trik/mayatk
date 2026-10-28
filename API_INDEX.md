@@ -715,9 +715,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, set_hdr_map_visibility, sky_radius, preview, rotation, intensity, exposure, resolution, samples, diffuse, specular, create_network, clear
-- `class HdrManagerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: header_init, cmb000_init, hdr_map, hdr_map_visibility, hdr_map_preview, cmb000, slider000, spn_intensity, spn_exposure, spn_resolution, spn_samples, spn_diffuse, spn_specular, add_hdr, open_sourceimages, clear_network, ctx_select_skydome, ctx_select_transform, ctx_select_file_node, ctx_reveal_in_explorer
+  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, set_hdr_map_visibility, sky_radius, preview, rotation, intensity, exposure, resolution, samples, diffuse, specular, create_network, clear, select, defer_apply
 
 ### `light_utils/light_layer_baker.py` — Light layers: each light of a rig baked alone, the raw material of a look match.
 - `class LightLayerBaker(pythontk.LoggingMixin)`
@@ -906,11 +904,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GraphRestorer(_ShaderTemplatesInternal)`
   - methods: load_yaml, restore_graph, restore_connections
 - `class ShaderTemplates`
-  - methods: store, migrate_package_templates, save_template, restore_template
-
-### `mat_utils/shader_templates/shader_templates_slots.py` — Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.
-- `class ShaderTemplatesSlots(pythontk.LoggingMixin)`
-  - methods: source_images_dir, header_init, lbl_graph_material, lbl_open_templates_dir, cmb002_init, refresh_templates, rename_template_safe, lbl000, lbl001, lbl002, b000, b001, b002
+  - methods: store, migrate_package_templates, suggested_name, save_template, restore_template
 
 ### `mat_utils/substance_bridge/_substance_bridge.py` — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - constants: SEND_TO, ROUND_TRIP, TARGET_AUTO, TARGET_NEW, TARGET_CURRENT

@@ -182,7 +182,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/shader_attribute_map.py`](#mat_utils--shader_attribute_map) — Logical texture channel -> per-shader (attribute, output plug), and the one
 - [`mat_utils/shader_converter.py`](#mat_utils--shader_converter) — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - [`mat_utils/shader_templates/_shader_templates.py`](#mat_utils--shader_templates--_shader_templates)
-- [`mat_utils/shader_templates/shader_templates_slots.py`](#mat_utils--shader_templates--shader_templates_slots) — Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.
 - [`mat_utils/substance_bridge/_substance_bridge.py`](#mat_utils--substance_bridge--_substance_bridge) — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - [`mat_utils/substance_bridge/_substance_engine.py`](#mat_utils--substance_bridge--_substance_engine) — Drive Substance 3D Painter from the outside -- the DCC-free half of the bridge.
 - [`mat_utils/substance_bridge/connection.py`](#mat_utils--substance_bridge--connection) — Substance 3D Painter connection module.
@@ -258,7 +257,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L255) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L256) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -2807,7 +2806,7 @@ Light utilities — building real scene lights from the geometry that represents
 
 Arnold HDR environment manager.
 
-- **[`class HdrManager(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L59)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
+- **[`class HdrManager(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L55)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
   - `HdrManager.arnold_loaded() -> bool` *(static)* — True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.
   - `HdrManager.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin can be loaded right now.
   - `HdrManager.ensure_plugin_loaded(cls) -> bool` *(class)* — Backward-compat alias for :meth:`arnold_available`.
@@ -2828,27 +2827,8 @@ Arnold HDR environment manager.
   - `HdrManager.specular(self) -> float` *(property)* — Specular contribution scale (``aiSpecular``);
   - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None, preview: Optional[bool] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
   - `HdrManager.clear(self) -> None` — Remove the skydome and its connected file/place2d nodes.
-- **[`class HdrManagerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L524)** — Switchboard slots for the HDR Manager UI.
-  - `HdrManagerSlots.header_init(self, widget) -> None` — Configure header menu and refresh button.
-  - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.
-  - `HdrManagerSlots.hdr_map(self) -> Optional[str]` *(property)* — Selected HDR file path from the combobox.
-  - `HdrManagerSlots.hdr_map_visibility(self) -> bool` *(property)* — Render 'Visible' flag — read from the rotation slider's render toggle.
-  - `HdrManagerSlots.hdr_map_preview(self) -> bool` *(property)* — Viewport-preview flag — read from the rotation slider's viewport toggle.
-  - `HdrManagerSlots.cmb000(self, index, widget) -> None` — HDR map selection — the panel's sole apply action (always deferred).
-  - `HdrManagerSlots.slider000(self, value, widget) -> None` — Rotate the HDR around Y.
-  - `HdrManagerSlots.spn_intensity(self, value) -> None` — Set the skydome's HDR intensity (brightness multiplier).
-  - `HdrManagerSlots.spn_exposure(self, value) -> None` — Set the skydome's exposure (in stops).
-  - `HdrManagerSlots.spn_resolution(self, value) -> None` — Set the baked skydome resolution.
-  - `HdrManagerSlots.spn_samples(self, value) -> None` — Set the skydome's render sample count.
-  - `HdrManagerSlots.spn_diffuse(self, value) -> None` — Set the skydome's diffuse contribution.
-  - `HdrManagerSlots.spn_specular(self, value) -> None` — Set the skydome's specular contribution.
-  - `HdrManagerSlots.add_hdr(self) -> None` — Add HDR(s) from one dialog — pick loose files and/or a whole folder.
-  - `HdrManagerSlots.open_sourceimages(self) -> None` — Open the workspace's sourceimages folder in Explorer.
-  - `HdrManagerSlots.clear_network(self) -> None` — Delete the skydome network and reset the UI to defaults.
-  - `HdrManagerSlots.ctx_select_skydome(self) -> None` — Select the skydome (HDR environment) node in the scene.
-  - `HdrManagerSlots.ctx_select_transform(self) -> None` — Select the skydome's transform node.
-  - `HdrManagerSlots.ctx_select_file_node(self) -> None` — Select the file node feeding the skydome's HDR texture.
-  - `HdrManagerSlots.ctx_reveal_in_explorer(self) -> None` — Reveal the skydome's HDR texture file in the system file explorer.
+  - `HdrManager.select(self, part: str = 'skydome') -> Optional[str]` — Select the environment's *part*, replacing the selection.
+  - `HdrManager.defer_apply(callback: Callable[[], None]) -> None` *(static)* — Run *callback*, a scene edit a dropdown pick drives, on Maya's idle
 
 <a id="light_utils--light_layer_baker"></a>
 ### `light_utils/light_layer_baker.py`
@@ -3624,28 +3604,9 @@ Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - **[`class ShaderTemplates`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L531)** — Facade class for managing shader templates.
   - `ShaderTemplates.store(cls) -> 'ptk.PresetStore'` *(class)* — The template store: shipped templates read-only, the user's in
   - `ShaderTemplates.migrate_package_templates(cls, store: 'ptk.PresetStore') -> List[str]` *(class)* — Move user templates out of *store*'s built-in folder into its user
+  - `ShaderTemplates.suggested_name(nodes) -> str` *(static)* — The name Save Template offers for *nodes*: the first node's leaf name,
   - `ShaderTemplates.save_template(nodes, file_path, exclude_types=None, logger=None)` *(static)* — Save the specified nodes as a shader template.
-  - `ShaderTemplates.restore_template(file_path, texture_paths=None, name=None, logger=None)` *(static)* — Restore a shader template from a file.
-
-<a id="mat_utils--shader_templates--shader_templates_slots"></a>
-### `mat_utils/shader_templates/shader_templates_slots.py`
-
-Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.
-
-- **[`class ShaderTemplatesSlots(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/shader_templates/shader_templates_slots.py#L27)**
-  - `ShaderTemplatesSlots.source_images_dir(self) -> str` *(property)* — Where Browse opens: the scene project's texture folder, resolved
-  - `ShaderTemplatesSlots.header_init(self, widget)` — Initialize the header widget.
-  - `ShaderTemplatesSlots.lbl_graph_material(self)` — Graph the last restored material in the Hypershade.
-  - `ShaderTemplatesSlots.lbl_open_templates_dir(self)` — Open the user's shader templates directory in file explorer.
-  - `ShaderTemplatesSlots.cmb002_init(self, widget)` — Initialize the ComboBox for shader templates.
-  - `ShaderTemplatesSlots.refresh_templates(self, widget)` — Refresh the list of templates: shipped and user (a user template
-  - `ShaderTemplatesSlots.rename_template_safe(self, widget, new_name)` — Safe rename that checks for None.
-  - `ShaderTemplatesSlots.lbl000(self)` — Set the ComboBox as editable to allow renaming.
-  - `ShaderTemplatesSlots.lbl001(self)` — Delete the selected (user) template.
-  - `ShaderTemplatesSlots.lbl002(self)` — Open the selected template in the default editor.
-  - `ShaderTemplatesSlots.b000(self)` — Create shader network using selected template.
-  - `ShaderTemplatesSlots.b001(self)` — Load texture maps and update GUI.
-  - `ShaderTemplatesSlots.b002(self)` — Save current graph as a new shader template.
+  - `ShaderTemplates.restore_template(cls, file_path, texture_paths=None, name=None, logger=None)` *(class)* — Restore a shader template from a file.
 
 <a id="mat_utils--substance_bridge--_substance_bridge"></a>
 ### `mat_utils/substance_bridge/_substance_bridge.py`

@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 255,
+          "line": 256,
           "deprecated": false
         }
       ]
@@ -17244,7 +17244,7 @@
         {
           "name": "HdrManager",
           "summary": "Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.",
-          "line": 59,
+          "line": 55,
           "bases": [
             "pythontk.LoggingMixin",
             "pythontk.HelpMixin"
@@ -17256,7 +17256,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.",
-              "line": 83,
+              "line": 94,
               "deprecated": false
             },
             {
@@ -17265,7 +17265,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the ``mtoa`` plugin can be loaded right now.",
-              "line": 96,
+              "line": 107,
               "deprecated": false
             },
             {
@@ -17274,7 +17274,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> bool",
               "summary": "Backward-compat alias for :meth:`arnold_available`.",
-              "line": 113,
+              "line": 124,
               "deprecated": false
             },
             {
@@ -17283,7 +17283,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The active skydome shape node, or ``None`` if none exists.",
-              "line": 122,
+              "line": 133,
               "deprecated": false
             },
             {
@@ -17292,7 +17292,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Transform parent of the skydome shape, or ``None``.",
-              "line": 213,
+              "line": 226,
               "deprecated": false
             },
             {
@@ -17301,7 +17301,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The ``file`` node currently driving ``color`` on the skydome.",
-              "line": 221,
+              "line": 234,
               "deprecated": false
             },
             {
@@ -17310,7 +17310,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Current HDR file path on disk, or ``None``.",
-              "line": 227,
+              "line": 240,
               "deprecated": false
             },
             {
@@ -17319,7 +17319,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "Primary-ray visibility of the HDR (skydome as backdrop).",
-              "line": 240,
+              "line": 253,
               "deprecated": false
             },
             {
@@ -17328,7 +17328,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "Backward-compat shim for :attr:`visibility`.",
-              "line": 251,
+              "line": 264,
               "deprecated": false
             },
             {
@@ -17337,7 +17337,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Viewport-preview dome radius (``skyRadius``);",
-              "line": 258,
+              "line": 271,
               "deprecated": false
             },
             {
@@ -17346,7 +17346,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "Viewport-preview visibility — True when the dome shows in the viewport.",
-              "line": 275,
+              "line": 288,
               "deprecated": false
             },
             {
@@ -17355,7 +17355,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Y rotation (degrees, azimuth) of the skydome transform;",
-              "line": 291,
+              "line": 304,
               "deprecated": false
             },
             {
@@ -17364,7 +17364,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Linear light-output multiplier on the skydome;",
-              "line": 314,
+              "line": 327,
               "deprecated": false
             },
             {
@@ -17373,7 +17373,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Photographic stops (log2) on the skydome's ``aiExposure``.",
-              "line": 323,
+              "line": 336,
               "deprecated": false
             },
             {
@@ -17382,7 +17382,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "Importance-sampling resolution of the HDR (``resolution``);",
-              "line": 335,
+              "line": 348,
               "deprecated": false
             },
             {
@@ -17391,7 +17391,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "Light samples (``aiSamples``) — soft-IBL noise control;",
-              "line": 348,
+              "line": 361,
               "deprecated": false
             },
             {
@@ -17400,7 +17400,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Diffuse contribution scale (``aiDiffuse``);",
-              "line": 357,
+              "line": 370,
               "deprecated": false
             },
             {
@@ -17409,7 +17409,7 @@
               "kind": "property",
               "signature": "(self) -> float",
               "summary": "Specular contribution scale (``aiSpecular``);",
-              "line": 366,
+              "line": 379,
               "deprecated": false
             },
             {
@@ -17418,7 +17418,7 @@
               "kind": "method",
               "signature": "(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None, preview: Optional[bool] = None) -> Optional[str]",
               "summary": "Apply settings to the (lazily-created) skydome network.",
-              "line": 379,
+              "line": 392,
               "deprecated": false
             },
             {
@@ -17427,198 +17427,25 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove the skydome and its connected file/place2d nodes.",
-              "line": 419,
+              "line": 432,
               "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "HdrManagerSlots",
-          "summary": "Switchboard slots for the HDR Manager UI.",
-          "line": 524,
-          "bases": [
-            "pythontk.LoggingMixin",
-            "pythontk.HelpMixin"
-          ],
-          "members": [
+            },
             {
-              "name": "header_init",
-              "qualname": "HdrManagerSlots.header_init",
+              "name": "select",
+              "qualname": "HdrManager.select",
               "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Configure header menu and refresh button.",
-              "line": 750,
+              "signature": "(self, part: str = 'skydome') -> Optional[str]",
+              "summary": "Select the environment's *part*, replacing the selection.",
+              "line": 451,
               "deprecated": false
             },
             {
-              "name": "cmb000_init",
-              "qualname": "HdrManagerSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.",
-              "line": 853,
-              "deprecated": false
-            },
-            {
-              "name": "hdr_map",
-              "qualname": "HdrManagerSlots.hdr_map",
-              "kind": "property",
-              "signature": "(self) -> Optional[str]",
-              "summary": "Selected HDR file path from the combobox.",
-              "line": 1242,
-              "deprecated": false
-            },
-            {
-              "name": "hdr_map_visibility",
-              "qualname": "HdrManagerSlots.hdr_map_visibility",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "Render 'Visible' flag — read from the rotation slider's render toggle.",
-              "line": 1247,
-              "deprecated": false
-            },
-            {
-              "name": "hdr_map_preview",
-              "qualname": "HdrManagerSlots.hdr_map_preview",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "Viewport-preview flag — read from the rotation slider's viewport toggle.",
-              "line": 1255,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000",
-              "qualname": "HdrManagerSlots.cmb000",
-              "kind": "method",
-              "signature": "(self, index, widget) -> None",
-              "summary": "HDR map selection — the panel's sole apply action (always deferred).",
-              "line": 1265,
-              "deprecated": false
-            },
-            {
-              "name": "slider000",
-              "qualname": "HdrManagerSlots.slider000",
-              "kind": "method",
-              "signature": "(self, value, widget) -> None",
-              "summary": "Rotate the HDR around Y.",
-              "line": 1318,
-              "deprecated": false
-            },
-            {
-              "name": "spn_intensity",
-              "qualname": "HdrManagerSlots.spn_intensity",
-              "kind": "method",
-              "signature": "(self, value) -> None",
-              "summary": "Set the skydome's HDR intensity (brightness multiplier).",
-              "line": 1322,
-              "deprecated": false
-            },
-            {
-              "name": "spn_exposure",
-              "qualname": "HdrManagerSlots.spn_exposure",
-              "kind": "method",
-              "signature": "(self, value) -> None",
-              "summary": "Set the skydome's exposure (in stops).",
-              "line": 1326,
-              "deprecated": false
-            },
-            {
-              "name": "spn_resolution",
-              "qualname": "HdrManagerSlots.spn_resolution",
-              "kind": "method",
-              "signature": "(self, value) -> None",
-              "summary": "Set the baked skydome resolution.",
-              "line": 1330,
-              "deprecated": false
-            },
-            {
-              "name": "spn_samples",
-              "qualname": "HdrManagerSlots.spn_samples",
-              "kind": "method",
-              "signature": "(self, value) -> None",
-              "summary": "Set the skydome's render sample count.",
-              "line": 1334,
-              "deprecated": false
-            },
-            {
-              "name": "spn_diffuse",
-              "qualname": "HdrManagerSlots.spn_diffuse",
-              "kind": "method",
-              "signature": "(self, value) -> None",
-              "summary": "Set the skydome's diffuse contribution.",
-              "line": 1338,
-              "deprecated": false
-            },
-            {
-              "name": "spn_specular",
-              "qualname": "HdrManagerSlots.spn_specular",
-              "kind": "method",
-              "signature": "(self, value) -> None",
-              "summary": "Set the skydome's specular contribution.",
-              "line": 1342,
-              "deprecated": false
-            },
-            {
-              "name": "add_hdr",
-              "qualname": "HdrManagerSlots.add_hdr",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Add HDR(s) from one dialog — pick loose files and/or a whole folder.",
-              "line": 1492,
-              "deprecated": false
-            },
-            {
-              "name": "open_sourceimages",
-              "qualname": "HdrManagerSlots.open_sourceimages",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Open the workspace's sourceimages folder in Explorer.",
-              "line": 1672,
-              "deprecated": false
-            },
-            {
-              "name": "clear_network",
-              "qualname": "HdrManagerSlots.clear_network",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Delete the skydome network and reset the UI to defaults.",
-              "line": 1680,
-              "deprecated": false
-            },
-            {
-              "name": "ctx_select_skydome",
-              "qualname": "HdrManagerSlots.ctx_select_skydome",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the skydome (HDR environment) node in the scene.",
-              "line": 1688,
-              "deprecated": false
-            },
-            {
-              "name": "ctx_select_transform",
-              "qualname": "HdrManagerSlots.ctx_select_transform",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the skydome's transform node.",
-              "line": 1697,
-              "deprecated": false
-            },
-            {
-              "name": "ctx_select_file_node",
-              "qualname": "HdrManagerSlots.ctx_select_file_node",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the file node feeding the skydome's HDR texture.",
-              "line": 1706,
-              "deprecated": false
-            },
-            {
-              "name": "ctx_reveal_in_explorer",
-              "qualname": "HdrManagerSlots.ctx_reveal_in_explorer",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Reveal the skydome's HDR texture file in the system file explorer.",
-              "line": 1715,
+              "name": "defer_apply",
+              "qualname": "HdrManager.defer_apply",
+              "kind": "staticmethod",
+              "signature": "(callback: Callable[[], None]) -> None",
+              "summary": "Run *callback*, a scene edit a dropdown pick drives, on Maya's idle",
+              "line": 474,
               "deprecated": false
             }
           ]
@@ -22899,7 +22726,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> 'ptk.PresetStore'",
               "summary": "The template store: shipped templates read-only, the user's in",
-              "line": 565,
+              "line": 584,
               "deprecated": false
             },
             {
@@ -22908,7 +22735,16 @@
               "kind": "classmethod",
               "signature": "(cls, store: 'ptk.PresetStore') -> List[str]",
               "summary": "Move user templates out of *store*'s built-in folder into its user",
-              "line": 580,
+              "line": 599,
+              "deprecated": false
+            },
+            {
+              "name": "suggested_name",
+              "qualname": "ShaderTemplates.suggested_name",
+              "kind": "staticmethod",
+              "signature": "(nodes) -> str",
+              "summary": "The name Save Template offers for *nodes*: the first node's leaf name,",
+              "line": 638,
               "deprecated": false
             },
             {
@@ -22917,151 +22753,16 @@
               "kind": "staticmethod",
               "signature": "(nodes, file_path, exclude_types=None, logger=None)",
               "summary": "Save the specified nodes as a shader template.",
-              "line": 619,
+              "line": 647,
               "deprecated": false
             },
             {
               "name": "restore_template",
               "qualname": "ShaderTemplates.restore_template",
-              "kind": "staticmethod",
-              "signature": "(file_path, texture_paths=None, name=None, logger=None)",
+              "kind": "classmethod",
+              "signature": "(cls, file_path, texture_paths=None, name=None, logger=None)",
               "summary": "Restore a shader template from a file.",
-              "line": 635,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "mat_utils/shader_templates/shader_templates_slots.py",
-      "summary": "Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShaderTemplatesSlots",
-          "summary": "",
-          "line": 27,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "source_images_dir",
-              "qualname": "ShaderTemplatesSlots.source_images_dir",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Where Browse opens: the scene project's texture folder, resolved",
-              "line": 31,
-              "deprecated": false
-            },
-            {
-              "name": "header_init",
-              "qualname": "ShaderTemplatesSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the header widget.",
-              "line": 70,
-              "deprecated": false
-            },
-            {
-              "name": "lbl_graph_material",
-              "qualname": "ShaderTemplatesSlots.lbl_graph_material",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Graph the last restored material in the Hypershade.",
-              "line": 112,
-              "deprecated": false
-            },
-            {
-              "name": "lbl_open_templates_dir",
-              "qualname": "ShaderTemplatesSlots.lbl_open_templates_dir",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open the user's shader templates directory in file explorer.",
-              "line": 119,
-              "deprecated": false
-            },
-            {
-              "name": "cmb002_init",
-              "qualname": "ShaderTemplatesSlots.cmb002_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the ComboBox for shader templates.",
-              "line": 123,
-              "deprecated": false
-            },
-            {
-              "name": "refresh_templates",
-              "qualname": "ShaderTemplatesSlots.refresh_templates",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Refresh the list of templates: shipped and user (a user template",
-              "line": 155,
-              "deprecated": false
-            },
-            {
-              "name": "rename_template_safe",
-              "qualname": "ShaderTemplatesSlots.rename_template_safe",
-              "kind": "method",
-              "signature": "(self, widget, new_name)",
-              "summary": "Safe rename that checks for None.",
-              "line": 182,
-              "deprecated": false
-            },
-            {
-              "name": "lbl000",
-              "qualname": "ShaderTemplatesSlots.lbl000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Set the ComboBox as editable to allow renaming.",
-              "line": 205,
-              "deprecated": false
-            },
-            {
-              "name": "lbl001",
-              "qualname": "ShaderTemplatesSlots.lbl001",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Delete the selected (user) template.",
-              "line": 210,
-              "deprecated": false
-            },
-            {
-              "name": "lbl002",
-              "qualname": "ShaderTemplatesSlots.lbl002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open the selected template in the default editor.",
-              "line": 220,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "ShaderTemplatesSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Create shader network using selected template.",
-              "line": 228,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "ShaderTemplatesSlots.b001",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Load texture maps and update GUI.",
-              "line": 288,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "ShaderTemplatesSlots.b002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Save current graph as a new shader template.",
-              "line": 307,
+              "line": 663,
               "deprecated": false
             }
           ]
