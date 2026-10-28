@@ -269,7 +269,8 @@ a pop is acceptable. **C** is retired: dominated on every row.
 
 ### The DCC side
 
-- The panel's `Rig:` combo dispatches through `ShadowRigSlots.RIG_BUILDERS`;
+- The panel's `Rig:` combo dispatches through `ShadowRigSlots.RIG_BUILDERS`
+  (tentacle's `slots/tools/shadow_rig.py`);
   the new type is one row plus one item.
 - The horizon rig **is the projected rig plus a stamp and a second
   texture**: the same tight bearing-aligned quad the expression already

@@ -320,8 +320,8 @@ reach.
   the Grab Tool, limits, give, undo, the post-rig edits carrying animation
   (curves, a layer, a moved rig group), and a refused edit leaving the rig and
   its keys standing.
-- mayatk `test/test_articulated_rig_panel.py` (the runner's GUI pass) -- the
-  panel acted on as a user does: Analyze, a row's type combo before and after
+- tentacle `test/test_articulated_rig_panel.py` (a fake toolkit; then a fresh
+  GUI Maya, `run_tests.py --in-maya`) -- the panel acted on as a user does: Analyze, a row's type combo before and after
   the build, limits and give typed into a row (and the give scrolled), a row
   clicked selecting its control, the End Control checkbox, Switch IK / FK and
   Rest Pose, Split Off Selected, Set Limits From Pose, Adjust Pivots, Remove,

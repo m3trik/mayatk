@@ -5,7 +5,7 @@
 :class:`ShadowRig` builds a ground plane carrying the targets' projected
 shadow and drives it to follow the source; its live viewport overlay is
 :class:`~mayatk.rig_utils.shadow_rig.shadow_preview.ShadowPreview`. The panel
-is ``shadow_rig_slots.py`` + ``shadow_rig.ui``.
+is tentacle's (``slots/tools/shadow_rig.py``).
 """
 
 import os
@@ -612,6 +612,154 @@ class ShadowRig(ptk.LoggingMixin):
             if linked and cmds.ls(linked, long=True) == wanted:
                 planes.append(plane)
         return planes
+
+    # ------------------------------------------------- the panel's readings
+    @classmethod
+    def find_source(cls, name):
+        """The existing source named *name* -- its transform's long name (a
+        light shape's name resolves to its transform) -- or None: nothing by
+        that name yet (:meth:`ensure_source` creates one). Mirrored by
+        blendertk's, which returns the object."""
+        name = str(name or "")
+        if not name or not cmds.objExists(name):
+            return None
+        found = cmds.ls(name, transforms=True, long=True)
+        if found:
+            return found[0]
+        shapes = cmds.ls(name, shapes=True, long=True) or []
+        parents = (
+            cmds.listRelatives(shapes[0], parent=True, fullPath=True) if shapes else None
+        )
+        return parents[0] if parents else None
+
+    @classmethod
+    def shadow_targets(cls, objects, sources=None, recursive=True):
+        """The shadow casters among *objects* -- what a build of them casts
+        from: mesh-bearing transforms that are not one of the *sources* (a
+        light or locator in a selection is the source, never a target); a
+        component picks its object. What tentacle's Shadow Rig panel builds
+        from.
+
+        Parameters:
+            objects (list): Nodes -- a selection's transforms, shapes or
+                components.
+            sources (list/None): The source names; default
+                :attr:`DEFAULT_SOURCE_NAME`.
+            recursive (bool): A group counts by its descendant meshes (the
+                panel's Include Children).
+
+        Returns:
+            list: The targets' long names, in order.
+
+        Raises:
+            OperationError: Nothing in *objects* can cast a shadow; its causes
+                say why (mayatk's Preview shows them).
+        """
+        from mayatk.core_utils.preview import OperationError
+
+        names = [str(s) for s in (sources or [cls.DEFAULT_SOURCE_NAME])]
+        source_nodes = set()
+        for name in names:
+            if cmds.objExists(name):
+                source_nodes.update(cmds.ls(name, long=True) or [])
+        # a component picks its object
+        nodes = [str(obj).split(".")[0] for obj in objects or []]
+        targets, rejected = [], []
+        for node in nodes:
+            long = (cmds.ls(node, long=True) or [node])[0]
+            if long in source_nodes or cls.source_is_directional(node):
+                continue
+            if cls.has_mesh_geometry(node, recursive):
+                if long not in targets:
+                    targets.append(long)
+            else:
+                rejected.append(CoreUtils.leaf_name(node))
+        if targets:
+            return targets
+        causes = []
+        if rejected:
+            causes.append(
+                "Not mesh geometry: "
+                + ", ".join(rejected[:6])
+                + (" ..." if len(rejected) > 6 else "")
+            )
+        if nodes and all(
+            (cmds.ls(n, long=True) or [None])[0] in source_nodes for n in nodes
+        ):
+            causes.append(
+                "The selection is the shadow source itself -- select the "
+                "mesh(es) that cast the shadow."
+            )
+        if not recursive:
+            causes.append(
+                "Include Children is off: a group only counts when its "
+                "descendant meshes are included."
+            )
+        raise OperationError(
+            "Select the mesh(es) to cast a shadow from.",
+            causes=causes,
+            title="No shadow targets",
+        )
+
+    @staticmethod
+    def source_selection():
+        """The selection read as shadow sources (the panel's Source From
+        Selection): ``(names, fixtures)``. Selected faces are a fixture -- a
+        luminaire whose real area light should be the source
+        (``LightUtils.lights_from_geometry`` builds it): they come back as
+        *fixtures*, with no names. Otherwise *names* are the selected
+        transforms in the order picked, long names (a light's shape picks its
+        transform). Mirrored by blendertk's, where a mesh in Edit Mode is the
+        fixture."""
+        sel = cmds.ls(selection=True, long=True) or []
+        faces = (
+            cmds.filterExpand(*sel, selectionMask=34, expand=True) if sel else None
+        ) or []
+        if faces:
+            return [], faces
+        transforms = cmds.ls(sel, transforms=True, long=True) or []
+        for shape in cmds.ls(sel, shapes=True, long=True) or []:
+            transforms += cmds.listRelatives(shape, parent=True, fullPath=True) or []
+        return list(dict.fromkeys(transforms)), []
+
+    @classmethod
+    def delete_orphaned_textures(cls, paths):
+        """Delete each of *paths* -- a shadow plane's own silhouette or
+        horizon PNG -- that no shadow plane in the scene uses any more: what a
+        discarded preview pass, or one a later pass renamed, leaves on disk.
+        A path a plane still uses, a missing one and a locked one are left.
+        Mirrored by blendertk's.
+
+        A stored ``fileTextureName`` may be project-relative (a saved and
+        reopened scene), so both sides are compared as Maya resolves them
+        (:meth:`MatUtils.resolve_path`, no repair search).
+
+        Returns:
+            list: The paths removed.
+        """
+
+        def key(path):
+            resolved = MatUtils.resolve_path(path, search=False) or path
+            return os.path.normcase(os.path.abspath(resolved))
+
+        live = {
+            key(t)
+            for plane in cls.find_shadow_planes()
+            for t in (cls._plane_texture_path(plane), cls._plane_horizon_path(plane))
+            if t
+        }
+        removed = []
+        for path in dict.fromkeys(p for p in paths or [] if p):
+            if key(path) in live:
+                continue
+            if not os.path.exists(path):
+                continue
+            try:
+                os.remove(path)
+            except OSError:
+                continue  # locked / read-only: the scene is right either way
+            removed.append(path)
+        return removed
 
     # --------------------------------------------------------------- plane
     def _ensure_plane_attr(self, ln, dv, min_val=None, max_val=None, keyable=True):

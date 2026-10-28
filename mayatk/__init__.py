@@ -234,10 +234,12 @@ DEFAULT_INCLUDE = {
     # Rig utils
     "rig_utils.controls": ["Controls", "ControlNodes"],
     "rig_utils.shadow_rig._shadow_rig": "ShadowRig",
+    "rig_utils.shadow_rig.shadow_preview": "ShadowPreview",
     "rig_utils.telescope_rig": "TelescopeRig",
     "rig_utils.wheel_rig": "WheelRig",
     "rig_utils.tube_rig._tube_rig": "TubeRig",
     "rig_utils.articulated_rig._articulated_rig": "ArticulatedRig",
+    "rig_utils.articulated_rig.grab_tool": "ArticulatedRigGrab",
     "rig_utils.tube_rig.strategies": ["TubeStrategy", "TubeRigBundle"],
     "rig_utils.tube_rig.tube_path": "TubePath",
     "rig_utils.skinning": ["SkinUtils", "CurveWeights"],
@@ -451,6 +453,14 @@ MOVED_NAMES = {
     ),
     "ShaderTemplatesSlots": (
         "tentacle.slots.tools.shader_templates.ShaderTemplatesSlots",
+        "0.30.0",
+    ),
+    "ArticulatedRigSlots": (
+        "tentacle.slots.tools.articulated_rig.ArticulatedRigSlots",
+        "0.30.0",
+    ),
+    "ShadowRigSlots": (
+        "tentacle.slots.tools.shadow_rig.ShadowRigSlots",
         "0.30.0",
     ),
 }

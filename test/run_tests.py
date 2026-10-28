@@ -173,14 +173,6 @@ GUI_REQUIRED = {
     "test_mat_marmoset_bridge": "native-crashes mayapy (2026-07-17 full run)",
     "test_maya_menu_handler": "builds native GUI menus; native-crashes mayapy",
     "test_preview": "native-crashes mayapy (2026-07-17 full run)",
-    "test_shadow_rig_panel": (
-        "drives the shadow_rig panel's Preview (Qt) end to end; the Preview "
-        "class itself native-crashes mayapy (see test_preview)"
-    ),
-    "test_articulated_rig_panel": (
-        "loads the articulated_rig panel; its uitk TableWidget hard-crashes "
-        "mayapy (see test_texture_combine_panel)"
-    ),
     "test_script_output": "Qt console embed; native-crashes mayapy",
     "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
     "test_uv_rizom_bridge": "native-crashes mayapy (2026-07-17 full run)",

@@ -449,6 +449,14 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
     def name(self) -> str:
         return self.spec.get("name") or self._leaf(self.group)
 
+    @property
+    def group_uuid(self) -> Optional[str]:
+        """The rig's identity: two instances bound to one rig share it (what
+        tentacle's panel compares to tell the rig acted on from the one it
+        shows). A rebuild made through another instance renews it here at the
+        next :attr:`group` read."""
+        return self._group_uuid
+
     @classmethod
     def scene_data(cls, node) -> Optional[Dict[str, Any]]:
         """The :attr:`DATA_ATTR` plan on *node*, or None."""
@@ -504,6 +512,32 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             ):
                 return rig
         return None
+
+    # ============================================================= selection
+    @staticmethod
+    def selection() -> List[str]:
+        """What the Articulated Rig tools act on (tentacle's panel reads it):
+        the selected transforms, long names, in the order picked -- a part, a
+        group holding parts, or a rig's control. Mirrored by blendertk's (the
+        objects in pick order, then a Pose Mode rig's selected bones)."""
+        return cmds.ls(selection=True, transforms=True, long=True) or []
+
+    @staticmethod
+    def select(nodes: Sequence[str]) -> None:
+        """Replace the selection with those of *nodes* that exist -- parts,
+        controls, handles; with none that exists the selection stays as it
+        is. Mirrored by blendertk's, where a control is a bone and selecting
+        one puts its rig in Pose Mode."""
+        nodes = [n for n in nodes if n and cmds.objExists(n)]
+        if nodes:
+            cmds.select(nodes, replace=True)
+
+    def parts_of(self, nodes: Sequence[str]) -> List[str]:
+        """The *nodes* that are parts of this rig -- never a control, a joint
+        or a handle: what Split Off Selected splits (the nodes whose UUID the
+        plan names)."""
+        rigged = {m["uuid"] for link in self.spec["links"] for m in link}
+        return [n for n in nodes if self._uuid(n) in rigged]
 
     def _linked(self, attr: str) -> Optional[str]:
         """The node wired into the group's message *attr*, or None."""

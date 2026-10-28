@@ -1040,15 +1040,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/articulated_rig/_articulated_rig.py` — Articulated Rig engine -- rigid parts on hinge, swivel, ball and slide joints.
 - `class ArticulatedRig(pythontk.LoggingMixin, _ArticulatedRigInternal)`
-  - methods: group, spec, name, scene_data, scene_rigs, for_node, end_control, solver, ik_blend, analyze, create, repair_scene, ensure_solver, teardown, rebuild, insert_joint, remove_joint, edit_joint, set_end_control, set_limits, set_limit_from_pose, set_weight, adjusting, adjust_handles, begin_adjust, end_adjust, joint_ids, joint_id_of, joint, control, controls, state, fk_state, channel_value, set_state, match_end_control, switch_ik, reset_pose, record, model, export_record, refresh_export_metadata, grab_begin, held_point, pose_to, grab_to, key_hold
+  - methods: group, spec, name, group_uuid, scene_data, scene_rigs, for_node, selection, select, parts_of, end_control, solver, ik_blend, analyze, create, repair_scene, ensure_solver, teardown, rebuild, insert_joint, remove_joint, edit_joint, set_end_control, set_limits, set_limit_from_pose, set_weight, adjusting, adjust_handles, begin_adjust, end_adjust, joint_ids, joint_id_of, joint, control, controls, state, fk_state, channel_value, set_state, match_end_control, switch_ik, reset_pose, record, model, export_record, refresh_export_metadata, grab_begin, held_point, pose_to, grab_to, key_hold
 
 ### `rig_utils/articulated_rig/_solver_expression.py` — The end control's solve as a Maya expression: a MEL port of
 - `class SolverExpression(_SolverExpressionInternal)`
   - methods: text_for, text
-
-### `rig_utils/articulated_rig/articulated_rig_slots.py` — Articulated Rig panel -- the Switchboard slots for ``articulated_rig.ui``.
-- `class ArticulatedRigSlots(pythontk.LoggingMixin)`
-  - methods: header_init, btn_ik_fk_init, parse_limits, refresh_table, btn_analyze, btn_build, btn_grab, btn_ik_fk, match_end_control, btn_rest, btn_insert, btn_fold, btn_limits_from_pose, btn_clear_limits, btn_rebuild, btn_remove
 
 ### `rig_utils/articulated_rig/grab_tool.py` — The viewport grab for articulated rigs: press on a rigged part, drag, let go.
 - `class ArticulatedRigGrab(pythontk.LoggingMixin)`
@@ -1069,15 +1065,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/shadow_rig/_shadow_rig.py` — Shadow Rig engine — a projected-shadow rig for engine export.
 - `class ShadowRig(pythontk.LoggingMixin)`
-  - methods: has_mesh_geometry, create_contact_locator, ensure_source, get_or_create_shadow_source, source_is_directional, source_size, source_softness, set_source_softness, planes_lit_by, create_shadow_plane, current_model, create_silhouette_texture, create_material, setup_expression, bake, plane_is_live, plane_is_baked, from_plane, planes_for_nodes, for_node, for_nodes, set_source, unbake_planes, rebuild, silhouette_is_stale, auto_recalculate, auto_recalculate_enabled, recalculate_stale, refresh_silhouette, export_record, refresh_export_metadata, unit_scale, rig_unit, plane_record, plane_type, horizon_output_path, bake_horizon, plane_is_atlased, default_texture_dir, pack_atlas, unpack_atlas, find_shadow_planes, bake_planes, delete, delete_rigs, plane_materials, set_intensity, set_ground_height, detach_planes, create, create_for_sources, create_horizon_for_sources, create_per_object
+  - methods: has_mesh_geometry, create_contact_locator, ensure_source, get_or_create_shadow_source, source_is_directional, source_size, source_softness, set_source_softness, planes_lit_by, find_source, shadow_targets, source_selection, delete_orphaned_textures, create_shadow_plane, current_model, create_silhouette_texture, create_material, setup_expression, bake, plane_is_live, plane_is_baked, from_plane, planes_for_nodes, for_node, for_nodes, set_source, unbake_planes, rebuild, silhouette_is_stale, auto_recalculate, auto_recalculate_enabled, recalculate_stale, refresh_silhouette, export_record, refresh_export_metadata, unit_scale, rig_unit, plane_record, plane_type, horizon_output_path, bake_horizon, plane_is_atlased, default_texture_dir, pack_atlas, unpack_atlas, find_shadow_planes, bake_planes, delete, delete_rigs, plane_materials, set_intensity, set_ground_height, detach_planes, create, create_for_sources, create_horizon_for_sources, create_per_object
 
 ### `rig_utils/shadow_rig/shadow_preview.py` — A live Viewport 2.0 preview of a horizon rig: the artist drags the light
 - `class ShadowPreview(_ShadowPreviewInternal, pythontk.LoggingMixin)`
   - methods: device, language, shader_node, is_attached, attached_planes, restore_snapshot, attach, detach, toggle, detach_all, prepare_for_export, preview_dir, texture_path, classify_device, effect_text, refusal
-
-### `rig_utils/shadow_rig/shadow_rig_slots.py` — Shadow Rig panel — the Switchboard slots for ``shadow_rig.ui``.
-- `class ShadowRigSlots`
-  - methods: header_init, cmb_type_init, txt_source_init, b003_init, b002_init, b009_init, prepare_operation, b001_init, chk_follow_init, chk_follow, s001_init, s001, s002, s003, chk_horizon_preview_init, chk_horizon_preview, b002, b003, source_from_selection, reproject_sources, apply_source, rebuild_rig, restore_expression, b009, detach_to_plane, b010, perform_operation
 
 ### `rig_utils/skinning.py` — Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 - `class CurveWeights(pythontk.HelpMixin)`

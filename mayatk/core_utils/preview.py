@@ -48,6 +48,11 @@ Constraints on ``perform_operation`` authors:
     ``contract.add_file(path)``.
   - ``contract`` is ``None`` during the commit replay; guard with
     ``if contract: contract.add_file(...)``.
+  - State no rollback reaches -- a record a shared node carries, republished
+    from the scene; a file a pass wrote -- can instead be repaired by
+    ``restore_func``: called once after the rollback that DISCARDS the
+    preview (an un-check or a failed pass; never a commit), recorded nowhere
+    on the undo queue. blendertk's Preview takes the same hook.
 
 Verification: see ``test/temp_tests/verify_preview_*.py`` for the 60+
 empirical tests this design passes.
@@ -574,6 +579,7 @@ class Preview(_PreviewInternal):
         reselect_on_disable: bool = True,
         require_preview: bool = False,
         undo_message: Optional[str] = None,
+        restore_func: Optional[Callable] = None,
     ):
         if not hasattr(operation_instance, "perform_operation"):
             raise ValueError(
@@ -615,6 +621,10 @@ class Preview(_PreviewInternal):
         # The commit's undo-chunk name (blendertk's Preview takes the same);
         # omitted, the operation's class name.
         self.undo_message = undo_message
+        # Called after the rollback that DISCARDS the preview (an un-check or a
+        # failed pass; never a commit), for state the rollback cannot reach
+        # (blendertk's Preview takes the same hook). See _run_restore.
+        self.restore_func = restore_func
         self._sync_create_enabled(False)
 
         self.operated_objects: Set[str] = set()
@@ -912,6 +922,7 @@ class Preview(_PreviewInternal):
             except Exception:
                 self.logger.exception("rollback after a failed preview raised")
             self._contract = None
+        self._run_restore()
         self._reassert_shading_snapshot()
         if self.reselect_on_disable:
             self._reselect_captured()
@@ -919,6 +930,21 @@ class Preview(_PreviewInternal):
         self._set_checkbox(False)
         self._sync_create_enabled(False)
         self.is_enabled = False
+
+    def _run_restore(self) -> None:
+        """Run ``restore_func`` after a discarding rollback, recorded nowhere on
+        the undo queue -- like the rollback it completes. A failure is logged,
+        never raised: the preview is off either way."""
+        if not self.restore_func:
+            return
+        prev = cmds.undoInfo(q=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            self.restore_func()
+        except Exception as e:
+            self.logger.exception(f"restore_func raised: {e}")
+        finally:
+            cmds.undoInfo(stateWithoutFlush=prev)
 
     @_PreviewInternal._safe
     def refresh(self, *args) -> None:
@@ -961,6 +987,8 @@ class Preview(_PreviewInternal):
             if self._contract is not None:
                 self._contract.rollback()
                 self._contract = None
+            if had_preview:
+                self._run_restore()
             # Restore per-face material the geometry rollback dropped. No op
             # follows a cancel, so the restored (in-place) shading is what the
             # user is left looking at; it renders correctly even though a future

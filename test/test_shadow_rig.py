@@ -1685,5 +1685,93 @@ class TestIntensityAndGround(MayaTkTestCase):
         self.assertAlmostEqual(self._get("shadowIntensity"), 1.0)
 
 
+class TestPanelReadings(MayaTkTestCase):
+    """What tentacle's Shadow Rig panel reads through the engine (its panel
+    half: tentacle's test_shadow_rig_panel.py): the casters in a selection, a
+    source by name, the selection as sources, and the PNGs a discarded
+    preview pass leaves."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="Box", width=2, height=2, depth=2)[0]
+
+    def _sun(self):
+        shape = cmds.directionalLight(name="readSunShape")
+        return cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+
+    def test_shadow_targets_skip_the_source_and_a_directional_light(self):
+        source = ShadowRig.ensure_source("lamp")
+        targets = ShadowRig.shadow_targets(
+            [f"{self.cube}.f[0]", source, self._sun()], ["lamp"]
+        )
+        self.assertEqual(targets, cmds.ls(self.cube, long=True))
+
+    def test_shadow_targets_refuse_saying_why(self):
+        from mayatk.core_utils.preview import OperationError
+
+        ShadowRig.ensure_source("lamp")
+        with self.assertRaises(OperationError) as ctx:
+            ShadowRig.shadow_targets(["lamp"], ["lamp"])
+        self.assertTrue(any("shadow source itself" in c for c in ctx.exception.causes))
+        loc = cmds.spaceLocator(name="not_a_mesh")[0]
+        with self.assertRaises(OperationError) as ctx:
+            ShadowRig.shadow_targets([loc], ["lamp"], recursive=False)
+        causes = " ".join(ctx.exception.causes)
+        self.assertIn("not_a_mesh", causes)
+        self.assertIn("Include Children is off", causes)
+
+    def test_find_source_resolves_a_name_or_nothing(self):
+        self.assertIsNone(ShadowRig.find_source("lamp"))
+        source = cmds.ls(ShadowRig.ensure_source("lamp"), long=True)[0]
+        self.assertEqual(ShadowRig.find_source("lamp"), source)
+        shape = cmds.listRelatives(source, shapes=True, fullPath=True)[0]
+        self.assertEqual(ShadowRig.find_source(shape), source)  # a shape: its transform
+
+    def test_source_selection_reads_objects_or_a_fixtures_faces(self):
+        sun = self._sun()
+        cmds.select(sun, replace=True)
+        self.assertEqual(ShadowRig.source_selection(), ([sun], []))
+        cmds.select(cmds.listRelatives(sun, shapes=True, fullPath=True), replace=True)
+        self.assertEqual(ShadowRig.source_selection(), ([sun], []))
+        cmds.select(f"{self.cube}.f[3]", replace=True)
+        names, fixtures = ShadowRig.source_selection()
+        self.assertEqual(names, [])
+        self.assertEqual(len(fixtures), 1)
+        self.assertTrue(fixtures[0].endswith(".f[3]"), fixtures)
+
+    def test_delete_orphaned_textures_spares_what_a_plane_uses(self):
+        rig = ShadowRig.create([self.cube], light_pos=(5, 10, 5), texture_res=32)
+        self.addCleanup(ShadowRig.delete_rigs, None, True)
+        live = rig.texture_path
+        folder = os.path.dirname(live)
+        stray = os.path.join(folder, "stray_shadow.png")
+        with open(stray, "wb") as fh:
+            fh.write(b"png")
+        missing = os.path.join(folder, "gone_shadow.png")
+        removed = ShadowRig.delete_orphaned_textures([live, stray, missing, None, stray])
+        self.assertEqual(removed, [stray])
+        self.assertTrue(os.path.exists(live))
+        self.assertFalse(os.path.exists(stray))
+
+    def test_delete_orphaned_textures_spares_a_project_relative_link(self):
+        # A reopened scene can hand back the file node's path relative to the project
+        # (MatUtils.resolve_path exists for it); a live session's setAttr absolutizes,
+        # so the relative form is fed through the plane's path reader.
+        from unittest import mock
+
+        rig = ShadowRig.create([self.cube], light_pos=(5, 10, 5), texture_res=32)
+        self.addCleanup(ShadowRig.delete_rigs, None, True)
+        live = rig.texture_path
+        root = cmds.workspace(query=True, rootDirectory=True)
+        try:
+            relative = os.path.relpath(live, root).replace("\\", "/")
+        except ValueError:  # another drive: no relative form to hand back
+            self.skipTest("the texture folder is on another drive than the project")
+        self.assertFalse(os.path.isabs(relative))
+        with mock.patch.object(ShadowRig, "_plane_texture_path", return_value=relative):
+            self.assertEqual(ShadowRig.delete_orphaned_textures([live]), [])
+        self.assertTrue(os.path.exists(live))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

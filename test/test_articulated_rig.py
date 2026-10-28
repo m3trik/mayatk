@@ -1164,6 +1164,39 @@ class TestLimits(ArticulatedRigCase):
         self.assertLessEqual(abs(rig.channel_value("LEG_2", "rz")), 10.0 + 1e-6)
 
 
+class TestSceneGlue(ArticulatedRigCase):
+    """What tentacle's Articulated Rig panel acts through (its panel half:
+    tentacle's test_articulated_rig_panel.py): the selection it reads, the
+    nodes it selects, the parts a pick names, and a rig's identity."""
+
+    def test_the_selection_reads_the_picked_transforms_in_order(self):
+        parts = [f"{self.arm}|{p}" for p in ("LEG_2", "BASE", "LEG_1")]
+        cmds.select(parts, replace=True)
+        self.assertEqual(ArticulatedRig.selection(), parts)
+        cmds.select(clear=True)
+        self.assertEqual(ArticulatedRig.selection(), [])
+
+    def test_select_replaces_the_selection_with_what_exists(self):
+        rig = self.build()
+        ctrl = rig.control("LEG_2")
+        ArticulatedRig.select([ctrl, "NO_SUCH_PART"])
+        self.assertEqual(cmds.ls(selection=True, long=True), cmds.ls(ctrl, long=True))
+        ArticulatedRig.select(["NO_SUCH_PART"])  # nothing that exists: kept
+        self.assertEqual(cmds.ls(selection=True, long=True), cmds.ls(ctrl, long=True))
+
+    def test_parts_of_keeps_the_rigs_parts_never_a_control(self):
+        rig = self.build()
+        picks = ["LEG_4", rig.control("LEG_2"), rig.group]
+        self.assertEqual(rig.parts_of(picks), ["LEG_4"])
+
+    def test_a_rig_found_again_shares_its_identity(self):
+        rig = self.build()
+        again = ArticulatedRig.for_node(rig.control("LEG_2"))
+        self.assertIsNot(again, rig)
+        self.assertEqual(again.group_uuid, rig.group_uuid)
+        self.assertEqual(rig.group_uuid, cmds.ls(rig.group, uuid=True)[0])
+
+
 class TestPostRig(ArticulatedRigCase):
     def _key(self, rig, frames):
         """Key every control at *frames*; return each part's world matrix per frame."""

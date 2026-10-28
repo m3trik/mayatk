@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 256,
+          "line": 258,
           "deprecated": false
         }
       ]
@@ -7663,7 +7663,7 @@
         {
           "name": "OperationError",
           "summary": "User-facing operation failure for the Preview message box.",
-          "line": 73,
+          "line": 78,
           "bases": [
             "Exception"
           ],
@@ -7672,7 +7672,7 @@
         {
           "name": "CleanupContract",
           "summary": "Captures and reverses side effects of a previewed operation.",
-          "line": 90,
+          "line": 95,
           "bases": [],
           "members": [
             {
@@ -7681,7 +7681,7 @@
               "kind": "method",
               "signature": "(self) -> Set[str]",
               "summary": "Diff the scene against the entry snapshot: what exists now that",
-              "line": 194,
+              "line": 199,
               "deprecated": false
             },
             {
@@ -7690,7 +7690,7 @@
               "kind": "method",
               "signature": "(self, path) -> None",
               "summary": "",
-              "line": 217,
+              "line": 222,
               "deprecated": false
             },
             {
@@ -7699,7 +7699,7 @@
               "kind": "method",
               "signature": "(self, node: str, attr: str) -> None",
               "summary": "",
-              "line": 228,
+              "line": 233,
               "deprecated": false
             },
             {
@@ -7708,7 +7708,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 340,
+              "line": 345,
               "deprecated": false
             }
           ]
@@ -7716,7 +7716,7 @@
         {
           "name": "Preview",
           "summary": "Hermetic preview orchestrator (H1).",
-          "line": 528,
+          "line": 533,
           "bases": [
             "_PreviewInternal"
           ],
@@ -7727,7 +7727,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "",
-              "line": 554,
+              "line": 559,
               "deprecated": false
             },
             {
@@ -7736,7 +7736,7 @@
               "kind": "method",
               "signature": "(self, enable_on_show: bool, disable_on_hide: bool) -> None",
               "summary": "",
-              "line": 677,
+              "line": 687,
               "deprecated": false
             },
             {
@@ -7745,7 +7745,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 692,
+              "line": 702,
               "deprecated": false
             },
             {
@@ -7754,7 +7754,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 696,
+              "line": 706,
               "deprecated": false
             },
             {
@@ -7763,7 +7763,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "",
-              "line": 701,
+              "line": 711,
               "deprecated": false
             },
             {
@@ -7772,7 +7772,7 @@
               "kind": "method",
               "signature": "(self, objects: List[Any]) -> bool",
               "summary": "",
-              "line": 753,
+              "line": 763,
               "deprecated": false
             },
             {
@@ -7781,7 +7781,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 780,
+              "line": 790,
               "deprecated": false
             },
             {
@@ -7790,7 +7790,7 @@
               "kind": "method",
               "signature": "(self, *args) -> None",
               "summary": "Roll back the previous preview and re-run perform_operation.",
-              "line": 924,
+              "line": 950,
               "deprecated": false
             },
             {
@@ -7799,7 +7799,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Roll back the preview without committing.",
-              "line": 949,
+              "line": 975,
               "deprecated": false
             },
             {
@@ -7808,7 +7808,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Commit -- with a live preview, or straight from the selection.",
-              "line": 985,
+              "line": 1013,
               "deprecated": false
             },
             {
@@ -7817,7 +7817,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1242,
+              "line": 1270,
               "deprecated": false
             },
             {
@@ -7826,7 +7826,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 1255,
+              "line": 1283,
               "deprecated": false
             },
             {
@@ -7835,7 +7835,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "",
-              "line": 1259,
+              "line": 1287,
               "deprecated": false
             },
             {
@@ -7844,7 +7844,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "",
-              "line": 1262,
+              "line": 1290,
               "deprecated": false
             },
             {
@@ -7853,7 +7853,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "",
-              "line": 1266,
+              "line": 1294,
               "deprecated": false
             },
             {
@@ -7862,7 +7862,7 @@
               "kind": "staticmethod",
               "signature": "(widget, results, *, object_mode: bool = False, defer: bool = False) -> None",
               "summary": "Select the operation's result(s) — or explicitly deselect them — per a",
-              "line": 1270,
+              "line": 1298,
               "deprecated": false
             }
           ]
@@ -26514,12 +26514,21 @@
               "deprecated": false
             },
             {
+              "name": "group_uuid",
+              "qualname": "ArticulatedRig.group_uuid",
+              "kind": "property",
+              "signature": "(self) -> Optional[str]",
+              "summary": "The rig's identity: two instances bound to one rig share it (what",
+              "line": 453,
+              "deprecated": false
+            },
+            {
               "name": "scene_data",
               "qualname": "ArticulatedRig.scene_data",
               "kind": "classmethod",
               "signature": "(cls, node) -> Optional[Dict[str, Any]]",
               "summary": "The :attr:`DATA_ATTR` plan on *node*, or None.",
-              "line": 453,
+              "line": 461,
               "deprecated": false
             },
             {
@@ -26528,7 +26537,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List['ArticulatedRig']",
               "summary": "Every articulated rig in the scene (duplicated records skipped).",
-              "line": 472,
+              "line": 480,
               "deprecated": false
             },
             {
@@ -26537,7 +26546,34 @@
               "kind": "classmethod",
               "signature": "(cls, node) -> Optional['ArticulatedRig']",
               "summary": "The rig *node* belongs to -- its group, a joint, a control, the end",
-              "line": 486,
+              "line": 494,
+              "deprecated": false
+            },
+            {
+              "name": "selection",
+              "qualname": "ArticulatedRig.selection",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "What the Articulated Rig tools act on (tentacle's panel reads it):",
+              "line": 518,
+              "deprecated": false
+            },
+            {
+              "name": "select",
+              "qualname": "ArticulatedRig.select",
+              "kind": "staticmethod",
+              "signature": "(nodes: Sequence[str]) -> None",
+              "summary": "Replace the selection with those of *nodes* that exist -- parts,",
+              "line": 526,
+              "deprecated": false
+            },
+            {
+              "name": "parts_of",
+              "qualname": "ArticulatedRig.parts_of",
+              "kind": "method",
+              "signature": "(self, nodes: Sequence[str]) -> List[str]",
+              "summary": "The *nodes* that are parts of this rig -- never a control, a joint",
+              "line": 535,
               "deprecated": false
             },
             {
@@ -26546,7 +26582,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The end control, or None (built without one).",
-              "line": 517,
+              "line": 551,
               "deprecated": false
             },
             {
@@ -26555,7 +26591,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The end control's solver (its expression node), or None -- no end",
-              "line": 522,
+              "line": 556,
               "deprecated": false
             },
             {
@@ -26564,7 +26600,7 @@
               "kind": "method",
               "signature": "(self) -> float",
               "summary": "How much the end control's solve adds over FK: 1 places the end",
-              "line": 529,
+              "line": 563,
               "deprecated": false
             },
             {
@@ -26573,7 +26609,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes, root=None, ordered: bool = False) -> Dict[str, Any]",
               "summary": "Propose a rig for *nodes*: one link per part, and how and where",
-              "line": 540,
+              "line": 574,
               "deprecated": false
             },
             {
@@ -26582,7 +26618,7 @@
               "kind": "classmethod",
               "signature": "(cls, links: Sequence[Any], joints: Optional[Sequence[Dict[str, Any]]] = None, name: Optional[str] = None, parent: Optional[str] = None, end_control: bool = True) -> 'ArticulatedRig'",
               "summary": "Build a rig.",
-              "line": 593,
+              "line": 627,
               "deprecated": false
             },
             {
@@ -26591,7 +26627,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> int",
               "summary": "Give every rig whose end control has no solve -- built by an earlier",
-              "line": 1142,
+              "line": 1176,
               "deprecated": false
             },
             {
@@ -26600,7 +26636,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Make the end control live: build its solve from the plan when the",
-              "line": 1154,
+              "line": 1188,
               "deprecated": false
             },
             {
@@ -26609,7 +26645,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove the rig and hand every part back exactly as it was: its",
-              "line": 1256,
+              "line": 1290,
               "deprecated": false
             },
             {
@@ -26618,7 +26654,7 @@
               "kind": "method",
               "signature": "(self, spec: Optional[Dict[str, Any]] = None) -> 'ArticulatedRig'",
               "summary": "Build the rig again from *spec* (default: its own plan), carrying",
-              "line": 1293,
+              "line": 1327,
               "deprecated": false
             },
             {
@@ -26627,7 +26663,7 @@
               "kind": "method",
               "signature": "(self, members, joint_type: Optional[str] = None, **fields) -> 'ArticulatedRig'",
               "summary": "Split a link: *members* leave the link they ride and get a joint of",
-              "line": 1442,
+              "line": 1476,
               "deprecated": false
             },
             {
@@ -26636,7 +26672,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str) -> 'ArticulatedRig'",
               "summary": "Fold *joint_id*'s link back into the link it hangs off: its parts",
-              "line": 1516,
+              "line": 1550,
               "deprecated": false
             },
             {
@@ -26645,7 +26681,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str, **fields) -> 'ArticulatedRig'",
               "summary": "Change a joint's ``type``, ``position``, ``aim`` or ``normal``",
-              "line": 1528,
+              "line": 1562,
               "deprecated": false
             },
             {
@@ -26654,7 +26690,7 @@
               "kind": "method",
               "signature": "(self, enabled: bool = True, part: Optional[str] = None) -> 'ArticulatedRig'",
               "summary": "Give the rig an end control, move it to another link, or drop it.",
-              "line": 1541,
+              "line": 1575,
               "deprecated": false
             },
             {
@@ -26663,7 +26699,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str, channel: str, minimum: Optional[float], maximum: Optional[float]) -> None",
               "summary": "Bound one channel (degrees, or a slide's units in the rig's space);",
-              "line": 1582,
+              "line": 1616,
               "deprecated": false
             },
             {
@@ -26672,7 +26708,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str, channel: str, side: str) -> float",
               "summary": "Take the channel's current value -- the pose as it stands, the end",
-              "line": 1602,
+              "line": 1636,
               "deprecated": false
             },
             {
@@ -26681,7 +26717,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str, weight: float, channel: Optional[str] = None) -> None",
               "summary": "How readily *joint_id* moves when the end control or a grab pulls",
-              "line": 1616,
+              "line": 1650,
               "deprecated": false
             },
             {
@@ -26690,7 +26726,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "Whether the rig's pivots are out for adjusting (:meth:`begin_adjust`).",
-              "line": 1631,
+              "line": 1665,
               "deprecated": false
             },
             {
@@ -26699,7 +26735,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, str]",
               "summary": "The pivot handles while adjusting, by what each places: a joint id,",
-              "line": 1635,
+              "line": 1669,
               "deprecated": false
             },
             {
@@ -26708,7 +26744,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, str]",
               "summary": "Put the rig's pivots out for adjusting: a handle where every joint",
-              "line": 1651,
+              "line": 1685,
               "deprecated": false
             },
             {
@@ -26717,7 +26753,7 @@
               "kind": "method",
               "signature": "(self, apply: bool = True) -> bool",
               "summary": "Lock the pivots again: the rig rebuilt with every joint turning",
-              "line": 1746,
+              "line": 1780,
               "deprecated": false
             },
             {
@@ -26726,7 +26762,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "The joints' ids -- each its link's first part -- parent first.",
-              "line": 1800,
+              "line": 1834,
               "deprecated": false
             },
             {
@@ -26735,7 +26771,7 @@
               "kind": "method",
               "signature": "(self, node) -> Optional[str]",
               "summary": "The id of the joint *node* is -- its control, its joint -- or rides",
-              "line": 1804,
+              "line": 1838,
               "deprecated": false
             },
             {
@@ -26744,7 +26780,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str) -> str",
               "summary": "The joint node of *joint_id*.",
-              "line": 1820,
+              "line": 1854,
               "deprecated": false
             },
             {
@@ -26753,7 +26789,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str) -> str",
               "summary": "The FK control of *joint_id*.",
-              "line": 1824,
+              "line": 1858,
               "deprecated": false
             },
             {
@@ -26762,7 +26798,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "Every control of the rig: the FK controls parent first, then the",
-              "line": 1829,
+              "line": 1863,
               "deprecated": false
             },
             {
@@ -26771,7 +26807,7 @@
               "kind": "method",
               "signature": "(self, slots: Optional[Sequence[Tuple[str, str]]] = None) -> List[float]",
               "summary": "The rig's pose, in :meth:`model` state order: each channel's FK",
-              "line": 1857,
+              "line": 1891,
               "deprecated": false
             },
             {
@@ -26780,7 +26816,7 @@
               "kind": "method",
               "signature": "(self, slots: Optional[Sequence[Tuple[str, str]]] = None) -> List[float]",
               "summary": "The FK controls' channel values, in :meth:`model` state order.",
-              "line": 1872,
+              "line": 1906,
               "deprecated": false
             },
             {
@@ -26789,7 +26825,7 @@
               "kind": "method",
               "signature": "(self, joint_id: str, channel: str) -> float",
               "summary": "One channel as the pose stands (FK plus the end control's solve).",
-              "line": 1879,
+              "line": 1913,
               "deprecated": false
             },
             {
@@ -26798,7 +26834,7 @@
               "kind": "method",
               "signature": "(self, values: Sequence[float], key: Optional[bool] = None, slots: Optional[Sequence[Tuple[str, str]]] = None) -> None",
               "summary": "Set the FK controls to *values* (model state order), keyed when",
-              "line": 1886,
+              "line": 1920,
               "deprecated": false
             },
             {
@@ -26807,7 +26843,7 @@
               "kind": "method",
               "signature": "(self, key: Optional[bool] = None) -> None",
               "summary": "Put the end control where the end link is now -- after FK posing,",
-              "line": 1919,
+              "line": 1953,
               "deprecated": false
             },
             {
@@ -26816,7 +26852,7 @@
               "kind": "method",
               "signature": "(self, on: Optional[bool] = None, key: Optional[bool] = None) -> bool",
               "summary": "Switch the end control's solve on or off (default: flip it)",
-              "line": 1935,
+              "line": 1969,
               "deprecated": false
             },
             {
@@ -26825,7 +26861,7 @@
               "kind": "method",
               "signature": "(self, key: Optional[bool] = None) -> None",
               "summary": "Every control back to rest -- FK at 0, the end control on its rest",
-              "line": 1966,
+              "line": 2000,
               "deprecated": false
             },
             {
@@ -26834,7 +26870,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, Any]",
               "summary": "This rig's entry in the ``articulation`` record: its joints",
-              "line": 1977,
+              "line": 2011,
               "deprecated": false
             },
             {
@@ -26843,7 +26879,7 @@
               "kind": "method",
               "signature": "(self) -> 'ptk.ArticulationModel'",
               "summary": "The runtime model of this rig -- what the engines pose.",
-              "line": 1986,
+              "line": 2020,
               "deprecated": false
             },
             {
@@ -26852,7 +26888,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx) -> Optional['ptk.Record']",
               "summary": "The ``articulation`` record for this scene, or None when it has no",
-              "line": 1991,
+              "line": 2025,
               "deprecated": false
             },
             {
@@ -26861,7 +26897,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "Publish the ``articulation`` record now -- the authoring-time half",
-              "line": 2026,
+              "line": 2060,
               "deprecated": false
             },
             {
@@ -26870,7 +26906,7 @@
               "kind": "method",
               "signature": "(self, node, point: Sequence[float]) -> Dict[str, Any]",
               "summary": "Take hold of *node* (a part, or anything under one) at the world",
-              "line": 2062,
+              "line": 2096,
               "deprecated": false
             },
             {
@@ -26879,7 +26915,7 @@
               "kind": "method",
               "signature": "(self, hold: Dict[str, Any]) -> Tuple[float, float, float]",
               "summary": "Where a hold's point is now, in world space.",
-              "line": 2104,
+              "line": 2138,
               "deprecated": false
             },
             {
@@ -26888,7 +26924,7 @@
               "kind": "method",
               "signature": "(self, node, target: Sequence[float], point: Optional[Sequence[float]] = None, key: Optional[bool] = None, attempts: int = 8) -> float",
               "summary": "Bring a part's *point* (default its rotate pivot) to the world",
-              "line": 2114,
+              "line": 2148,
               "deprecated": false
             },
             {
@@ -26897,7 +26933,7 @@
               "kind": "method",
               "signature": "(self, hold: Dict[str, Any], target: Sequence[float], turn: Optional[Sequence[float]] = None, key: Optional[bool] = None) -> List[float]",
               "summary": "Move a hold's point to the world *target* and pose the rig there.",
-              "line": 2146,
+              "line": 2180,
               "deprecated": false
             },
             {
@@ -26906,7 +26942,7 @@
               "kind": "method",
               "signature": "(self, hold: Dict[str, Any], key: Optional[bool] = None) -> None",
               "summary": "Key what a hold moved -- the end control it dragged, else the FK",
-              "line": 2243,
+              "line": 2277,
               "deprecated": false
             }
           ]
@@ -26943,168 +26979,6 @@
               "signature": "(self) -> str",
               "summary": "",
               "line": 277,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "rig_utils/articulated_rig/articulated_rig_slots.py",
-      "summary": "Articulated Rig panel -- the Switchboard slots for ``articulated_rig.ui``.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ArticulatedRigSlots",
-          "summary": "Slots for the Articulated Rig panel.",
-          "line": 42,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ArticulatedRigSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "",
-              "line": 110,
-              "deprecated": false
-            },
-            {
-              "name": "btn_ik_fk_init",
-              "qualname": "ArticulatedRigSlots.btn_ik_fk_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Switch IK / FK's option box: put the end control back on the end",
-              "line": 164,
-              "deprecated": false
-            },
-            {
-              "name": "parse_limits",
-              "qualname": "ArticulatedRigSlots.parse_limits",
-              "kind": "staticmethod",
-              "signature": "(text: str, channels: Sequence[str]) -> Dict[str, Tuple[Optional[float], Optional[float]]]",
-              "summary": "The limits typed into a Limits cell (``ptk.ArticulationPlan.",
-              "line": 365,
-              "deprecated": false
-            },
-            {
-              "name": "refresh_table",
-              "qualname": "ArticulatedRigSlots.refresh_table",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 380,
-              "deprecated": false
-            },
-            {
-              "name": "btn_analyze",
-              "qualname": "ArticulatedRigSlots.btn_analyze",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 562,
-              "deprecated": false
-            },
-            {
-              "name": "btn_build",
-              "qualname": "ArticulatedRigSlots.btn_build",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 585,
-              "deprecated": false
-            },
-            {
-              "name": "btn_grab",
-              "qualname": "ArticulatedRigSlots.btn_grab",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 650,
-              "deprecated": false
-            },
-            {
-              "name": "btn_ik_fk",
-              "qualname": "ArticulatedRigSlots.btn_ik_fk",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 655,
-              "deprecated": false
-            },
-            {
-              "name": "match_end_control",
-              "qualname": "ArticulatedRigSlots.match_end_control",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 672,
-              "deprecated": false
-            },
-            {
-              "name": "btn_rest",
-              "qualname": "ArticulatedRigSlots.btn_rest",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 680,
-              "deprecated": false
-            },
-            {
-              "name": "btn_insert",
-              "qualname": "ArticulatedRigSlots.btn_insert",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 688,
-              "deprecated": false
-            },
-            {
-              "name": "btn_fold",
-              "qualname": "ArticulatedRigSlots.btn_fold",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 709,
-              "deprecated": false
-            },
-            {
-              "name": "btn_limits_from_pose",
-              "qualname": "ArticulatedRigSlots.btn_limits_from_pose",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 722,
-              "deprecated": false
-            },
-            {
-              "name": "btn_clear_limits",
-              "qualname": "ArticulatedRigSlots.btn_clear_limits",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 741,
-              "deprecated": false
-            },
-            {
-              "name": "btn_rebuild",
-              "qualname": "ArticulatedRigSlots.btn_rebuild",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 756,
-              "deprecated": false
-            },
-            {
-              "name": "btn_remove",
-              "qualname": "ArticulatedRigSlots.btn_remove",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 765,
               "deprecated": false
             }
           ]
@@ -27477,12 +27351,48 @@
               "deprecated": false
             },
             {
+              "name": "find_source",
+              "qualname": "ShadowRig.find_source",
+              "kind": "classmethod",
+              "signature": "(cls, name)",
+              "summary": "The existing source named *name* -- its transform's long name (a",
+              "line": 618,
+              "deprecated": false
+            },
+            {
+              "name": "shadow_targets",
+              "qualname": "ShadowRig.shadow_targets",
+              "kind": "classmethod",
+              "signature": "(cls, objects, sources=None, recursive=True)",
+              "summary": "The shadow casters among *objects* -- what a build of them casts",
+              "line": 636,
+              "deprecated": false
+            },
+            {
+              "name": "source_selection",
+              "qualname": "ShadowRig.source_selection",
+              "kind": "staticmethod",
+              "signature": "()",
+              "summary": "The selection read as shadow sources (the panel's Source From",
+              "line": 705,
+              "deprecated": false
+            },
+            {
+              "name": "delete_orphaned_textures",
+              "qualname": "ShadowRig.delete_orphaned_textures",
+              "kind": "classmethod",
+              "signature": "(cls, paths)",
+              "summary": "Delete each of *paths* -- a shadow plane's own silhouette or",
+              "line": 726,
+              "deprecated": false
+            },
+            {
               "name": "create_shadow_plane",
               "qualname": "ShadowRig.create_shadow_plane",
               "kind": "method",
               "signature": "(self)",
               "summary": "Create the unit quad for the shadow with the keyable shadow attrs",
-              "line": 639,
+              "line": 787,
               "deprecated": false
             },
             {
@@ -27491,7 +27401,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "The projection model at the source's CURRENT position, for the",
-              "line": 907,
+              "line": 1055,
               "deprecated": false
             },
             {
@@ -27500,7 +27410,7 @@
               "kind": "method",
               "signature": "(self, size=512, *, recursive=True, uniform_alpha=True, falloff_power=0.8, vertical_weight=0.3, blur_amount=1.0, path=None, refit=True, source_size=None)",
               "summary": "Rasterize the targets' shadow — their geometry projected onto the",
-              "line": 942,
+              "line": 1090,
               "deprecated": false
             },
             {
@@ -27509,7 +27419,7 @@
               "kind": "method",
               "signature": "(self, shader_type='standard', stingray_opacity_mode='transparent')",
               "summary": "Create material with the silhouette texture.",
-              "line": 1054,
+              "line": 1202,
               "deprecated": false
             },
             {
@@ -27518,7 +27428,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "(Re)create the expression that places the plane from the source",
-              "line": 1166,
+              "line": 1314,
               "deprecated": false
             },
             {
@@ -27527,7 +27437,7 @@
               "kind": "method",
               "signature": "(self, start=None, end=None)",
               "summary": "Bake this rig's driven channels to keyframes and remove the live",
-              "line": 1333,
+              "line": 1481,
               "deprecated": false
             },
             {
@@ -27536,7 +27446,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane)",
               "summary": "Does *plane* still carry its expression (not baked)?",
-              "line": 1376,
+              "line": 1524,
               "deprecated": false
             },
             {
@@ -27545,7 +27455,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane)",
               "summary": "Does *plane* carry baked keys on its driven channels?",
-              "line": 1381,
+              "line": 1529,
               "deprecated": false
             },
             {
@@ -27554,7 +27464,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane)",
               "summary": "A rig instance re-attached to an existing *plane* via its stamps,",
-              "line": 1590,
+              "line": 1738,
               "deprecated": false
             },
             {
@@ -27563,7 +27473,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes)",
               "summary": "Shadow planes the given nodes touch: the planes themselves (or",
-              "line": 1634,
+              "line": 1782,
               "deprecated": false
             },
             {
@@ -27572,7 +27482,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "The rig *node* belongs to (a plane, its group, a target, the",
-              "line": 1667,
+              "line": 1815,
               "deprecated": false
             },
             {
@@ -27581,7 +27491,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes)",
               "summary": "Distinct rigs the *nodes* touch (see :meth:`for_node`).",
-              "line": 1678,
+              "line": 1826,
               "deprecated": false
             },
             {
@@ -27590,7 +27500,7 @@
               "kind": "method",
               "signature": "(self, source_name, position=(5, 10, 5), size=None)",
               "summary": "Re-point this rig at another source — an existing transform or",
-              "line": 1694,
+              "line": 1842,
               "deprecated": false
             },
             {
@@ -27599,7 +27509,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None)",
               "summary": "Restore the live expression on baked shadow planes — the reverse",
-              "line": 1728,
+              "line": 1876,
               "deprecated": false
             },
             {
@@ -27608,7 +27518,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane, texture_res=None, recursive=None, shader_type=None)",
               "summary": "Tear a rig down and build it again from its own stamps — the same",
-              "line": 1763,
+              "line": 1911,
               "deprecated": false
             },
             {
@@ -27617,7 +27527,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane, *, degrees=None, distance=None)",
               "summary": "Has the source moved past *degrees* (default",
-              "line": 1849,
+              "line": 1997,
               "deprecated": false
             },
             {
@@ -27626,7 +27536,7 @@
               "kind": "classmethod",
               "signature": "(cls, on=True)",
               "summary": "Follow Source: re-render a silhouette as soon as its source -- or",
-              "line": 1883,
+              "line": 2031,
               "deprecated": false
             },
             {
@@ -27635,7 +27545,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Is Follow Source on?",
-              "line": 1912,
+              "line": 2060,
               "deprecated": false
             },
             {
@@ -27644,7 +27554,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None)",
               "summary": "Recalculate the silhouettes (of *planes*, default all) whose",
-              "line": 1990,
+              "line": 2138,
               "deprecated": false
             },
             {
@@ -27653,7 +27563,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None, size=None, refit=None)",
               "summary": "Re-rasterize shadow planes' silhouettes from their source's CURRENT",
-              "line": 2027,
+              "line": 2175,
               "deprecated": false
             },
             {
@@ -27662,7 +27572,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx)",
               "summary": "The ``shadows`` record for this scene, or ``None`` when it",
-              "line": 2106,
+              "line": 2254,
               "deprecated": false
             },
             {
@@ -27671,7 +27581,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Republish the ``shadows`` channel on the ``data_export``",
-              "line": 2153,
+              "line": 2301,
               "deprecated": false
             },
             {
@@ -27680,7 +27590,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Metres per unit of the record (its ``unit_scale``): the working",
-              "line": 2172,
+              "line": 2320,
               "deprecated": false
             },
             {
@@ -27689,7 +27599,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane)",
               "summary": "The unit *plane*'s length stamps are in: the working unit its",
-              "line": 2180,
+              "line": 2328,
               "deprecated": false
             },
             {
@@ -27698,7 +27608,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane)",
               "summary": "One plane's ``shadows`` v2 record (the engine contract in",
-              "line": 2217,
+              "line": 2365,
               "deprecated": false
             },
             {
@@ -27707,7 +27617,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane)",
               "summary": "The rig type stamped on *plane* (``projected`` for a rig built",
-              "line": 2271,
+              "line": 2419,
               "deprecated": false
             },
             {
@@ -27716,7 +27626,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "``<base>_horizon.png`` beside the silhouette.",
-              "line": 2362,
+              "line": 2510,
               "deprecated": false
             },
             {
@@ -27725,7 +27635,7 @@
               "kind": "method",
               "signature": "(self, size=None, spans=None, path=None, *, only_if_changed=False)",
               "summary": "Bake the target's height-field shadow map",
-              "line": 2385,
+              "line": 2533,
               "deprecated": false
             },
             {
@@ -27734,7 +27644,7 @@
               "kind": "classmethod",
               "signature": "(cls, plane)",
               "summary": "True while the plane samples the shared silhouette atlas.",
-              "line": 2512,
+              "line": 2660,
               "deprecated": false
             },
             {
@@ -27743,7 +27653,7 @@
               "kind": "staticmethod",
               "signature": "() -> str",
               "summary": "Where a rig's maps go when no path names one: the open SCENE's",
-              "line": 2562,
+              "line": 2710,
               "deprecated": false
             },
             {
@@ -27752,7 +27662,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None, *, gutter=None)",
               "summary": "Pack the scene's shadow tiles into one atlas per kind — every",
-              "line": 2617,
+              "line": 2765,
               "deprecated": false
             },
             {
@@ -27761,7 +27671,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None)",
               "summary": "Undo :meth:`pack_atlas` for *planes* (all when None): unit UVs,",
-              "line": 2721,
+              "line": 2869,
               "deprecated": false
             },
             {
@@ -27770,7 +27680,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes=None)",
               "summary": "Shadow planes = transforms carrying the stamped ``basePlaneSize``",
-              "line": 2771,
+              "line": 2919,
               "deprecated": false
             },
             {
@@ -27779,7 +27689,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None, start=None, end=None)",
               "summary": "Bake shadow planes' expression-driven channels to keyframes and",
-              "line": 2797,
+              "line": 2945,
               "deprecated": false
             },
             {
@@ -27788,7 +27698,7 @@
               "kind": "method",
               "signature": "(self, delete_textures=False)",
               "summary": "Delete this rig completely.",
-              "line": 2865,
+              "line": 3013,
               "deprecated": false
             },
             {
@@ -27797,7 +27707,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None, delete_textures=False)",
               "summary": "Tear down shadow rig(s) completely — live or baked.",
-              "line": 2870,
+              "line": 3018,
               "deprecated": false
             },
             {
@@ -27806,7 +27716,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None)",
               "summary": "The shaders shadow *planes* wear (every plane when None), once each.",
-              "line": 2956,
+              "line": 3104,
               "deprecated": false
             },
             {
@@ -27815,7 +27725,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes, value)",
               "summary": "Overall darkness of *planes*' shadows, 0-1: the ``shadowIntensity``",
-              "line": 2966,
+              "line": 3114,
               "deprecated": false
             },
             {
@@ -27824,7 +27734,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes, value)",
               "summary": "World Y of the floor under *planes*: the ``groundHeight`` stamp (the",
-              "line": 3005,
+              "line": 3153,
               "deprecated": false
             },
             {
@@ -27833,7 +27743,7 @@
               "kind": "classmethod",
               "signature": "(cls, planes=None, suffix='_plane')",
               "summary": "Turn shadow rig(s) into plain textured planes: no rig, nothing extra.",
-              "line": 3094,
+              "line": 3242,
               "deprecated": false
             },
             {
@@ -27842,7 +27752,7 @@
               "kind": "classmethod",
               "signature": "(cls, targets, light_pos=(5, 10, 5), texture_res=512, *, source_name=DEFAULT_SOURCE_NAME, recursive=True, mode='orbit', ground_height=0.0, shader_type='standard', rig_type='projected', horizon_size=None, horizon_spans=None)",
               "summary": "Create a projected shadow for engine export.",
-              "line": 3260,
+              "line": 3408,
               "deprecated": false
             },
             {
@@ -27851,7 +27761,7 @@
               "kind": "classmethod",
               "signature": "(cls, targets, sources, **kwargs)",
               "summary": "One shadow rig per source — N lights cast N shadows.",
-              "line": 3399,
+              "line": 3547,
               "deprecated": false
             },
             {
@@ -27860,7 +27770,7 @@
               "kind": "classmethod",
               "signature": "(cls, targets, sources, **kwargs)",
               "summary": ":meth:`create_for_sources` for the ``horizon`` rig type.",
-              "line": 3422,
+              "line": 3570,
               "deprecated": false
             },
             {
@@ -27869,7 +27779,7 @@
               "kind": "classmethod",
               "signature": "(cls, targets, sources, **kwargs)",
               "summary": "One rig per target per source — the panel's *Per object* planes.",
-              "line": 3428,
+              "line": 3576,
               "deprecated": false
             }
           ]
@@ -28033,265 +27943,6 @@
               "signature": "(cls, device: Optional[str]) -> str",
               "summary": "Why a preview cannot be shown on *device* (empty when it can).",
               "line": 366,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "rig_utils/shadow_rig/shadow_rig_slots.py",
-      "summary": "Shadow Rig panel — the Switchboard slots for ``shadow_rig.ui``.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShadowRigSlots",
-          "summary": "",
-          "line": 26,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ShadowRigSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 74,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_type_init",
-              "qualname": "ShadowRigSlots.cmb_type_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "A rig type the panel only plans for is listed but not selectable.",
-              "line": 408,
-              "deprecated": false
-            },
-            {
-              "name": "txt_source_init",
-              "qualname": "ShadowRigSlots.txt_source_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Source Name's option box: the two actions about the source --",
-              "line": 415,
-              "deprecated": false
-            },
-            {
-              "name": "b003_init",
-              "qualname": "ShadowRigSlots.b003_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Recalculate Silhouette's option box: the deeper updates of an",
-              "line": 463,
-              "deprecated": false
-            },
-            {
-              "name": "b002_init",
-              "qualname": "ShadowRigSlots.b002_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Bake to Keyframes' option box: Restore Expression, its inverse.",
-              "line": 505,
-              "deprecated": false
-            },
-            {
-              "name": "b009_init",
-              "qualname": "ShadowRigSlots.b009_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Delete Rig's option box: Detach to Plane, the teardown that keeps",
-              "line": 525,
-              "deprecated": false
-            },
-            {
-              "name": "prepare_operation",
-              "qualname": "ShadowRigSlots.prepare_operation",
-              "kind": "method",
-              "signature": "(self, objects)",
-              "summary": "Preview's one-shot precondition, run at enable outside any",
-              "line": 600,
-              "deprecated": false
-            },
-            {
-              "name": "b001_init",
-              "qualname": "ShadowRigSlots.b001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the",
-              "line": 727,
-              "deprecated": false
-            },
-            {
-              "name": "chk_follow_init",
-              "qualname": "ShadowRigSlots.chk_follow_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Follow Source arms the engine's watcher from the box's (saved)",
-              "line": 760,
-              "deprecated": false
-            },
-            {
-              "name": "chk_follow",
-              "qualname": "ShadowRigSlots.chk_follow",
-              "kind": "method",
-              "signature": "(self, checked)",
-              "summary": "Follow Source: re-render a silhouette as soon as its source -- or",
-              "line": 767,
-              "deprecated": false
-            },
-            {
-              "name": "s001_init",
-              "qualname": "ShadowRigSlots.s001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Softness shows the scene's value for the first Source Name -- its",
-              "line": 778,
-              "deprecated": false
-            },
-            {
-              "name": "s001",
-              "qualname": "ShadowRigSlots.s001",
-              "kind": "method",
-              "signature": "(self, value)",
-              "summary": "Softness: the diameter the shadow gives the source(s) named in",
-              "line": 788,
-              "deprecated": false
-            },
-            {
-              "name": "s002",
-              "qualname": "ShadowRigSlots.s002",
-              "kind": "method",
-              "signature": "(self, value)",
-              "summary": "Intensity: the overall darkness a new rig builds with, applied at",
-              "line": 836,
-              "deprecated": false
-            },
-            {
-              "name": "s003",
-              "qualname": "ShadowRigSlots.s003",
-              "kind": "method",
-              "signature": "(self, value)",
-              "summary": "Ground Y: the floor's world height a new rig builds on, applied at",
-              "line": 844,
-              "deprecated": false
-            },
-            {
-              "name": "chk_horizon_preview_init",
-              "qualname": "ShadowRigSlots.chk_horizon_preview_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "The box mirrors the SCENE, never a saved setting: checked while a",
-              "line": 861,
-              "deprecated": false
-            },
-            {
-              "name": "chk_horizon_preview",
-              "qualname": "ShadowRigSlots.chk_horizon_preview",
-              "kind": "method",
-              "signature": "(self, checked)",
-              "summary": "Live Horizon Preview: a Viewport 2.0 shader on the horizon plane(s)",
-              "line": 923,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "ShadowRigSlots.b002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Bake to Keyframes: bake the rig(s) the selection touches (or all)",
-              "line": 959,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "ShadowRigSlots.b003",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Recalculate Silhouette: re-render the rig(s) the selection touches",
-              "line": 971,
-              "deprecated": false
-            },
-            {
-              "name": "source_from_selection",
-              "qualname": "ShadowRigSlots.source_from_selection",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Source From Selection (Source Name's option box): the selected",
-              "line": 986,
-              "deprecated": false
-            },
-            {
-              "name": "reproject_sources",
-              "qualname": "ShadowRigSlots.reproject_sources",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Reproject (Source Name's option box): re-render the silhouette of",
-              "line": 1029,
-              "deprecated": false
-            },
-            {
-              "name": "apply_source",
-              "qualname": "ShadowRigSlots.apply_source",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Apply Source (Recalculate's option box): re-point the rig(s) the",
-              "line": 1059,
-              "deprecated": false
-            },
-            {
-              "name": "rebuild_rig",
-              "qualname": "ShadowRigSlots.rebuild_rig",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Rebuild Rig (Recalculate's option box): re-create the rig(s) the",
-              "line": 1089,
-              "deprecated": false
-            },
-            {
-              "name": "restore_expression",
-              "qualname": "ShadowRigSlots.restore_expression",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Restore Expression (Bake's option box): un-bake the rig(s) the",
-              "line": 1117,
-              "deprecated": false
-            },
-            {
-              "name": "b009",
-              "qualname": "ShadowRigSlots.b009",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Delete Rig: tear down the rig(s) the selection touches.",
-              "line": 1133,
-              "deprecated": false
-            },
-            {
-              "name": "detach_to_plane",
-              "qualname": "ShadowRigSlots.detach_to_plane",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Detach to Plane (Delete Rig's option box): the rig(s) the selection",
-              "line": 1142,
-              "deprecated": false
-            },
-            {
-              "name": "b010",
-              "qualname": "ShadowRigSlots.b010",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Pack Atlas: pack or repack every shadow rig's tiles into the",
-              "line": 1161,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "ShadowRigSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "Build one shadow rig per source for the given targets.",
-              "line": 1207,
               "deprecated": false
             }
           ]

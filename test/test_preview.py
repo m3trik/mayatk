@@ -554,6 +554,72 @@ class TestPreviewBypass(MayaTkTestCase):
         self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
 
+@unittest.skipIf(QtWidgets is None, "Qt not available")
+class TestPreviewRestoreFunc(MayaTkTestCase):
+    """``restore_func`` (blendertk's Preview takes it too): called once after
+    the rollback that DISCARDS the preview -- an un-check or a failed pass --
+    never on a commit, and recorded nowhere on the undo queue. For state no
+    rollback reaches (Shadow Rig: the export carrier's record, its PNGs)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="restore_cube")[0]
+        self.calls = []
+
+    def _preview(self, op=None, restore=None):
+        preview = Preview(
+            op or MockOperation(),
+            QtWidgets.QCheckBox(),
+            QtWidgets.QPushButton(),
+            restore_func=restore or self._restore,
+            message_func=lambda m: None,
+        )
+        self.addCleanup(preview.cleanup)
+        return preview
+
+    def _restore(self):
+        # The rollback already ran: the cube is back where it started.
+        self.calls.append(cmds.xform(self.cube, q=True, ws=True, t=True)[1])
+
+    def test_a_discard_restores_after_the_rollback(self):
+        preview = self._preview()
+        cmds.select(self.cube)
+        preview.enable()
+        preview.disable()
+        self.assertEqual(len(self.calls), 1)
+        self.assertAlmostEqual(self.calls[0], 0.0, places=4)
+        preview.disable()  # nothing previewed: nothing to restore
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_failed_pass_restores(self):
+        op = MockOperation()
+        op.should_fail = True
+        preview = self._preview(op)
+        cmds.select(self.cube)
+        preview.enable()
+        self.assertFalse(preview.is_enabled)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_commit_never_restores(self):
+        preview = self._preview()
+        cmds.select(self.cube)
+        preview.enable()
+        preview.finalize_changes()  # previewed
+        preview.finalize_changes()  # straight from the selection
+        self.assertEqual(self.calls, [])
+
+    def test_the_restore_is_recorded_nowhere(self):
+        preview = self._preview(
+            restore=lambda: cmds.setAttr(f"{self.cube}.translateX", 5.0)
+        )
+        cmds.select(self.cube)
+        preview.enable()
+        before = cmds.undoInfo(q=True, undoName=True)
+        preview.disable()
+        self.assertEqual(cmds.getAttr(f"{self.cube}.translateX"), 5.0)
+        self.assertEqual(cmds.undoInfo(q=True, undoName=True), before)
+
+
 class TestCleanupContractAttrRestore(MayaTkTestCase):
     """attr-snapshot restore across value types (Qt-free, direct contract)."""
 
