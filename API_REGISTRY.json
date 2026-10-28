@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 258,
+          "line": 259,
           "deprecated": false
         }
       ]
@@ -2279,510 +2279,14 @@
       "constants": []
     },
     {
-      "relpath": "anim_utils/shots/shot_manifest/export_preview.py",
-      "summary": "The Shot Manifest's Export button (beside Assess): a live preview of the",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ExportPreviewMixin",
-          "summary": "The Export button's preview, mixed into ``ShotManifestController``.",
-          "line": 27,
-          "bases": [],
-          "members": [
-            {
-              "name": "export",
-              "qualname": "ExportPreviewMixin.export",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Open the preview of the export (or bring the open one up): its",
-              "line": 233,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/header_menu.py",
-      "summary": "The Shot Manifest's header menu: Long Names, Local Edits' Edits mode and",
-      "functions": [],
-      "classes": [
-        {
-          "name": "HeaderMenuMixin",
-          "summary": "The header menu, mixed into ``ShotManifestController``.",
-          "line": 21,
-          "bases": [],
-          "members": []
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/manifest_data.py",
-      "summary": "Constants, column layout, and pure helper functions for the Shot Manifest UI.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ManifestData",
-          "summary": "ManifestData — module namespace.",
-          "line": 51,
-          "bases": [],
-          "members": [
-            {
-              "name": "level",
-              "qualname": "ManifestData.level",
-              "kind": "staticmethod",
-              "signature": "(status: str) -> str",
-              "summary": "*status*'s severity (``SHOT_STATUS_LEVELS``);",
-              "line": 73,
-              "deprecated": false
-            },
-            {
-              "name": "status_color",
-              "qualname": "ManifestData.status_color",
-              "kind": "staticmethod",
-              "signature": "(status: str) -> Optional[str]",
-              "summary": "*status*'s colour in this panel's palette, or ``None`` for none.",
-              "line": 80,
-              "deprecated": false
-            },
-            {
-              "name": "worst",
-              "qualname": "ManifestData.worst",
-              "kind": "staticmethod",
-              "signature": "(statuses: Iterable[str]) -> Optional[str]",
-              "summary": "The status of *statuses* at the worst severity (the first of",
-              "line": 86,
-              "deprecated": false
-            },
-            {
-              "name": "glyph_html",
-              "qualname": "ManifestData.glyph_html",
-              "kind": "staticmethod",
-              "signature": "(status: str) -> str",
-              "summary": "*status*'s glyph in its colour, as rich text (``\"\"``: no severity).",
-              "line": 98,
-              "deprecated": false
-            },
-            {
-              "name": "issues_html",
-              "qualname": "ManifestData.issues_html",
-              "kind": "staticmethod",
-              "signature": "(issues: Iterable[Tuple[str, str]]) -> str",
-              "summary": "``(status, text)`` *issues* as rich text, a line each: its glyph,",
-              "line": 107,
-              "deprecated": false
-            },
-            {
-              "name": "fmt_behavior",
-              "qualname": "ManifestData.fmt_behavior",
-              "kind": "staticmethod",
-              "signature": "(name: str) -> str",
-              "summary": "``'fade_in'`` → ``'Fade In'`` (``Behaviors.label``: the marker",
-              "line": 118,
-              "deprecated": false
-            },
-            {
-              "name": "format_behavior_html",
-              "qualname": "ManifestData.format_behavior_html",
-              "kind": "staticmethod",
-              "signature": "(behaviors, broken=(), status_color=None, stale=(), disabled=(), marked=()) -> str",
-              "summary": "Return rich-text HTML for a list of behavior names.",
-              "line": 128,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": [
-        {
-          "name": "SETTINGS_NS",
-          "qualname": "SETTINGS_NS",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 28,
-          "deprecated": false
-        },
-        {
-          "name": "HEADERS",
-          "qualname": "HEADERS",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 31,
-          "deprecated": false
-        },
-        {
-          "name": "COL_STEP",
-          "qualname": "COL_STEP",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 34,
-          "deprecated": false
-        },
-        {
-          "name": "COL_SECTION",
-          "qualname": "COL_SECTION",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 35,
-          "deprecated": false
-        },
-        {
-          "name": "COL_DESC",
-          "qualname": "COL_DESC",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 36,
-          "deprecated": false
-        },
-        {
-          "name": "COL_BEHAVIORS",
-          "qualname": "COL_BEHAVIORS",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 37,
-          "deprecated": false
-        },
-        {
-          "name": "COL_START",
-          "qualname": "COL_START",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 38,
-          "deprecated": false
-        },
-        {
-          "name": "COL_END",
-          "qualname": "COL_END",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 39,
-          "deprecated": false
-        },
-        {
-          "name": "STEP_ICON_COLOR",
-          "qualname": "STEP_ICON_COLOR",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 41,
-          "deprecated": false
-        },
-        {
-          "name": "PASTEL_STATUS",
-          "qualname": "PASTEL_STATUS",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 45,
-          "deprecated": false
-        },
-        {
-          "name": "ERROR_COLOR",
-          "qualname": "ERROR_COLOR",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 48,
-          "deprecated": false
-        }
-      ]
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/manifest_editor.py",
-      "summary": "Local Edits for the Shot Manifest panel: change the table, never the sheet.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ManifestEditor",
-          "summary": "One panel's Local Edits: its edit layer, its cell editors, and the",
-          "line": 45,
-          "bases": [],
-          "members": [
-            {
-              "name": "enabled",
-              "qualname": "ManifestEditor.enabled",
-              "kind": "property",
-              "signature": "(self) -> bool",
-              "summary": "Whether the edits are in force -- applied and editable: always,",
-              "line": 96,
-              "deprecated": false
-            },
-            {
-              "name": "add_header_options",
-              "qualname": "ManifestEditor.add_header_options",
-              "kind": "method",
-              "signature": "(self, menu) -> None",
-              "summary": "Add the Local Edits row to *menu*: the Edits combo",
-              "line": 101,
-              "deprecated": false
-            },
-            {
-              "name": "edits_mode",
-              "qualname": "ManifestEditor.edits_mode",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "The Edits mode in force: ``\"keep\"``, ``\"rebuild\"`` or ``\"compare\"``.",
-              "line": 153,
-              "deprecated": false
-            },
-            {
-              "name": "view_original",
-              "qualname": "ManifestEditor.view_original",
-              "kind": "method",
-              "signature": "(self, on: bool = True) -> None",
-              "summary": "Show the sheet as delivered (*on*), or the manifest with its edits.",
-              "line": 175,
-              "deprecated": false
-            },
-            {
-              "name": "refuse_viewing",
-              "qualname": "ManifestEditor.refuse_viewing",
-              "kind": "method",
-              "signature": "(self, to: str = 'edit') -> bool",
-              "summary": "Say so and return ``True`` while the original sheet is viewed:",
-              "line": 203,
-              "deprecated": false
-            },
-            {
-              "name": "reset",
-              "qualname": "ManifestEditor.reset",
-              "kind": "method",
-              "signature": "(self, confirm: bool = True) -> None",
-              "summary": "Drop every edit of the current source, after asking.",
-              "line": 215,
-              "deprecated": false
-            },
-            {
-              "name": "source_key",
-              "qualname": "ManifestEditor.source_key",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "The source the edits belong to: the sheet's path, or ``\"\"`` for",
-              "line": 235,
-              "deprecated": false
-            },
-            {
-              "name": "load",
-              "qualname": "ManifestEditor.load",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Read the current source's edits from the scene -- a sheet moved",
-              "line": 241,
-              "deprecated": false
-            },
-            {
-              "name": "save",
-              "qualname": "ManifestEditor.save",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Write the current source's edits to the scene, under the sheet's",
-              "line": 247,
-              "deprecated": false
-            },
-            {
-              "name": "apply",
-              "qualname": "ManifestEditor.apply",
-              "kind": "method",
-              "signature": "(self, steps: List[ptk.BuilderStep]) -> List[ptk.BuilderStep]",
-              "summary": "*steps* with the edits applied -- as delivered while the original",
-              "line": 258,
-              "deprecated": false
-            },
-            {
-              "name": "stale",
-              "qualname": "ManifestEditor.stale",
-              "kind": "method",
-              "signature": "(self) -> List[str]",
-              "summary": "The edits the loaded sheet gives no place to (``ManifestEdits.stale``).",
-              "line": 263,
-              "deprecated": false
-            },
-            {
-              "name": "refresh",
-              "qualname": "ManifestEditor.refresh",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Re-apply the edits to the loaded steps and redraw the table.",
-              "line": 267,
-              "deprecated": false
-            },
-            {
-              "name": "refuse_locked",
-              "qualname": "ManifestEditor.refuse_locked",
-              "kind": "method",
-              "signature": "(self, step) -> bool",
-              "summary": "Say so and return ``True`` when *step* is locked (:meth:`_locked`).",
-              "line": 317,
-              "deprecated": false
-            },
-            {
-              "name": "begin_edit",
-              "qualname": "ManifestEditor.begin_edit",
-              "kind": "method",
-              "signature": "(self, item, column: int) -> bool",
-              "summary": "Open an editor on a step's name or description, or an object's",
-              "line": 336,
-              "deprecated": false
-            },
-            {
-              "name": "commit_edit",
-              "qualname": "ManifestEditor.commit_edit",
-              "kind": "method",
-              "signature": "(self, item, column: int) -> bool",
-              "summary": "Record the edit a cell editor committed;",
-              "line": 388,
-              "deprecated": false
-            },
-            {
-              "name": "set_behaviors",
-              "qualname": "ManifestEditor.set_behaviors",
-              "kind": "method",
-              "signature": "(self, step_id: str, obj, behaviors: List[str]) -> bool",
-              "summary": "Record *obj*'s ticked *behaviors* in step *step_id*;",
-              "line": 480,
-              "deprecated": false
-            },
-            {
-              "name": "add_menu_actions",
-              "qualname": "ManifestEditor.add_menu_actions",
-              "kind": "method",
-              "signature": "(self, menu, item, selected: List[str] = ()) -> None",
-              "summary": "Add Local Edits' actions for the row at *item* (``None``: empty",
-              "line": 495,
-              "deprecated": false
-            },
-            {
-              "name": "add_step",
-              "qualname": "ManifestEditor.add_step",
-              "kind": "method",
-              "signature": "(self, after: str) -> str",
-              "summary": "Add a step after step *after* (``\"\"``: at the top) and open its",
-              "line": 621,
-              "deprecated": false
-            },
-            {
-              "name": "add_shot",
-              "qualname": "ManifestEditor.add_shot",
-              "kind": "method",
-              "signature": "(self, shot, after: str) -> Optional[str]",
-              "summary": "Take a shot no step pairs with into the manifest: a step of its own",
-              "line": 633,
-              "deprecated": false
-            },
-            {
-              "name": "remove_step",
-              "qualname": "ManifestEditor.remove_step",
-              "kind": "method",
-              "signature": "(self, step) -> None",
-              "summary": "Remove an added step;",
-              "line": 660,
-              "deprecated": false
-            },
-            {
-              "name": "hide_steps",
-              "qualname": "ManifestEditor.hide_steps",
-              "kind": "method",
-              "signature": "(self, step_ids: List[str], hidden: bool = True) -> None",
-              "summary": "Hide (or show) steps.",
-              "line": 671,
-              "deprecated": false
-            },
-            {
-              "name": "unlocked_hidden_objects",
-              "qualname": "ManifestEditor.unlocked_hidden_objects",
-              "kind": "method",
-              "signature": "(self) -> List[Tuple[str, str]]",
-              "summary": "The hidden objects :meth:`show_hidden_objects` shows, as",
-              "line": 683,
-              "deprecated": false
-            },
-            {
-              "name": "show_hidden_objects",
-              "qualname": "ManifestEditor.show_hidden_objects",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Show every object the edits hide, wherever it sits -- but in a",
-              "line": 694,
-              "deprecated": false
-            },
-            {
-              "name": "hide_object",
-              "qualname": "ManifestEditor.hide_object",
-              "kind": "method",
-              "signature": "(self, home: str, sheet_name: str, hidden: bool = True) -> None",
-              "summary": "Hide (or show) an object: a hidden one leaves its step, and Build",
-              "line": 703,
-              "deprecated": false
-            },
-            {
-              "name": "move_object",
-              "qualname": "ManifestEditor.move_object",
-              "kind": "method",
-              "signature": "(self, step, obj, target) -> None",
-              "summary": "Move *obj* from *step* to *target* (to the end of its objects).",
-              "line": 710,
-              "deprecated": false
-            },
-            {
-              "name": "rename_all",
-              "qualname": "ManifestEditor.rename_all",
-              "kind": "method",
-              "signature": "(self, name: str, new: Optional[str] = None) -> int",
-              "summary": "Point every step listing *name* at *new* (asked for when",
-              "line": 721,
-              "deprecated": false
-            },
-            {
-              "name": "revert_step",
-              "qualname": "ManifestEditor.revert_step",
-              "kind": "method",
-              "signature": "(self, step) -> None",
-              "summary": "Drop *step*'s own edits (name, description);",
-              "line": 753,
-              "deprecated": false
-            },
-            {
-              "name": "revert_object",
-              "qualname": "ManifestEditor.revert_object",
-              "kind": "method",
-              "signature": "(self, home: str, sheet_name: str, name: str = '') -> None",
-              "summary": "Drop an object's edits: the sheet's name, step and behaviors.",
-              "line": 758,
-              "deprecated": false
-            },
-            {
-              "name": "decorate",
-              "qualname": "ManifestEditor.decorate",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Mark the edited cells -- italic, the sheet's value in the tooltip --",
-              "line": 765,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
       "relpath": "anim_utils/shots/shot_manifest/manifest_host.py",
-      "summary": "What the Shot Manifest panel needs from Maya: its store, engine and detection",
+      "summary": "What the Shot Manifest panel needs from Maya: its store, engine, detection,",
       "functions": [],
       "classes": [
         {
           "name": "ManifestHost",
           "summary": "Maya's answers to the Shot Manifest panel's host calls.",
-          "line": 23,
+          "line": 22,
           "bases": [],
           "members": [
             {
@@ -2791,7 +2295,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "The host's ``ShotStore`` class.",
-              "line": 32,
+              "line": 31,
               "deprecated": false
             },
             {
@@ -2800,7 +2304,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "The host's manifest engine class.",
-              "line": 37,
+              "line": 36,
               "deprecated": false
             },
             {
@@ -2809,7 +2313,25 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "The host's animation-region detection (``Detection``).",
-              "line": 42,
+              "line": 41,
+              "deprecated": false
+            },
+            {
+              "name": "behaviors_cls",
+              "qualname": "ManifestHost.behaviors_cls",
+              "kind": "staticmethod",
+              "signature": "()",
+              "summary": "The host's ``Behaviors`` (the recipes a manifest object's behaviors key).",
+              "line": 46,
+              "deprecated": false
+            },
+            {
+              "name": "range_resolver_cls",
+              "qualname": "ManifestHost.range_resolver_cls",
+              "kind": "staticmethod",
+              "signature": "()",
+              "summary": "The host's ``RangeResolver``: pythontk's, sizing audio steps to their clips.",
+              "line": 53,
               "deprecated": false
             },
             {
@@ -2818,7 +2340,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether the scene can be reached (``maya.cmds`` imports).",
-              "line": 47,
+              "line": 60,
               "deprecated": false
             },
             {
@@ -2827,7 +2349,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[float]",
               "summary": "The playhead's frame, or ``None`` without a scene.",
-              "line": 52,
+              "line": 65,
               "deprecated": false
             },
             {
@@ -2836,7 +2358,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, store) -> List[str]",
               "summary": "The scene nodes doc object *name* answers to: the store's members,",
-              "line": 57,
+              "line": 70,
               "deprecated": false
             },
             {
@@ -2845,7 +2367,7 @@
               "kind": "staticmethod",
               "signature": "(nodes: List[str]) -> List[str]",
               "summary": "Select *nodes* and reveal them in the Outliner.",
-              "line": 66,
+              "line": 79,
               "deprecated": false
             },
             {
@@ -2854,7 +2376,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> str",
               "summary": "*name*'s leaf: its DAG path dropped.",
-              "line": 80,
+              "line": 93,
               "deprecated": false
             },
             {
@@ -2863,65 +2385,10 @@
               "kind": "staticmethod",
               "signature": "(obj, name: str)",
               "summary": "The icon of a table row's object, or ``None``: *obj* is its",
-              "line": 87,
+              "line": 100,
               "deprecated": false
             }
           ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/manifest_source.py",
-      "summary": "Where the Shot Manifest's steps come from: a build sheet (a CSV path or link,",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ManifestSourceMixin",
-          "summary": "The panel's sources, mixed into ``ShotManifestController``.",
-          "line": 25,
-          "bases": [],
-          "members": [
-            {
-              "name": "detect",
-              "qualname": "ManifestSourceMixin.detect",
-              "kind": "method",
-              "signature": "(self, gap: Optional[float] = None) -> None",
-              "summary": "Detect animation regions in the scene and populate the table.",
-              "line": 55,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/mapping_picker.py",
-      "summary": "The Shot Manifest's mapping template: its own popup on the build sheet",
-      "functions": [],
-      "classes": [
-        {
-          "name": "MappingPickerMixin",
-          "summary": "The mapping template, mixed into ``ShotManifestController``.",
-          "line": 22,
-          "bases": [],
-          "members": []
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/range_column.py",
-      "summary": "The Shot Manifest table's Start / End column: what a step's range is",
-      "functions": [],
-      "classes": [
-        {
-          "name": "RangeColumnMixin",
-          "summary": "The Start / End column, mixed into ``ShotManifestController``.",
-          "line": 27,
-          "bases": [],
-          "members": []
         }
       ],
       "constants": []
@@ -2947,203 +2414,6 @@
               "deprecated": false
             }
           ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/row_menus.py",
-      "summary": "The Shot Manifest rows' context menus and what they do: a step row's (colour",
-      "functions": [],
-      "classes": [
-        {
-          "name": "RowMenusMixin",
-          "summary": "The rows' context menus, mixed into ``ShotManifestController``.",
-          "line": 26,
-          "bases": [],
-          "members": []
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/shot_manifest_controller.py",
-      "summary": "The Shot Manifest panel's controller: its state, the steps the table shows,",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShotManifestController",
-          "summary": "Business logic for the Shot Manifest UI (see the module docstring).",
-          "line": 44,
-          "bases": [
-            "ManifestTableMixin",
-            "RangeColumnMixin",
-            "StoreFollowMixin",
-            "ManifestSourceMixin",
-            "MappingPickerMixin",
-            "RowMenusMixin",
-            "HeaderMenuMixin",
-            "ViewCombosMixin",
-            "ExportPreviewMixin",
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "build",
-              "qualname": "ShotManifestController.build",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Build or update shots in the store from loaded steps.",
-              "line": 471,
-              "deprecated": false
-            },
-            {
-              "name": "assess",
-              "qualname": "ShotManifestController.assess",
-              "kind": "method",
-              "signature": "(self, skip_key_check: bool = False, note: str = '') -> None",
-              "summary": "Compare the steps against the scene's shots and colour the tree.",
-              "line": 739,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/shot_manifest_slots.py",
-      "summary": "Switchboard slots for the Shot Manifest panel: the ``.ui``'s widgets routed to",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShotManifestSlots",
-          "summary": "Switchboard slot class — routes UI events to the controller.",
-          "line": 19,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ShotManifestSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Header menu is configured once in controller.__init__.",
-              "line": 32,
-              "deprecated": false
-            },
-            {
-              "name": "btn_settings",
-              "qualname": "ShotManifestSlots.btn_settings",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open the shared shots settings panel.",
-              "line": 36,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "ShotManifestSlots.b002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Assess the steps against the scene.",
-              "line": 42,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "ShotManifestSlots.b003",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Build shots from loaded steps (or auto-detect from scene).",
-              "line": 46,
-              "deprecated": false
-            },
-            {
-              "name": "b004",
-              "qualname": "ShotManifestSlots.b004",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Export the manifest's rows (the option menu says how).",
-              "line": 50,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/store_follow.py",
-      "summary": "The Shot Manifest panel following the scene's store: its events (a shot",
-      "functions": [],
-      "classes": [
-        {
-          "name": "StoreFollowMixin",
-          "summary": "Store events and scene swaps, mixed into ``ShotManifestController``.",
-          "line": 30,
-          "bases": [],
-          "members": [
-            {
-              "name": "remove_callbacks",
-              "qualname": "StoreFollowMixin.remove_callbacks",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Remove the ShotStore listener and the invalidation subscription,",
-              "line": 81,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/table_presenter.py",
-      "summary": "The Shot Manifest tree's rows: populating them (``ShotPairing.rows``: steps,",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ManifestTableMixin",
-          "summary": "Presentation methods for the manifest tree widget.",
-          "line": 54,
-          "bases": [],
-          "members": [
-            {
-              "name": "expand_missing",
-              "qualname": "ManifestTableMixin.expand_missing",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Expand the step rows the shown assessment found something in",
-              "line": 845,
-              "deprecated": false
-            },
-            {
-              "name": "expand_extra",
-              "qualname": "ManifestTableMixin.expand_extra",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Expand the step rows holding an object the step does not list",
-              "line": 865,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_manifest/view_combos.py",
-      "summary": "The Shot Manifest's view row, above the table: Select, Expand, Collapse,",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ViewCombosMixin",
-          "summary": "The view row, mixed into ``ShotManifestController``.",
-          "line": 28,
-          "bases": [],
-          "members": []
         }
       ],
       "constants": []

@@ -26,21 +26,8 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/shots/_shots.py`](#anim_utils--shots--_shots) — Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
 - [`anim_utils/shots/shot_manifest/_shot_manifest.py`](#anim_utils--shots--shot_manifest--_shot_manifest) — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - [`anim_utils/shots/shot_manifest/behaviors/_behaviors.py`](#anim_utils--shots--shot_manifest--behaviors--_behaviors) — Behaviors — Maya appliers over the engine's pure keying-recipe core.
-- [`anim_utils/shots/shot_manifest/export_preview.py`](#anim_utils--shots--shot_manifest--export_preview) — The Shot Manifest's Export button (beside Assess): a live preview of the
-- [`anim_utils/shots/shot_manifest/header_menu.py`](#anim_utils--shots--shot_manifest--header_menu) — The Shot Manifest's header menu: Long Names, Local Edits' Edits mode and
-- [`anim_utils/shots/shot_manifest/manifest_data.py`](#anim_utils--shots--shot_manifest--manifest_data) — Constants, column layout, and pure helper functions for the Shot Manifest UI.
-- [`anim_utils/shots/shot_manifest/manifest_editor.py`](#anim_utils--shots--shot_manifest--manifest_editor) — Local Edits for the Shot Manifest panel: change the table, never the sheet.
-- [`anim_utils/shots/shot_manifest/manifest_host.py`](#anim_utils--shots--shot_manifest--manifest_host) — What the Shot Manifest panel needs from Maya: its store, engine and detection
-- [`anim_utils/shots/shot_manifest/manifest_source.py`](#anim_utils--shots--shot_manifest--manifest_source) — Where the Shot Manifest's steps come from: a build sheet (a CSV path or link,
-- [`anim_utils/shots/shot_manifest/mapping_picker.py`](#anim_utils--shots--shot_manifest--mapping_picker) — The Shot Manifest's mapping template: its own popup on the build sheet
-- [`anim_utils/shots/shot_manifest/range_column.py`](#anim_utils--shots--shot_manifest--range_column) — The Shot Manifest table's Start / End column: what a step's range is
+- [`anim_utils/shots/shot_manifest/manifest_host.py`](#anim_utils--shots--shot_manifest--manifest_host) — What the Shot Manifest panel needs from Maya: its store, engine, detection,
 - [`anim_utils/shots/shot_manifest/range_resolver.py`](#anim_utils--shots--shot_manifest--range_resolver) — Range resolution for the Shot Manifest build pipeline (Maya-bound facade).
-- [`anim_utils/shots/shot_manifest/row_menus.py`](#anim_utils--shots--shot_manifest--row_menus) — The Shot Manifest rows' context menus and what they do: a step row's (colour
-- [`anim_utils/shots/shot_manifest/shot_manifest_controller.py`](#anim_utils--shots--shot_manifest--shot_manifest_controller) — The Shot Manifest panel's controller: its state, the steps the table shows,
-- [`anim_utils/shots/shot_manifest/shot_manifest_slots.py`](#anim_utils--shots--shot_manifest--shot_manifest_slots) — Switchboard slots for the Shot Manifest panel: the ``.ui``'s widgets routed to
-- [`anim_utils/shots/shot_manifest/store_follow.py`](#anim_utils--shots--shot_manifest--store_follow) — The Shot Manifest panel following the scene's store: its events (a shot
-- [`anim_utils/shots/shot_manifest/table_presenter.py`](#anim_utils--shots--shot_manifest--table_presenter) — The Shot Manifest tree's rows: populating them (``ShotPairing.rows``: steps,
-- [`anim_utils/shots/shot_manifest/view_combos.py`](#anim_utils--shots--shot_manifest--view_combos) — The Shot Manifest's view row, above the table: Select, Expand, Collapse,
 - [`anim_utils/shots/shot_sequencer/_shot_sequencer.py`](#anim_utils--shots--shot_sequencer--_shot_sequencer) — Shot Sequencer — manages per-shot animation with ripple editing.
 - [`anim_utils/shots/shot_sequencer/clip_menu.py`](#anim_utils--shots--shot_sequencer--clip_menu) — Clip context menus and clip-level key operations.
 - [`anim_utils/shots/shot_sequencer/clip_motion.py`](#anim_utils--shots--shot_sequencer--clip_motion) — Clip motion, resize, and key-scaling logic for the shot sequencer.
@@ -276,7 +263,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L258) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L259) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -631,119 +618,23 @@ Behaviors — Maya appliers over the engine's pure keying-recipe core.
   - `Behaviors.compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float` *(static)* — Derive duration from the behavior templates in *behavior_entries*.
   - `Behaviors.apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None, resolve_fn=None, conflict_fn=None, release_fn=None, skip_behaviors=()) -> Dict[str, list]` *(static)* — Apply declared behaviors from shot metadata to Maya objects.
 
-<a id="anim_utils--shots--shot_manifest--export_preview"></a>
-### `anim_utils/shots/shot_manifest/export_preview.py`
-
-The Shot Manifest's Export button (beside Assess): a live preview of the
-
-- **[`class ExportPreviewMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/export_preview.py#L27)** — The Export button's preview, mixed into ``ShotManifestController``.
-  - `ExportPreviewMixin.export(self) -> None` — Open the preview of the export (or bring the open one up): its
-
-<a id="anim_utils--shots--shot_manifest--header_menu"></a>
-### `anim_utils/shots/shot_manifest/header_menu.py`
-
-The Shot Manifest's header menu: Long Names, Local Edits' Edits mode and
-
-- **[`class HeaderMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/header_menu.py#L21)** — The header menu, mixed into ``ShotManifestController``.
-
-<a id="anim_utils--shots--shot_manifest--manifest_data"></a>
-### `anim_utils/shots/shot_manifest/manifest_data.py`
-
-Constants, column layout, and pure helper functions for the Shot Manifest UI.
-
-- [`SETTINGS_NS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L28) — constant
-- [`HEADERS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L31) — constant
-- [`COL_STEP`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L34) — constant
-- [`COL_SECTION`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L35) — constant
-- [`COL_DESC`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L36) — constant
-- [`COL_BEHAVIORS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L37) — constant
-- [`COL_START`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L38) — constant
-- [`COL_END`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L39) — constant
-- [`STEP_ICON_COLOR`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L41) — constant
-- [`PASTEL_STATUS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L45) — constant
-- [`ERROR_COLOR`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L48) — constant
-- **[`class ManifestData`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L51)** — ManifestData — module namespace.
-  - `ManifestData.level(status: str) -> str` *(static)* — *status*'s severity (``SHOT_STATUS_LEVELS``);
-  - `ManifestData.status_color(status: str) -> Optional[str]` *(static)* — *status*'s colour in this panel's palette, or ``None`` for none.
-  - `ManifestData.worst(statuses: Iterable[str]) -> Optional[str]` *(static)* — The status of *statuses* at the worst severity (the first of
-  - `ManifestData.glyph_html(status: str) -> str` *(static)* — *status*'s glyph in its colour, as rich text (``""``: no severity).
-  - `ManifestData.issues_html(issues: Iterable[Tuple[str, str]]) -> str` *(static)* — ``(status, text)`` *issues* as rich text, a line each: its glyph,
-  - `ManifestData.fmt_behavior(name: str) -> str` *(static)* — ``'fade_in'`` → ``'Fade In'`` (``Behaviors.label``: the marker
-  - `ManifestData.format_behavior_html(behaviors, broken=(), status_color=None, stale=(), disabled=(), marked=()) -> str` *(static)* — Return rich-text HTML for a list of behavior names.
-
-<a id="anim_utils--shots--shot_manifest--manifest_editor"></a>
-### `anim_utils/shots/shot_manifest/manifest_editor.py`
-
-Local Edits for the Shot Manifest panel: change the table, never the sheet.
-
-- **[`class ManifestEditor`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_editor.py#L45)** — One panel's Local Edits: its edit layer, its cell editors, and the
-  - `ManifestEditor.enabled(self) -> bool` *(property)* — Whether the edits are in force -- applied and editable: always,
-  - `ManifestEditor.add_header_options(self, menu) -> None` — Add the Local Edits row to *menu*: the Edits combo
-  - `ManifestEditor.edits_mode(self) -> str` *(property)* — The Edits mode in force: ``"keep"``, ``"rebuild"`` or ``"compare"``.
-  - `ManifestEditor.view_original(self, on: bool = True) -> None` — Show the sheet as delivered (*on*), or the manifest with its edits.
-  - `ManifestEditor.refuse_viewing(self, to: str = 'edit') -> bool` — Say so and return ``True`` while the original sheet is viewed:
-  - `ManifestEditor.reset(self, confirm: bool = True) -> None` — Drop every edit of the current source, after asking.
-  - `ManifestEditor.source_key(self) -> str` *(property)* — The source the edits belong to: the sheet's path, or ``""`` for
-  - `ManifestEditor.load(self) -> None` — Read the current source's edits from the scene -- a sheet moved
-  - `ManifestEditor.save(self) -> None` — Write the current source's edits to the scene, under the sheet's
-  - `ManifestEditor.apply(self, steps: List[ptk.BuilderStep]) -> List[ptk.BuilderStep]` — *steps* with the edits applied -- as delivered while the original
-  - `ManifestEditor.stale(self) -> List[str]` — The edits the loaded sheet gives no place to (``ManifestEdits.stale``).
-  - `ManifestEditor.refresh(self) -> None` — Re-apply the edits to the loaded steps and redraw the table.
-  - `ManifestEditor.refuse_locked(self, step) -> bool` — Say so and return ``True`` when *step* is locked (:meth:`_locked`).
-  - `ManifestEditor.begin_edit(self, item, column: int) -> bool` — Open an editor on a step's name or description, or an object's
-  - `ManifestEditor.commit_edit(self, item, column: int) -> bool` — Record the edit a cell editor committed;
-  - `ManifestEditor.set_behaviors(self, step_id: str, obj, behaviors: List[str]) -> bool` — Record *obj*'s ticked *behaviors* in step *step_id*;
-  - `ManifestEditor.add_menu_actions(self, menu, item, selected: List[str] = ()) -> None` — Add Local Edits' actions for the row at *item* (``None``: empty
-  - `ManifestEditor.add_step(self, after: str) -> str` — Add a step after step *after* (``""``: at the top) and open its
-  - `ManifestEditor.add_shot(self, shot, after: str) -> Optional[str]` — Take a shot no step pairs with into the manifest: a step of its own
-  - `ManifestEditor.remove_step(self, step) -> None` — Remove an added step;
-  - `ManifestEditor.hide_steps(self, step_ids: List[str], hidden: bool = True) -> None` — Hide (or show) steps.
-  - `ManifestEditor.unlocked_hidden_objects(self) -> List[Tuple[str, str]]` — The hidden objects :meth:`show_hidden_objects` shows, as
-  - `ManifestEditor.show_hidden_objects(self) -> None` — Show every object the edits hide, wherever it sits -- but in a
-  - `ManifestEditor.hide_object(self, home: str, sheet_name: str, hidden: bool = True) -> None` — Hide (or show) an object: a hidden one leaves its step, and Build
-  - `ManifestEditor.move_object(self, step, obj, target) -> None` — Move *obj* from *step* to *target* (to the end of its objects).
-  - `ManifestEditor.rename_all(self, name: str, new: Optional[str] = None) -> int` — Point every step listing *name* at *new* (asked for when
-  - `ManifestEditor.revert_step(self, step) -> None` — Drop *step*'s own edits (name, description);
-  - `ManifestEditor.revert_object(self, home: str, sheet_name: str, name: str = '') -> None` — Drop an object's edits: the sheet's name, step and behaviors.
-  - `ManifestEditor.decorate(self) -> None` — Mark the edited cells -- italic, the sheet's value in the tooltip --
-
 <a id="anim_utils--shots--shot_manifest--manifest_host"></a>
 ### `anim_utils/shots/shot_manifest/manifest_host.py`
 
-What the Shot Manifest panel needs from Maya: its store, engine and detection
+What the Shot Manifest panel needs from Maya: its store, engine, detection,
 
-- **[`class ManifestHost`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_host.py#L23)** — Maya's answers to the Shot Manifest panel's host calls.
+- **[`class ManifestHost`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_host.py#L22)** — Maya's answers to the Shot Manifest panel's host calls.
   - `ManifestHost.store_cls()` *(static)* — The host's ``ShotStore`` class.
   - `ManifestHost.manifest_cls()` *(static)* — The host's manifest engine class.
   - `ManifestHost.detection()` *(static)* — The host's animation-region detection (``Detection``).
+  - `ManifestHost.behaviors_cls()` *(static)* — The host's ``Behaviors`` (the recipes a manifest object's behaviors key).
+  - `ManifestHost.range_resolver_cls()` *(static)* — The host's ``RangeResolver``: pythontk's, sizing audio steps to their clips.
   - `ManifestHost.available() -> bool` *(static)* — Whether the scene can be reached (``maya.cmds`` imports).
   - `ManifestHost.current_frame() -> Optional[float]` *(static)* — The playhead's frame, or ``None`` without a scene.
   - `ManifestHost.find_nodes(name: str, store) -> List[str]` *(static)* — The scene nodes doc object *name* answers to: the store's members,
   - `ManifestHost.reveal(nodes: List[str]) -> List[str]` *(static)* — Select *nodes* and reveal them in the Outliner.
   - `ManifestHost.leaf_name(name: str) -> str` *(static)* — *name*'s leaf: its DAG path dropped.
   - `ManifestHost.object_icon(obj, name: str)` *(static)* — The icon of a table row's object, or ``None``: *obj* is its
-
-<a id="anim_utils--shots--shot_manifest--manifest_source"></a>
-### `anim_utils/shots/shot_manifest/manifest_source.py`
-
-Where the Shot Manifest's steps come from: a build sheet (a CSV path or link,
-
-- **[`class ManifestSourceMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_source.py#L25)** — The panel's sources, mixed into ``ShotManifestController``.
-  - `ManifestSourceMixin.detect(self, gap: Optional[float] = None) -> None` — Detect animation regions in the scene and populate the table.
-
-<a id="anim_utils--shots--shot_manifest--mapping_picker"></a>
-### `anim_utils/shots/shot_manifest/mapping_picker.py`
-
-The Shot Manifest's mapping template: its own popup on the build sheet
-
-- **[`class MappingPickerMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/mapping_picker.py#L22)** — The mapping template, mixed into ``ShotManifestController``.
-
-<a id="anim_utils--shots--shot_manifest--range_column"></a>
-### `anim_utils/shots/shot_manifest/range_column.py`
-
-The Shot Manifest table's Start / End column: what a step's range is
-
-- **[`class RangeColumnMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/range_column.py#L27)** — The Start / End column, mixed into ``ShotManifestController``.
 
 <a id="anim_utils--shots--shot_manifest--range_resolver"></a>
 ### `anim_utils/shots/shot_manifest/range_resolver.py`
@@ -752,58 +643,6 @@ Range resolution for the Shot Manifest build pipeline (Maya-bound facade).
 
 - **[`class RangeResolver`](mayatk/mayatk/anim_utils/shots/shot_manifest/range_resolver.py#L28)** — RangeResolver — module namespace.
   - `RangeResolver.resolve_ranges(steps: List[BuilderStep], user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]], gap_starts: List[float], gap_end_map: Dict[float, float], gap: float, use_selected_keys: bool, last_resolved: List[Tuple[str, float, Optional[float], bool]], from_step_idx: int = 0, default_duration: float = 0, duration_fn: Optional[Callable[..., float]] = None) -> List[Tuple[str, float, Optional[float], bool]]` *(static)* — Compute a resolved ``(start, end)`` for every step.
-
-<a id="anim_utils--shots--shot_manifest--row_menus"></a>
-### `anim_utils/shots/shot_manifest/row_menus.py`
-
-The Shot Manifest rows' context menus and what they do: a step row's (colour
-
-- **[`class RowMenusMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/row_menus.py#L26)** — The rows' context menus, mixed into ``ShotManifestController``.
-
-<a id="anim_utils--shots--shot_manifest--shot_manifest_controller"></a>
-### `anim_utils/shots/shot_manifest/shot_manifest_controller.py`
-
-The Shot Manifest panel's controller: its state, the steps the table shows,
-
-- **[`class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ViewCombosMixin, ExportPreviewMixin, pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_controller.py#L44)** — Business logic for the Shot Manifest UI (see the module docstring).
-  - `ShotManifestController.build(self) -> None` — Build or update shots in the store from loaded steps.
-  - `ShotManifestController.assess(self, skip_key_check: bool = False, note: str = '') -> None` — Compare the steps against the scene's shots and colour the tree.
-
-<a id="anim_utils--shots--shot_manifest--shot_manifest_slots"></a>
-### `anim_utils/shots/shot_manifest/shot_manifest_slots.py`
-
-Switchboard slots for the Shot Manifest panel: the ``.ui``'s widgets routed to
-
-- **[`class ShotManifestSlots(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L19)** — Switchboard slot class — routes UI events to the controller.
-  - `ShotManifestSlots.header_init(self, widget)` — Header menu is configured once in controller.__init__.
-  - `ShotManifestSlots.btn_settings(self)` — Open the shared shots settings panel.
-  - `ShotManifestSlots.b002(self)` — Assess the steps against the scene.
-  - `ShotManifestSlots.b003(self)` — Build shots from loaded steps (or auto-detect from scene).
-  - `ShotManifestSlots.b004(self)` — Export the manifest's rows (the option menu says how).
-
-<a id="anim_utils--shots--shot_manifest--store_follow"></a>
-### `anim_utils/shots/shot_manifest/store_follow.py`
-
-The Shot Manifest panel following the scene's store: its events (a shot
-
-- **[`class StoreFollowMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/store_follow.py#L30)** — Store events and scene swaps, mixed into ``ShotManifestController``.
-  - `StoreFollowMixin.remove_callbacks(self) -> None` — Remove the ShotStore listener and the invalidation subscription,
-
-<a id="anim_utils--shots--shot_manifest--table_presenter"></a>
-### `anim_utils/shots/shot_manifest/table_presenter.py`
-
-The Shot Manifest tree's rows: populating them (``ShotPairing.rows``: steps,
-
-- **[`class ManifestTableMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/table_presenter.py#L54)** — Presentation methods for the manifest tree widget.
-  - `ManifestTableMixin.expand_missing(self) -> None` — Expand the step rows the shown assessment found something in
-  - `ManifestTableMixin.expand_extra(self) -> None` — Expand the step rows holding an object the step does not list
-
-<a id="anim_utils--shots--shot_manifest--view_combos"></a>
-### `anim_utils/shots/shot_manifest/view_combos.py`
-
-The Shot Manifest's view row, above the table: Select, Expand, Collapse,
-
-- **[`class ViewCombosMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/view_combos.py#L28)** — The view row, mixed into ``ShotManifestController``.
 
 <a id="anim_utils--shots--shot_sequencer--_shot_sequencer"></a>
 ### `anim_utils/shots/shot_sequencer/_shot_sequencer.py`

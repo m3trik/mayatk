@@ -50,6 +50,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots._shots": "ShotStore",
     "anim_utils.shots._detection": "Detection",
+    "anim_utils.shots.shot_manifest.manifest_host": "ManifestHost",
     # Key stash — key clips parked out of the working animation (Maya adapter
     # over ``ptk.KeyStash``). The co-located ``KeyStashSlots`` panel is
     # discovered by ``MayaUiHandler``, not registered here.
@@ -262,6 +263,104 @@ MOVED_NAMES = {
     ),
     "EmissiveGroupsSlots": (
         "tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots",
+        "0.30.0",
+    ),
+    # The Shot Manifest panel: tentacle's slots/tools/shot_manifest.py and its
+    # private _shot_manifest/ package (the .ui in ui/tools/).
+    "ShotManifestSlots": (
+        "tentacle.slots.tools.shot_manifest.ShotManifestSlots",
+        "0.30.0",
+    ),
+    "ShotManifestController": (
+        "tentacle.slots.tools._shot_manifest.controller.ShotManifestController",
+        "0.30.0",
+    ),
+    "ExportPreviewMixin": (
+        "tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin",
+        "0.30.0",
+    ),
+    "HeaderMenuMixin": (
+        "tentacle.slots.tools._shot_manifest.header_menu.HeaderMenuMixin",
+        "0.30.0",
+    ),
+    "ManifestEditor": (
+        "tentacle.slots.tools._shot_manifest.manifest_editor.ManifestEditor",
+        "0.30.0",
+    ),
+    "ManifestSourceMixin": (
+        "tentacle.slots.tools._shot_manifest.manifest_source.ManifestSourceMixin",
+        "0.30.0",
+    ),
+    "MappingPickerMixin": (
+        "tentacle.slots.tools._shot_manifest.mapping_picker.MappingPickerMixin",
+        "0.30.0",
+    ),
+    "RangeColumnMixin": (
+        "tentacle.slots.tools._shot_manifest.range_column.RangeColumnMixin",
+        "0.30.0",
+    ),
+    "RowMenusMixin": (
+        "tentacle.slots.tools._shot_manifest.row_menus.RowMenusMixin",
+        "0.30.0",
+    ),
+    "StoreFollowMixin": (
+        "tentacle.slots.tools._shot_manifest.store_follow.StoreFollowMixin",
+        "0.30.0",
+    ),
+    "ManifestTableMixin": (
+        "tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin",
+        "0.30.0",
+    ),
+    "ViewCombosMixin": (
+        "tentacle.slots.tools._shot_manifest.view_combos.ViewCombosMixin",
+        "0.30.0",
+    ),
+    "ManifestData": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.ManifestData",
+        "0.30.0",
+    ),
+    "SETTINGS_NS": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.SETTINGS_NS",
+        "0.30.0",
+    ),
+    "HEADERS": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.HEADERS",
+        "0.30.0",
+    ),
+    "COL_STEP": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.COL_STEP",
+        "0.30.0",
+    ),
+    "COL_SECTION": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.COL_SECTION",
+        "0.30.0",
+    ),
+    "COL_DESC": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.COL_DESC",
+        "0.30.0",
+    ),
+    "COL_BEHAVIORS": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.COL_BEHAVIORS",
+        "0.30.0",
+    ),
+    "COL_START": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.COL_START",
+        "0.30.0",
+    ),
+    "COL_END": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.COL_END",
+        "0.30.0",
+    ),
+    "STEP_ICON_COLOR": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.STEP_ICON_COLOR",
+        "0.30.0",
+    ),
+    "PASTEL_STATUS": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.PASTEL_STATUS",
+        "0.30.0",
+    ),
+    "ERROR_COLOR": (
+        "tentacle.slots.tools._shot_manifest.manifest_data.ERROR_COLOR",
         "0.30.0",
     ),
 }

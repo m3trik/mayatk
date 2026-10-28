@@ -1,12 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-"""What the Shot Manifest panel needs from Maya: its store, engine and detection
-classes, the playhead, the Outliner, node names and icons.
+"""What the Shot Manifest panel needs from Maya: its store, engine, detection,
+behaviors and range classes, the playhead, the Outliner, node names and icons.
 
-The panel's other modules are one text in mayatk and blendertk
-(``m3trik/scripts/check_dcc_twins.py`` holds them identical); every call that
-names the host is answered here, and blendertk's ``manifest_host.py`` answers
-the same calls for Blender.
+The panel is tentacle's, one class for both hosts; every call it makes that
+names the host is answered here (``mtk.ManifestHost``), and blendertk's
+``ManifestHost`` answers the same calls for Blender.
 """
 
 from typing import List, Optional
@@ -42,6 +41,20 @@ class ManifestHost:
     def detection():
         """The host's animation-region detection (``Detection``)."""
         return Detection
+
+    @staticmethod
+    def behaviors_cls():
+        """The host's ``Behaviors`` (the recipes a manifest object's behaviors key)."""
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
+
+        return Behaviors
+
+    @staticmethod
+    def range_resolver_cls():
+        """The host's ``RangeResolver``: pythontk's, sizing audio steps to their clips."""
+        from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
+
+        return RangeResolver
 
     @staticmethod
     def available() -> bool:
