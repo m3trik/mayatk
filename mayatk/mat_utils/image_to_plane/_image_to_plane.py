@@ -36,6 +36,10 @@ class ImageToPlane(ptk.LoggingMixin):
     3. Planes are created at the world origin.
     """
 
+    #: The ``mat_type`` values the Image to Plane panel offers, as ``(label, value)``
+    #: in its combo's order (the combo saves an index); blendertk's twin lists its one.
+    MAT_TYPES = (("Stingray PBS", "stingray"), ("Standard Surface", "standard"))
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -86,7 +90,8 @@ class ImageToPlane(ptk.LoggingMixin):
                 (lambert) are left untouched.
 
         Returns:
-            dict: ``{image_stem: plane_transform, ...}``
+            dict: ``{image_stem: plane_transform, ...}`` (plus ``"__group__"`` when
+            grouped), left selected: the group when grouped, else the planes.
         """
         # None => the shared naming convention (pythontk.NamingConvention),
         # so a studio that respells this affix changes one definition rather
@@ -134,6 +139,11 @@ class ImageToPlane(ptk.LoggingMixin):
             from mayatk.display_utils._display_utils import DisplayUtils
 
             DisplayUtils.add_to_isolation_set(list(results.values()))
+            # Leave the result selected, as Maya's own create commands do: the
+            # group when grouped, else every plane.
+            cmds.select(
+                results.get("__group__") or list(results.values()), replace=True
+            )
 
         return results
 

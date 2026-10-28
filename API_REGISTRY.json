@@ -8370,7 +8370,7 @@
         {
           "name": "ColorUtils",
           "summary": "",
-          "line": 17,
+          "line": 18,
           "bases": [],
           "members": [
             {
@@ -8379,7 +8379,7 @@
               "kind": "staticmethod",
               "signature": "(obj: str, color: Tuple[float, float, float]) -> str",
               "summary": "Assigns a material to an object based on the RGB value.",
-              "line": 19,
+              "line": 20,
               "deprecated": false
             },
             {
@@ -8388,7 +8388,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj: str, color: Tuple[float, float, float], attr_type: str, force: bool = False) -> None",
               "summary": "Applies color based on the attribute type specified, optionally overriding attribute locks.",
-              "line": 40,
+              "line": 41,
               "deprecated": false
             },
             {
@@ -8397,7 +8397,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj: str) -> Optional[Tuple[float, float, float]]",
               "summary": "Gets the color of the object's material (the first, on a multi-shader mesh).",
-              "line": 122,
+              "line": 123,
               "deprecated": false
             },
             {
@@ -8406,7 +8406,7 @@
               "kind": "staticmethod",
               "signature": "(obj: str, normalize: bool = False) -> Optional[Tuple[float, float, float]]",
               "summary": "Gets the wireframe color of the given object.",
-              "line": 128,
+              "line": 129,
               "deprecated": false
             },
             {
@@ -8415,7 +8415,25 @@
               "kind": "staticmethod",
               "signature": "(obj: str, vertex_id: int) -> Optional[Tuple[float, float, float]]",
               "summary": "Gets the color of a specific vertex on the object.",
-              "line": 150,
+              "line": 151,
+              "deprecated": false
+            },
+            {
+              "name": "get_average_vertex_color",
+              "qualname": "ColorUtils.get_average_vertex_color",
+              "kind": "staticmethod",
+              "signature": "(obj: str) -> Optional[Tuple[float, float, float]]",
+              "summary": "Average of the object's vertex colors, or None when its mesh has none",
+              "line": 161,
+              "deprecated": false
+            },
+            {
+              "name": "get_outliner_color",
+              "qualname": "ColorUtils.get_outliner_color",
+              "kind": "staticmethod",
+              "signature": "(obj: str) -> Optional[Tuple[float, float, float]]",
+              "summary": "The object's outliner color while ``useOutlinerColor`` is on, else None",
+              "line": 177,
               "deprecated": false
             },
             {
@@ -8424,7 +8442,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], color: Tuple[float, float, float]) -> None",
               "summary": "Applies the specified color to the object's vertices.",
-              "line": 160,
+              "line": 189,
               "deprecated": false
             },
             {
@@ -8433,7 +8451,7 @@
               "kind": "staticmethod",
               "signature": "(color1: Tuple[float, float, float], color2: Tuple[float, float, float]) -> float",
               "summary": "Calculate the average difference between two RGB colors.",
-              "line": 171,
+              "line": 200,
               "deprecated": false
             },
             {
@@ -8442,7 +8460,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], color: Tuple[float, float, float]) -> Optional[str]",
               "summary": "Group ``objects`` into a stamped ``ID_<HEX>`` objectSet;",
-              "line": 198,
+              "line": 227,
               "deprecated": false
             },
             {
@@ -8451,7 +8469,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj: str) -> Optional[Tuple[float, float, float]]",
               "summary": "The exact color stamped on the object's ID set, or None.",
-              "line": 241,
+              "line": 270,
               "deprecated": false
             },
             {
@@ -8460,7 +8478,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str]) -> None",
               "summary": "Drop ``objects`` from every stamped ID set;",
-              "line": 249,
+              "line": 278,
               "deprecated": false
             }
           ]
@@ -8468,7 +8486,7 @@
         {
           "name": "ColorId",
           "summary": "",
-          "line": 266,
+          "line": 295,
           "bases": [
             "ColorUtils"
           ],
@@ -8478,8 +8496,8 @@
               "qualname": "ColorId.apply_color",
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], color: Optional[Tuple[float, float, float]] = None, apply_to_material: bool = False, apply_to_vertex: bool = False, apply_to_wireframe: bool = False, apply_to_outliner: bool = False, set_per_color: bool = False) -> None",
-              "summary": "Applies color based on given criteria to objects.",
-              "line": 268,
+              "summary": "Applies color based on given criteria to objects, as one undo step.",
+              "line": 298,
               "deprecated": false
             },
             {
@@ -8488,7 +8506,43 @@
               "kind": "classmethod",
               "signature": "(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False, check_set: bool = False) -> List[str]",
               "summary": "Select objects by color, with optional checks for material, vertex, wireframe, and outliner colors.",
-              "line": 297,
+              "line": 327,
+              "deprecated": false
+            },
+            {
+              "name": "select_by_color",
+              "qualname": "ColorId.select_by_color",
+              "kind": "classmethod",
+              "signature": "(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, **checks) -> List[str]",
+              "summary": "Select the objects :meth:`get_objects_by_color` finds, replacing the",
+              "line": 384,
+              "deprecated": false
+            },
+            {
+              "name": "get_color",
+              "qualname": "ColorId.get_color",
+              "kind": "classmethod",
+              "signature": "(cls, obj: str, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False, check_set: bool = False) -> Optional[Tuple[float, float, float]]",
+              "summary": "The first color ``obj`` carries on the enabled channels (0-1 RGB), or None.",
+              "line": 401,
+              "deprecated": false
+            },
+            {
+              "name": "lead_object",
+              "qualname": "ColorId.lead_object",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[str]",
+              "summary": "The object Get Color reads: the last selected transform (Maya's lead",
+              "line": 432,
+              "deprecated": false
+            },
+            {
+              "name": "scene_objects",
+              "qualname": "ColorId.scene_objects",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "Every object a scene-wide Color ID action covers (the panel's Ctrl+click",
+              "line": 440,
               "deprecated": false
             },
             {
@@ -8496,8 +8550,8 @@
               "qualname": "ColorId.reset_colors",
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], reset_outliner: bool = True, reset_wireframe: bool = True, reset_vertex: bool = True, reset_material: bool = True, reset_sets: bool = True) -> None",
-              "summary": "Resets colors to default for given objects, with options to specify which color types to reset.",
-              "line": 374,
+              "summary": "Resets colors to default for given objects, with options to specify which color types to reset (one…",
+              "line": 449,
               "deprecated": false
             },
             {
@@ -8506,89 +8560,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str]) -> None",
               "summary": "Resets vertex colors for the given object(s), handling potential errors gracefully.",
-              "line": 424,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "ColorIdSlots",
-          "summary": "",
-          "line": 468,
-          "bases": [
-            "ColorId"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ColorIdSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text and preset combobox.",
-              "line": 531,
-              "deprecated": false
-            },
-            {
-              "name": "selected_objects",
-              "qualname": "ColorIdSlots.selected_objects",
-              "kind": "property",
-              "signature": "(self) -> List[str]",
-              "summary": "Return the currently selected objects, or an empty list if no objects are selected.",
-              "line": 585,
-              "deprecated": false
-            },
-            {
-              "name": "selected_button",
-              "qualname": "ColorIdSlots.selected_button",
-              "kind": "property",
-              "signature": "(self) -> Optional[object]",
-              "summary": "Return the currently selected button in the button group.",
-              "line": 593,
-              "deprecated": false
-            },
-            {
-              "name": "target_color",
-              "qualname": "ColorIdSlots.target_color",
-              "kind": "property",
-              "signature": "(self) -> Optional[Tuple[float, float, float]]",
-              "summary": "Return the color of the selected button, or None if no button is selected.",
-              "line": 601,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "ColorIdSlots.b000",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Reset Colors — clear the ENABLED channels (Ctrl+click resets all geometry).",
-              "line": 636,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "ColorIdSlots.b001",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Apply selected color to selected objects (on the enabled channels).",
-              "line": 664,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "ColorIdSlots.b002",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select objects by the currently selected color (across the enabled channels).",
-              "line": 683,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "ColorIdSlots.b003",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Pick up the selected object's wireframe color into the active color button (eyedropper).",
-              "line": 705,
+              "line": 499,
               "deprecated": false
             }
           ]
@@ -20480,7 +20452,7 @@
               "kind": "classmethod",
               "signature": "(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: Optional[str] = None, prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP', stingray_opacity_mode: str = 'transparent', mask_threshold: float = 0.5, roughness: float = 0.0) -> Dict[str, object]",
               "summary": "Create textured planes for one or more images.",
-              "line": 45,
+              "line": 49,
               "deprecated": false
             },
             {
@@ -20489,41 +20461,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None) -> int",
               "summary": "Remove planes and their materials created by this tool.",
-              "line": 142,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "mat_utils/image_to_plane/image_to_plane_slots.py",
-      "summary": "Switchboard slots for the Image to Plane UI.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ImageToPlaneSlots",
-          "summary": "Switchboard slots for the Image to Plane UI.",
-          "line": 18,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ImageToPlaneSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header menu.",
-              "line": 47,
-              "deprecated": false
-            },
-            {
-              "name": "txt_suffix_init",
-              "qualname": "ImageToPlaneSlots.txt_suffix_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Add a prefix/suffix/auto-mode picker to the affix field.",
-              "line": 93,
+              "line": 152,
               "deprecated": false
             }
           ]

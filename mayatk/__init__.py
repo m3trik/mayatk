@@ -421,6 +421,14 @@ MOVED_NAMES = {
         "tentacle.slots.tools.shell_xform.ShellXformSlots",
         "0.30.0",
     ),
+    "ColorIdSlots": (
+        "tentacle.slots.tools.color_id.ColorIdSlots",
+        "0.30.0",
+    ),
+    "ImageToPlaneSlots": (
+        "tentacle.slots.tools.image_to_plane.ImageToPlaneSlots",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

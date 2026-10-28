@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (210)
+## Moved out (222)
 
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin.export` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
@@ -76,6 +76,15 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_extra` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_missing` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/view_combos.py::ViewCombosMixin` → `tentacle.slots.tools._shot_manifest.view_combos.ViewCombosMixin` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.b000` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.b001` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.b002` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.b003` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.header_init` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.selected_button` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.selected_objects` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
+- `display_utils/color_id.py::ColorIdSlots.target_color` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
 - `display_utils/exploded_view.py::ExplodedViewSlots` → `tentacle.slots.tools.exploded_view.ExplodedViewSlots` (from 0.30.0)
 - `display_utils/exploded_view.py::ExplodedViewSlots.b000` → `tentacle.slots.tools.exploded_view.ExplodedViewSlots` (from 0.30.0)
 - `display_utils/exploded_view.py::ExplodedViewSlots.b001` → `tentacle.slots.tools.exploded_view.ExplodedViewSlots` (from 0.30.0)
@@ -142,6 +151,9 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.txt000_init` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_off` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_on` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/image_to_plane/image_to_plane_slots.py::ImageToPlaneSlots` → `tentacle.slots.tools.image_to_plane.ImageToPlaneSlots` (from 0.30.0)
+- `mat_utils/image_to_plane/image_to_plane_slots.py::ImageToPlaneSlots.header_init` → `tentacle.slots.tools.image_to_plane.ImageToPlaneSlots` (from 0.30.0)
+- `mat_utils/image_to_plane/image_to_plane_slots.py::ImageToPlaneSlots.txt_suffix_init` → `tentacle.slots.tools.image_to_plane.ImageToPlaneSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.b001_init` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
 - `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.header_init` → `tentacle.slots.tools.curve_to_tube.CurveToTubeSlots` (from 0.30.0)
@@ -215,7 +227,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008_init` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 
-## Added (48)
+## Added (54)
 
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.behaviors_cls()`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.range_resolver_cls()`
@@ -224,6 +236,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`
 - `core_utils/components.py::Components.set_to_face_normals(objects) -> None`
 - `core_utils/components.py::Components.toggle_normal_lock(objects) -> Optional[bool]`
+- `display_utils/color_id.py::ColorId.get_color(cls, obj: str, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False, check_set: bool = False) -> Optional[Tuple[float, float, float]]`
+- `display_utils/color_id.py::ColorId.lead_object() -> Optional[str]`
+- `display_utils/color_id.py::ColorId.scene_objects() -> List[str]`
+- `display_utils/color_id.py::ColorId.select_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, **checks) -> List[str]`
+- `display_utils/color_id.py::ColorUtils.get_average_vertex_color(obj: str) -> Optional[Tuple[float, float, float]]`
+- `display_utils/color_id.py::ColorUtils.get_outliner_color(obj: str) -> Optional[Tuple[float, float, float]]`
 - `edit_utils/duplicate_radial.py::DuplicateRadial.regroup_copies(copies: Dict[str, List[str]]) -> None`
 - `edit_utils/dynamic_pipe.py::DynamicPipe.from_selection(cls, **kwargs) -> 'DynamicPipe'`
 - `edit_utils/snap.py::Snap.source_and_target()`

@@ -383,11 +383,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
-  - methods: assign_material, set_color_attribute, get_material_color, get_wireframe_color, get_vertex_color, set_vertex_color, get_color_difference, add_to_color_set, get_color_set_color, remove_from_color_sets
+  - methods: assign_material, set_color_attribute, get_material_color, get_wireframe_color, get_vertex_color, get_average_vertex_color, get_outliner_color, set_vertex_color, get_color_difference, add_to_color_set, get_color_set_color, remove_from_color_sets
 - `class ColorId(ColorUtils)`
-  - methods: apply_color, get_objects_by_color, reset_colors, reset_vertex_colors
-- `class ColorIdSlots(ColorId)`
-  - methods: header_init, selected_objects, selected_button, target_color, b000, b001, b002, b003
+  - methods: apply_color, get_objects_by_color, select_by_color, get_color, lead_object, scene_objects, reset_colors, reset_vertex_colors
 
 ### `display_utils/exploded_view.py`
 - `class ExplodedView`
@@ -789,10 +787,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `mat_utils/image_to_plane/_image_to_plane.py` — Map image files to textured polygon planes in Maya.
 - `class ImageToPlane(pythontk.LoggingMixin)`
   - methods: create, remove
-
-### `mat_utils/image_to_plane/image_to_plane_slots.py` — Switchboard slots for the Image to Plane UI.
-- `class ImageToPlaneSlots`
-  - methods: header_init, txt_suffix_init
 
 ### `mat_utils/marmoset_bridge/_marmoset_bridge.py` — Maya-side glue for the Marmoset Toolbag engine.
 - `class MarmosetBridge(pythontk.HandoffBridge, _MarmosetBridgeInternal)`

@@ -9,6 +9,7 @@ Tests for ImageToPlane class and shared MatUtils helpers:
 - create_stingray_shader: StingrayPBS shader creation
 - ImageToPlane.create: batch plane creation with correct aspect ratios
 - ImageToPlane.remove: cleanup of planes and upstream material graph
+- ImageToPlane.MAT_TYPES: the panel's Material Type combo, in its saved order
 - ImageToPlane._get_image_dimensions: native Maya image query
 - ImageToPlane._create_shader: shader dispatch (stingray / standard)
 - ImageToPlane._connect_texture: texture wiring for both shader types
@@ -424,6 +425,34 @@ class TestImageToPlane(MayaTkTestCase):
             "use_color_map not enabled — texture will appear white",
         )
 
+    # -- The shared panel's contract ----------------------------------------
+
+    def test_mat_types_keep_the_panels_combo_order(self):
+        """The panel's Material Type combo saves an index: Stingray PBS stays 0."""
+        self.assertEqual(
+            ImageToPlane.MAT_TYPES,
+            (("Stingray PBS", "stingray"), ("Standard Surface", "standard")),
+        )
+
+    def test_create_leaves_the_planes_selected(self):
+        imgs = [
+            _create_test_image(64, 32, "sel_a", self._tmp_dir),
+            _create_test_image(32, 64, "sel_b", self._tmp_dir),
+        ]
+        cmds.select(clear=True)
+        results = ImageToPlane.create(imgs, mat_type="standard")
+        self.assertEqual(
+            sorted(cmds.ls(selection=True, long=True)),
+            sorted(cmds.ls(list(results.values()), long=True)),
+        )
+
+    def test_create_grouped_leaves_the_group_selected(self):
+        img = _create_test_image(64, 64, "sel_grp", self._tmp_dir)
+        results = ImageToPlane.create([img], mat_type="standard", group=True)
+        self.assertEqual(
+            cmds.ls(selection=True, long=True), cmds.ls(results["__group__"], long=True)
+        )
+
     # -- Remove ------------------------------------------------------------
 
     def test_remove_deletes_plane_and_material(self):
@@ -539,41 +568,6 @@ class TestImageToPlane(MayaTkTestCase):
         plane_h = bb[4] - bb[1]
         extent = max(plane_w, plane_h)
         self.assertAlmostEqual(extent, 5.0, places=1)
-
-
-# ===========================================================================
-# Slots (UI layer) — Pure Mock
-# ===========================================================================
-
-
-class TestImageToPlaneSlots(unittest.TestCase):
-    """Test the slots class with a mocked switchboard (no Maya required)."""
-
-    def setUp(self):
-        from unittest.mock import MagicMock
-
-        self.sb = MagicMock()
-        self.ui = MagicMock()
-        self.sb.loaded_ui.image_to_plane = self.ui
-
-        from mayatk.mat_utils.image_to_plane.image_to_plane_slots import (
-            ImageToPlaneSlots,
-        )
-
-        self.slots = ImageToPlaneSlots(self.sb)
-
-    def test_buttons_connected(self):
-        """All four buttons are wired to their slots."""
-        self.ui.b000.clicked.connect.assert_called_once()
-        self.ui.b001.clicked.connect.assert_called_once()
-        self.ui.b002.clicked.connect.assert_called_once()
-        self.ui.b004.clicked.connect.assert_called_once()
-
-    def test_clear_list(self):
-        """_clear_list clears the QListWidget."""
-        self.slots._clear_list()
-        self.ui.lst_files.clear.assert_called_once()
-        self.ui.footer.setText.assert_called()
 
 
 if __name__ == "__main__":
