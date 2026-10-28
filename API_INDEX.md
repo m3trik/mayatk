@@ -203,7 +203,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GetComponentsMixin`
   - methods: get_component_type, convert_alias, convert_component_type, get_component_index, convert_int_to_component, filter_components, get_components
 - `class Components(GetComponentsMixin, pythontk.HelpMixin, _ComponentsInternal)`
-  - methods: get_mesh_transforms, get_standoff_distances, map_components_to_objects, get_contiguous_edges, get_contiguous_islands, get_islands, get_border_components, get_furthest_vertices, get_closest_verts, closest_point_probe, get_closest_vertex, get_vertices_within_threshold, adjusted_distance_between_vertices, bridge_connected_edges, get_edge_path, get_shortest_path, get_normal, get_normal_vector, get_normal_angle, get_edges_by_normal_angle, set_edge_hardness, get_faces_with_similar_normals, average_normals, set_edge_softness, set_to_face_normals, reverse_normals, toggle_normal_lock, transfer_normals, get_transfer_types, transfer, filter_components_by_connection_count, get_vertex_normal, get_vector_from_components, crease_edges, get_creased_edges, transfer_creased_edges
+  - methods: get_mesh_transforms, get_standoff_distances, map_components_to_objects, get_contiguous_edges, get_contiguous_islands, get_islands, get_border_components, get_furthest_vertices, get_closest_verts, closest_point_probe, get_closest_vertex, get_vertices_within_threshold, adjusted_distance_between_vertices, bridge_connected_edges, get_edge_path, get_shortest_path, get_normal, get_normal_vector, get_normal_angle, get_edges_by_normal_angle, set_edge_hardness, get_faces_with_similar_normals, average_normals, set_edge_softness, set_to_face_normals, reverse_normals, toggle_normal_lock, transfer_normals, get_transfer_types, transfer, filter_components_by_connection_count, get_vertex_normal, get_vector_from_components, crease_edges, get_creased_edges, transfer_creased_edges, extrude, inset_faces, divide_faces, circularize, fill_holes, symmetrize, bridge_edges, collapse_components, connect_components, poke_faces, slide_edges, offset_edge_loops, edit_edge_flow, toggle_face_holes
 
 ### `core_utils/diagnostics/animation_diag.py` — Animation-curve diagnostics and optional repair helpers.
 - `class AnimCurveDiagnostics`
@@ -309,7 +309,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/_edit_utils.py`
 - `class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`
-  - methods: get_symmetry, set_symmetry, combine_objects, group_objects, ungroup_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, get_conversion_types, convert_objects, create_curve_from_edges
+  - methods: get_symmetry, set_symmetry, combine_objects, group_objects, ungroup_objects, separate_objects, merge_vertices, boolean_objects, wedge, select_edges_by_angle, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, get_conversion_types, convert_objects, create_curve_from_edges
 
 ### `edit_utils/bevel.py`
 - `class Bevel`
@@ -387,11 +387,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/selection.py`
 - `class Selection(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: select_by_type, select_children, select_hierarchy_above, select_hierarchy_below, rig_locked_meshes, get_rig_selection_mode, set_rig_selection_mode, get_available_selection_types, get_selection_categories
+  - methods: select_by_type, select_children, select_hierarchy_above, select_hierarchy_below, rig_locked_meshes, get_rig_selection_mode, set_rig_selection_mode, objects_in_scope, reorder_selection, get_conversion_types, convert_selection, get_selection_constraints, set_selection_constraint, select_edge_path, select_similar, select_island, toggle_selectability, get_ignore_backfacing, set_ignore_backfacing, get_available_selection_types, get_selection_categories
 
 ### `edit_utils/snap.py`
 - `class Snap(pythontk.HelpMixin)`
   - methods: source_and_target, snap_to_closest_vertex, snap_to_surface, snap_to_grid
+
+### `edit_utils/target_weld.py` — Target Weld: Maya's Merge Vertex Tool, set up to drag one vertex onto another.
+- `class TargetWeld(pythontk.HelpMixin)`
+  - methods: activate
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`

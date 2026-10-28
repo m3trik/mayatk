@@ -943,8 +943,10 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         center_pivots: bool = True,
         rename: bool = False,
         uninstance: bool = False,
+        select: bool = False,
     ) -> List:
-        """Separate meshes into individual objects.
+        """Separate meshes into individual objects. ``select``: select the
+        results (the separated meshes, or the groups) after.
 
         Args:
             objects: Mesh transforms to process. Defaults to selection.
@@ -1071,8 +1073,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             separated_objects.extend(current_results)
 
         if group_by_material and separated_objects:
-            return EditUtils._group_results_by_material(results_by_source)
-
+            separated_objects = EditUtils._group_results_by_material(results_by_source)
+        if select and separated_objects:
+            cmds.select(separated_objects, replace=True)
         return separated_objects
 
     @staticmethod
@@ -1134,15 +1137,35 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         return groups
 
     @staticmethod
-    def merge_vertices(objects, tolerance=0.001, selected_only=False):
-        """Merge Vertices on the given objects.
+    @CoreUtils.undoable
+    def merge_vertices(objects=None, tolerance=0.001, selected_only=None):
+        """Merge the vertices within *tolerance*. One undo step. Twin of
+        blendertk's ``EditUtils.merge_vertices``.
 
         Parameters:
-            objects (str/obj/list): The object(s) to merge vertices on.
-            tolerance (float) = The maximum merge distance.
-            selected_only (bool): Merge only the currently selected components
-                (operates on the live selection; ``objects`` is not used).
+            objects (str/obj/list, optional): Meshes, every vertex of which
+                merges, or components. ``None``: the selection.
+            tolerance (float): The maximum merge distance.
+            selected_only (bool, optional): Merge only the selected components
+                (selected vertices merge; selected edges and faces collapse to
+                their center). ``None``: when *objects* holds components.
+
+        Returns:
+            (list/None): ``[]`` with nothing to merge; otherwise None.
         """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        if not nodes:
+            return []
+        components = cmds.filterExpand(nodes, selectionMask=(31, 32, 34)) or []
+        if selected_only is None:
+            selected_only = bool(components)
+        if selected_only and objects is not None and components:
+            cmds.select(components, replace=True)
+        objects = nodes
         if selected_only:  # Merge only selected components (selection-based;
             # runs once — this used to sit inside the per-object loop and
             # re-merged the same selection N times).
@@ -1174,6 +1197,131 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
 
         cmds.select(clear=True)
         cmds.select(objects_str)
+
+    #: Boolean operations -> Maya's interactive boolean tool for each.
+    _BOOLEAN_TOOLS = {
+        "union": "PolygonBooleanUnion",
+        "difference": "PolygonBooleanDifference",
+        "intersection": "PolygonBooleanIntersection",
+    }
+
+    @staticmethod
+    @CoreUtils.undoable
+    def boolean_objects(objects=None, operation="difference", interactive=False):
+        """Boolean meshes: the first is the base, the rest its operands. One
+        undo step. Twin of blendertk's ``EditUtils.boolean_objects`` (Boolean
+        modifiers there).
+
+        Parameters:
+            objects (list, optional): Meshes, base first. ``None``: the selection.
+            operation (str): ``"union"``, ``"difference"`` or ``"intersection"``.
+            interactive (bool): Maya's interactive boolean tool, which keeps the
+                operation editable, instead of the baked ``polyCBoolOp``.
+
+        Returns:
+            list: The result; ``[]`` with fewer than two meshes.
+
+        Raises:
+            ValueError: An unknown *operation*.
+        """
+        tool = EditUtils._BOOLEAN_TOOLS.get(operation)
+        if tool is None:
+            raise ValueError(
+                f"Unknown boolean operation {operation!r}: "
+                f"use one of {sorted(EditUtils._BOOLEAN_TOOLS)}."
+            )
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        nodes = cmds.ls(nodes, objectsOnly=True, flatten=True) or [] if nodes else []
+        if len(nodes) < 2:
+            return []
+        if interactive:
+            cmds.select(nodes, replace=True)
+            mel.eval(tool)
+            return cmds.ls(selection=True) or nodes
+        from mayatk.edit_utils.macros._macros import Macros
+
+        result = Macros.m_boolean(nodes, operation=operation)
+        return [result] if result else []
+
+    @staticmethod
+    @CoreUtils.undoable
+    def wedge(objects=None, angle=None, divisions=None):
+        """Wedge the selected faces about a selected edge of theirs: they sweep
+        *angle* degrees around it in *divisions* steps (Maya's Wedge). One undo
+        step. Twin of blendertk's ``EditUtils.wedge``.
+
+        Parameters:
+            objects: The faces plus the hinge edge(s); ``None``: the selection.
+            angle (float, optional): The sweep, in degrees; ``None``: Maya's
+                Wedge setting.
+            divisions (int, optional): The steps; ``None``: Maya's Wedge setting.
+
+        Returns:
+            (int/list): 1 when wedged, 0 when Maya refused the selection (it
+                needs faces plus one of their edges); ``[]`` with nothing
+                selected.
+        """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        if not nodes:
+            return []
+        if objects is not None:
+            cmds.select(nodes, replace=True)
+        settings = {}
+        if angle is not None:
+            settings["polyWedgeFaceAngle"] = float(angle)
+        if divisions is not None:
+            settings["polyWedgeFaceDivisions"] = int(divisions)
+        with CoreUtils.temp_option_vars(settings):
+            try:
+                mel.eval("WedgePolygon")
+            except RuntimeError:
+                return 0
+        return 1
+
+    @staticmethod
+    @CoreUtils.undoable
+    def select_edges_by_angle(objects=None, low_angle=0.0, high_angle=180.0):
+        """Select the edges whose two faces meet at an angle within
+        ``[low_angle, high_angle]`` degrees, in edge component mode. One undo
+        step. Twin of blendertk's ``EditUtils.select_edges_by_angle``.
+
+        Parameters:
+            objects: Meshes; ``None``: the selection (a component stands for its
+                object).
+
+        Returns:
+            (int/list): The number of edges selected; ``[]`` with nothing
+                selected.
+        """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        nodes = cmds.ls(nodes, objectsOnly=True) or [] if nodes else []
+        if not nodes:
+            return []
+        edges = (
+            Components.get_edges_by_normal_angle(
+                nodes, low_angle=low_angle, high_angle=high_angle
+            )
+            or []
+        )
+        if edges:
+            cmds.select(edges, replace=True)
+        else:
+            cmds.select(clear=True)
+        cmds.selectMode(component=True)
+        cmds.selectType(edge=True)
+        return len(cmds.ls(edges, flatten=True) or []) if edges else 0
 
     @staticmethod
     @CoreUtils.undoable

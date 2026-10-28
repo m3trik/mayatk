@@ -81,6 +81,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`edit_utils/rack_builder.py`](#edit_utils--rack_builder) — Parametric EIA-310 (19-inch) equipment-rack generator.
 - [`edit_utils/selection.py`](#edit_utils--selection)
 - [`edit_utils/snap.py`](#edit_utils--snap)
+- [`edit_utils/target_weld.py`](#edit_utils--target_weld) — Target Weld: Maya's Merge Vertex Tool, set up to drag one vertex onto another.
 - [`env_utils/_env_utils.py`](#env_utils--_env_utils)
 - [`env_utils/blender_bridge/_blender_bridge.py`](#env_utils--blender_bridge--_blender_bridge) — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - [`env_utils/blender_bridge/_scene_import.py`](#env_utils--blender_bridge--_scene_import) — Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
@@ -219,7 +220,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L268) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L269) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -1061,7 +1062,7 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
   - `GetComponentsMixin.convert_int_to_component(cls, obj, integers, component_type, returned_type='str', flatten=False)` *(class)* — Convert the given integers to components of the given object.
   - `GetComponentsMixin.filter_components(cls, components, inc=None, exc=None, flatten=False)` *(class)* — Filter the given components.
   - `GetComponentsMixin.get_components(cls, objects, component_type, returned_type='str', inc=None, exc=None, randomize=0, flatten=False)` *(class)* — Get the components of the given type from the given object(s).
-- **[`class Components(GetComponentsMixin, pythontk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L471)**
+- **[`class Components(GetComponentsMixin, pythontk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L498)**
   - `Components.get_mesh_transforms(objects) -> List[str]` *(static)* — Full paths of every mesh TRANSFORM in *objects*, descendants included.
   - `Components.get_standoff_distances(cls, objects, target, sample_limit: Optional[int] = None) -> Dict[str, float]` *(class)* — Measure how far each mesh in *objects* stands off *target*'s surface.
   - `Components.map_components_to_objects(components_list)` *(static)* — Map a list of components to their respective objects.
@@ -1074,7 +1075,7 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
   - `Components.closest_point_probe(shape)` *(static)* — Temporary ``closestPointOnMesh`` node wired to *shape* for
   - `Components.get_closest_vertex(cls, vertices, obj, tolerance=0.0, freeze_transforms=False, returned_type='str')` *(class)* — Find the closest vertex of the given object for each vertex in the list of given vertices.
   - `Components.get_vertices_within_threshold(reference_vertices, max_distance)` *(static)* — Categorizes vertices of a mesh based on their distance from the first reference vertex.
-  - `Components.adjusted_distance_between_vertices(p1, p2, adjust: float = 0.0, as_percentage: bool = False)` *(static)* — Calculate adjusted distance between two points/vertices.
+  - `Components.adjusted_distance_between_vertices(p1=None, p2=None, adjust: float = 0.0, as_percentage: bool = False)` *(static)* — The distance between two points or vertices, adjusted by *adjust* (an
   - `Components.bridge_connected_edges(edges) -> None` *(static)* — Bridges two connected edges.
   - `Components.get_edge_path(cls, components, path='edgeLoop', returned_type='str', flatten=False)` *(class)* — Query the polySelect command for the components along different edge paths.
   - `Components.get_shortest_path(cls, components, flatten=False)` *(class)* — Calculate the shortest path between two specified edge or vertex components within the same 3D obje…
@@ -1098,6 +1099,20 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
   - `Components.crease_edges(edges=None, amount=None, angle=None)` *(static)* — Crease *edges* (subdivision sharpness), optionally softening or hardening
   - `Components.get_creased_edges(edges)` *(static)* — Return any creased edges from a list of edges.
   - `Components.transfer_creased_edges(frm=None, to=None)` *(static)* — Copy the edge creases of *frm* to the same edge ids on each of *to*
+  - `Components.extrude(components=None, keep_faces_together=True, divisions=1, thickness=0.0)` *(static)* — Extrude faces, edges or vertices with Maya's own Extrude, which
+  - `Components.inset_faces(faces=None, offset=0.1, depth=0.0, individual=False)` *(static)* — Inset the selected faces: a new border ring *offset* inside the
+  - `Components.divide_faces(faces=None, u=True, v=True, cuts=1, tris=False)` *(static)* — Divide the selected faces (``polySubdivideFacet``, face by face: on
+  - `Components.circularize(components=None)` *(static)* — Reshape the selected vertices, edges or faces into an even circle
+  - `Components.fill_holes(components)` *(static)* — Cap the open holes bounded by the selection's border edges (Maya's
+  - `Components.symmetrize(components)` *(static)* — Mirror the selected components across the symmetry axis with Maya's
+  - `Components.bridge_edges(edges=None)` *(static)* — Span two edge selections with new faces (``polyBridgeEdge``), capping
+  - `Components.collapse_components(components=None)` *(static)* — Collapse each selected face to its own point;
+  - `Components.connect_components(components=None)` *(static)* — Connect vertices and edges with Maya's interactive Connect tool,
+  - `Components.poke_faces(faces)` *(static)* — Add a center vertex to each selected face, fanning it into triangles
+  - `Components.slide_edges(edges=None)` *(static)* — Start Maya's Slide Edge tool: drag the selected edge loops along their
+  - `Components.offset_edge_loops(edges)` *(static)* — Add an edge loop on each side of the selected edges (Maya's Offset
+  - `Components.edit_edge_flow(edges)` *(static)* — Move the selected edges to follow the surrounding surface curvature
+  - `Components.toggle_face_holes(faces=None)` *(static)* — Toggle the selected faces' hole state (``polyHole``): holes render
 
 <a id="core_utils--diagnostics--animation_diag"></a>
 ### `core_utils/diagnostics/animation_diag.py`
@@ -1387,8 +1402,11 @@ Maya's lengths and angles, converted by the kind of query that read them.
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditUtils.ungroup_objects(objects=None) -> List[str]` *(static)* — Inverse of `group_objects` — dissolve the given group(s) (or selection).
-  - `EditUtils.separate_objects(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False) -> List` *(static)* — Separate meshes into individual objects.
-  - `EditUtils.merge_vertices(objects, tolerance=0.001, selected_only=False)` *(static)* — Merge Vertices on the given objects.
+  - `EditUtils.separate_objects(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False, select: bool = False) -> List` *(static)* — Separate meshes into individual objects.
+  - `EditUtils.merge_vertices(objects=None, tolerance=0.001, selected_only=None)` *(static)* — Merge the vertices within *tolerance*.
+  - `EditUtils.boolean_objects(objects=None, operation='difference', interactive=False)` *(static)* — Boolean meshes: the first is the base, the rest its operands.
+  - `EditUtils.wedge(objects=None, angle=None, divisions=None)` *(static)* — Wedge the selected faces about a selected edge of theirs: they sweep
+  - `EditUtils.select_edges_by_angle(objects=None, low_angle=0.0, high_angle=180.0)` *(static)* — Select the edges whose two faces meet at an angle within
   - `EditUtils.merge_vertex_pairs(vertices)` *(static)* — Merge vertices in pairs by moving them to their center and merging.
   - `EditUtils.detach_components(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True, center_pivot: bool = True) -> Optional[List]` *(static)* — Detach mesh components (vertices or faces) from their parent mesh.
   - `EditUtils.decimate(objects=None, percentage: float = 50.0, preserve_borders: bool = True, preserve_hard_edges: bool = True, preserve_uv_borders: bool = True, preserve_quads: bool = True, symmetry: bool = False, symmetry_tolerance: float = 0.01, delete_history: bool = True) -> List[str]` *(static)* — Decimate (``polyReduce``) meshes toward a target reduction percentage.
@@ -1617,13 +1635,25 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 ### `edit_utils/selection.py`
 
 - **[`class Selection(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/edit_utils/selection.py#L20)** — Utilities for advanced Maya selection operations.
-  - `Selection.select_by_type(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace') -> List[object]` *(static)* — Select objects by type with comprehensive type support.
+  - `Selection.select_by_type(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace', scope: str = None) -> List[object]` *(static)* — Select objects by type with comprehensive type support.
   - `Selection.select_children(objects: List[Union[str, object]]) -> Set[object]` *(static)* — Select the immediate children of the given objects.
   - `Selection.select_hierarchy_above(objects: List[Union[str, object]]) -> Set[object]` *(static)* — Select all parent objects in the hierarchy above the given objects.
   - `Selection.select_hierarchy_below(objects: List[Union[str, object]]) -> Set[object]` *(static)* — Select all child objects in the hierarchy below the given objects.
   - `Selection.rig_locked_meshes() -> List[str]` *(static)* — Mesh shapes a rig makes unpickable: their display type is DRIVEN
   - `Selection.get_rig_selection_mode(cls) -> str` *(class)* — The live mode (see :meth:`set_rig_selection_mode`);
   - `Selection.set_rig_selection_mode(cls, mode: str) -> List[str]` *(class)* — How object picking treats rigged parts.
+  - `Selection.objects_in_scope(scope: str = 'all') -> List[str]` *(static)* — The objects a selection filter draws from.
+  - `Selection.reorder_selection(objects=None, method: str = 'name', reverse: bool = False) -> List[str]` *(static)* — Reselect *objects* in the order *method* sorts them
+  - `Selection.get_conversion_types(cls) -> List[str]` *(class)* — The conversions :meth:`convert_selection` knows, in menu order.
+  - `Selection.convert_selection(cls, conversion: str) -> List[str]` *(class)* — Convert the component selection (Maya's Select > Convert Selection).
+  - `Selection.get_selection_constraints(cls) -> List[str]` *(class)* — The selection constraints now on: Maya keeps each on, constraining
+  - `Selection.set_selection_constraint(cls, constraint: str, state: bool = True) -> List[str]` *(class)* — Switch one selection constraint on or off;
+  - `Selection.select_edge_path(cls, components=None, path: str = 'edge_loop', step: int = 1) -> List[str]` *(class)* — Select the edge path through *components*, keeping every *step*-th
+  - `Selection.select_similar(cls, objects=None, tolerance: float = 0.0, include_original: bool = False, **metrics)` *(class)* — Select what is similar to the selection.
+  - `Selection.select_island(faces=None, range_x: float = 0.05, range_y: float = 0.05, range_z: float = 0.05, delimit=None) -> List[str]` *(static)* — Select the contiguous faces, around the selected ones, whose normals
+  - `Selection.toggle_selectability(cls, objects=None)` *(class)* — Toggle whether *objects* can be picked in the viewport: Maya's
+  - `Selection.get_ignore_backfacing() -> bool` *(static)* — True while viewport picks skip what faces away from the camera
+  - `Selection.set_ignore_backfacing(state: bool = True) -> bool` *(static)* — Turn camera-based selection on or off;
   - `Selection.get_available_selection_types() -> List[str]` *(static)* — Get a list of all available selection types.
   - `Selection.get_selection_categories() -> dict` *(static)* — Get a dictionary of selection types organized by category.
 
@@ -1635,6 +1665,14 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
   - `Snap.snap_to_closest_vertex(obj1, obj2, tolerance=10.0, freeze_transforms=False)` *(static)* — Snap the vertices from object one to the closest verts on object two.
   - `Snap.snap_to_surface(source_meshes, target_mesh, offset: float = None, threshold: float = None, invert: bool = False) -> int` *(static)* — Snap source mesh vertices to the closest point on a target surface.
   - `Snap.snap_to_grid(objects=None, grid_size: float = 1.0, axes: str = 'xyz') -> int` *(static)* — Snap object pivots or vertices to the nearest grid point.
+
+<a id="edit_utils--target_weld"></a>
+### `edit_utils/target_weld.py`
+
+Target Weld: Maya's Merge Vertex Tool, set up to drag one vertex onto another.
+
+- **[`class TargetWeld(pythontk.HelpMixin)`](mayatk/mayatk/edit_utils/target_weld.py#L18)** — Maya's interactive target weld (``MergeVertexTool``).
+  - `TargetWeld.activate(merge_to_center: bool = False) -> bool` *(static)* — Start the Merge Vertex Tool in vertex component mode with nothing
 
 <a id="env_utils--_env_utils"></a>
 ### `env_utils/_env_utils.py`

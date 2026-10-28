@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (386)
+## Added (417)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1036,10 +1036,24 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `core_utils/_core_utils.py::CoreUtils.ensure_component_mode(object_type: str = 'mesh', component: Optional[str] = None) -> Optional[str]`
 - `core_utils/_core_utils.py::CoreUtils.ensure_object_mode() -> bool`
 - `core_utils/_core_utils.py::CoreUtils.selected_objects(**kwargs) -> List[str]`
+- `core_utils/components.py::Components.bridge_edges(edges=None)`
+- `core_utils/components.py::Components.circularize(components=None)`
+- `core_utils/components.py::Components.collapse_components(components=None)`
+- `core_utils/components.py::Components.connect_components(components=None)`
+- `core_utils/components.py::Components.divide_faces(faces=None, u=True, v=True, cuts=1, tris=False)`
+- `core_utils/components.py::Components.edit_edge_flow(edges)`
+- `core_utils/components.py::Components.extrude(components=None, keep_faces_together=True, divisions=1, thickness=0.0)`
+- `core_utils/components.py::Components.fill_holes(components)`
 - `core_utils/components.py::Components.get_transfer_types(cls) -> Dict[str, str]`
+- `core_utils/components.py::Components.inset_faces(faces=None, offset=0.1, depth=0.0, individual=False)`
+- `core_utils/components.py::Components.offset_edge_loops(edges)`
+- `core_utils/components.py::Components.poke_faces(faces)`
 - `core_utils/components.py::Components.reverse_normals(cls, objects, mode: int = 0) -> None`
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`
 - `core_utils/components.py::Components.set_to_face_normals(objects) -> None`
+- `core_utils/components.py::Components.slide_edges(edges=None)`
+- `core_utils/components.py::Components.symmetrize(components)`
+- `core_utils/components.py::Components.toggle_face_holes(faces=None)`
 - `core_utils/components.py::Components.toggle_normal_lock(objects) -> Optional[bool]`
 - `core_utils/components.py::Components.transfer(cls, objects, transfer_type: str)`
 - `core_utils/diagnostics/mesh_diag.py::MeshDiagnostics.cleanup_meshes(cls, scope: str = 'selected', repair: bool = False, *, checks=(), area_tolerance: float = 1e-05, edge_length_tolerance: float = 1e-05, uv_area_tolerance: float = 1e-05, merge_vertices: bool = False, merge_distance: float = 0.0001, delete_history: bool = False, delete_loose: bool = False, dissolve_degenerate: bool = False, recalculate_normals: bool = False, fill_holes: bool = False, overlapping_faces: bool = False, overlapping_objects: bool = False, omit_selected: bool = False) -> dict`
@@ -1064,10 +1078,13 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `display_utils/color_id.py::ColorId.select_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, **checks) -> List[str]`
 - `display_utils/color_id.py::ColorUtils.get_average_vertex_color(obj: str) -> Optional[Tuple[float, float, float]]`
 - `display_utils/color_id.py::ColorUtils.get_outliner_color(obj: str) -> Optional[Tuple[float, float, float]]`
+- `edit_utils/_edit_utils.py::EditUtils.boolean_objects(objects=None, operation='difference', interactive=False)`
 - `edit_utils/_edit_utils.py::EditUtils.convert_objects(cls, objects, conversion: str) -> List[str]`
 - `edit_utils/_edit_utils.py::EditUtils.get_conversion_types(cls) -> Dict[str, str]`
 - `edit_utils/_edit_utils.py::EditUtils.get_symmetry() -> dict`
+- `edit_utils/_edit_utils.py::EditUtils.select_edges_by_angle(objects=None, low_angle=0.0, high_angle=180.0)`
 - `edit_utils/_edit_utils.py::EditUtils.set_symmetry(axis: Optional[str] = None, state: bool = True, space: Optional[str] = None) -> dict`
+- `edit_utils/_edit_utils.py::EditUtils.wedge(objects=None, angle=None, divisions=None)`
 - `edit_utils/curtain/_curtain.py::Curtain(class)`
 - `edit_utils/curtain/_curtain.py::Curtain.create(rail: Sequence[Vec], **opts) -> str`
 - `edit_utils/curtain/_curtain.py::Curtain.delete_rail_curve(curve: Optional[str]) -> None`
@@ -1081,7 +1098,21 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/naming/_naming.py::Naming.select_link(cls, node: str) -> str`
 - `edit_utils/primitives.py::Primitives.create(cls, category: str, name: str)`
 - `edit_utils/primitives.py::Primitives.get_primitive_types(cls) -> dict`
+- `edit_utils/selection.py::Selection.convert_selection(cls, conversion: str) -> List[str]`
+- `edit_utils/selection.py::Selection.get_conversion_types(cls) -> List[str]`
+- `edit_utils/selection.py::Selection.get_ignore_backfacing() -> bool`
+- `edit_utils/selection.py::Selection.get_selection_constraints(cls) -> List[str]`
+- `edit_utils/selection.py::Selection.objects_in_scope(scope: str = 'all') -> List[str]`
+- `edit_utils/selection.py::Selection.reorder_selection(objects=None, method: str = 'name', reverse: bool = False) -> List[str]`
+- `edit_utils/selection.py::Selection.select_edge_path(cls, components=None, path: str = 'edge_loop', step: int = 1) -> List[str]`
+- `edit_utils/selection.py::Selection.select_island(faces=None, range_x: float = 0.05, range_y: float = 0.05, range_z: float = 0.05, delimit=None) -> List[str]`
+- `edit_utils/selection.py::Selection.select_similar(cls, objects=None, tolerance: float = 0.0, include_original: bool = False, **metrics)`
+- `edit_utils/selection.py::Selection.set_ignore_backfacing(state: bool = True) -> bool`
+- `edit_utils/selection.py::Selection.set_selection_constraint(cls, constraint: str, state: bool = True) -> List[str]`
+- `edit_utils/selection.py::Selection.toggle_selectability(cls, objects=None)`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `edit_utils/target_weld.py::TargetWeld(class)`
+- `edit_utils/target_weld.py::TargetWeld.activate(merge_to_center: bool = False) -> bool`
 - `env_utils/_env_utils.py::EnvUtils.autosave_settings() -> Dict[str, float]`
 - `env_utils/_env_utils.py::EnvUtils.frame_rates() -> Dict[str, float]`
 - `env_utils/_env_utils.py::EnvUtils.get_linear_unit() -> str`
@@ -1353,20 +1384,32 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (10)
+## Signature changed (14)
 
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
   - now: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, select: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
+- `core_utils/components.py::Components.adjusted_distance_between_vertices`
+  - was: `(p1, p2, adjust: float = 0.0, as_percentage: bool = False)`
+  - now: `(p1=None, p2=None, adjust: float = 0.0, as_percentage: bool = False)`
 - `core_utils/components.py::Components.transfer_creased_edges`
   - was: `(frm, to)`
   - now: `(frm=None, to=None)`
 - `display_utils/_display_utils.py::DisplayUtils.toggle_xray`
   - was: `(cls, objects: Union[str, object, List]) -> Optional[Tuple[bool, int]]`
   - now: `(cls, objects: Union[str, object, List] = None) -> Optional[Tuple[bool, int]]`
+- `edit_utils/_edit_utils.py::EditUtils.merge_vertices`
+  - was: `(objects, tolerance=0.001, selected_only=False)`
+  - now: `(objects=None, tolerance=0.001, selected_only=None)`
+- `edit_utils/_edit_utils.py::EditUtils.separate_objects`
+  - was: `(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False) -> List`
+  - now: `(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False, select: bool = False) -> List`
 - `edit_utils/bridge.py::Bridge.bridge`
   - was: `(edges, **kwargs)`
   - now: `(edges, *, curve_type=None, divisions=None, smoothing_angle=None, offset=None, taper=None, twist=None, cleanup_curves=False, **kwargs)`
+- `edit_utils/selection.py::Selection.select_by_type`
+  - was: `(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace') -> List[object]`
+  - now: `(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace', scope: str = None) -> List[object]`
 - `mat_utils/shader_templates/_shader_templates.py::ShaderTemplates.restore_template`
   - was: `(file_path, texture_paths=None, name=None, logger=None)`
   - now: `(cls, file_path, texture_paths=None, name=None, logger=None)`

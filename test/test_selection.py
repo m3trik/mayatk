@@ -84,6 +84,122 @@ class TestRigSelectionMode(MayaTkTestCase):
             Selection.set_rig_selection_mode("controls")
 
 
+class TestSelectionPanelOperations(MayaTkTestCase):
+    """The selection operations tentacle's composed selection panel calls."""
+
+    _ALL_OFF = dict(
+        border=False, borderPropagation=False, shell=False, anglePropagation=False,
+        loopPropagation=False, ringPropagation=False, uvEdgeLoopPropagation=False,
+    )
+
+    def setUp(self):
+        super().setUp()
+        cmds.polySelectConstraint(**self._ALL_OFF)
+        self.addCleanup(cmds.polySelectConstraint, **self._ALL_OFF)
+        self.plane = cmds.polyPlane(sx=3, sy=3, w=2, h=2, ch=False, name="sel_plane")[0]
+
+    def test_objects_in_scope(self):
+        hidden = cmds.polyCube(name="sel_hidden")[0]
+        cmds.hide(hidden)
+        cmds.select(self.plane)
+        self.assertEqual(Selection.objects_in_scope("selected"), [self.plane])
+        self.assertNotIn(hidden, Selection.objects_in_scope("visible"))
+        self.assertIn(hidden, Selection.objects_in_scope("all"))
+        with self.assertRaises(ValueError):
+            Selection.objects_in_scope("nearby")
+
+    def test_reorder_selection_reselects_in_order(self):
+        b = cmds.polyCube(name="sel_b")[0]
+        a = cmds.polyCube(name="sel_a")[0]
+        cmds.select([b, a])
+        self.assertEqual(Selection.reorder_selection(None, method="name"), [a, b])
+        self.assertEqual(cmds.ls(selection=True), [a, b])
+        cmds.select(clear=True)
+        self.assertEqual(Selection.reorder_selection(None), [])
+
+    def test_maya_lists_all_twenty_conversions(self):
+        self.assertEqual(len(Selection.get_conversion_types()), 20)
+
+    def test_convert_a_vertex_to_its_faces(self):
+        cmds.select(f"{self.plane}.vtx[5]")  # interior: 4 faces around it
+        result = Selection.convert_selection("faces")
+        self.assertEqual(len(cmds.ls(result, flatten=True)), 4)
+
+    def test_convert_to_border_edges(self):
+        cmds.select(f"{self.plane}.f[0:8]")
+        result = Selection.convert_selection("border_edges")
+        self.assertEqual(len(cmds.ls(result, flatten=True)), 12)
+
+    def test_convert_with_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(Selection.convert_selection("faces"), [])
+        with self.assertRaises(ValueError):
+            Selection.convert_selection("everything")
+
+    def test_two_constraints_stay_on_together(self):
+        Selection.set_selection_constraint("angle", True)
+        on = Selection.set_selection_constraint("edge_loop", True)
+        self.assertEqual(on, ["angle", "edge_loop"])
+        on = Selection.set_selection_constraint("angle", False)
+        self.assertEqual(on, ["edge_loop"])
+        self.assertEqual(Selection.get_selection_constraints(), ["edge_loop"])
+
+    def test_border_constraint_owns_both_flags(self):
+        Selection.set_selection_constraint("border", True)
+        self.assertTrue(cmds.polySelectConstraint(q=True, borderPropagation=True))
+        Selection.set_selection_constraint("border", False)
+        self.assertFalse(cmds.polySelectConstraint(q=True, border=True))
+
+    def test_select_edge_path_keeps_every_nth(self):
+        cmds.select(f"{self.plane}.e[0]")
+        loop = Selection.select_edge_path(None, path="edge_loop")
+        cmds.select(f"{self.plane}.e[0]")
+        halved = Selection.select_edge_path(None, path="edge_loop", step=2)
+        self.assertTrue(loop)
+        self.assertEqual(len(halved), (len(loop) + 1) // 2)
+        cmds.select(clear=True)
+        self.assertEqual(Selection.select_edge_path(None), [])
+
+    def test_select_similar_objects(self):
+        cube = cmds.polyCube(name="sim_src")[0]
+        twin = cmds.duplicate(cube, name="sim_twin")[0]
+        cmds.xform(twin, t=(25, 0, 0), ro=(0, 45, 0))
+        cmds.polySphere(name="sim_other", r=9)
+        cmds.select(cube)
+        scope, matched = Selection.select_similar(None, vertex=True, face=True)
+        self.assertEqual(scope, "objects")
+        self.assertEqual([m.rsplit("|", 1)[-1] for m in matched], [twin])
+        with self.assertRaises(TypeError):
+            Selection.select_similar(None, colour=True)
+
+    def test_select_similar_metric_flags_are_polyevaluate_flags(self):
+        for metric, flag in Selection._SIMILAR_METRICS.items():
+            with self.subTest(metric=metric):
+                self.assertIsNotNone(cmds.polyEvaluate(self.plane, **{flag: True}))
+
+    def test_select_island_grows_over_a_flat_plane(self):
+        cmds.select(f"{self.plane}.f[4]")
+        island = Selection.select_island(None)
+        self.assertEqual(len(island), 9)
+        cmds.select(self.plane)  # an object stands for all of its faces
+        self.assertEqual(len(Selection.select_island(None)), 9)
+
+    def test_toggle_selectability_is_uniform(self):
+        cube = cmds.polyCube(name="sel_ref")[0]
+        self.assertEqual(Selection.toggle_selectability([cube]), (False, [cube]))
+        self.assertEqual(cmds.getAttr(f"{cube}.overrideDisplayType"), 2)
+        self.assertEqual(Selection.toggle_selectability([cube]), (True, [cube]))
+        self.assertEqual(cmds.getAttr(f"{cube}.overrideDisplayType"), 0)
+        cmds.select(clear=True)
+        self.assertEqual(Selection.toggle_selectability(None), [])
+
+    def test_ignore_backfacing_round_trips(self):
+        before = Selection.get_ignore_backfacing()
+        self.addCleanup(Selection.set_ignore_backfacing, before)
+        Selection.set_ignore_backfacing(not before)
+        self.assertEqual(Selection.get_ignore_backfacing(), not before)
+
+
 if __name__ == "__main__":
     import unittest
 

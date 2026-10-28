@@ -27,6 +27,7 @@ DEFAULT_INCLUDE = {
     "core_utils._core_utils": "*",
     "display_utils._display_utils": "*",
     "edit_utils._edit_utils": "*",
+    "edit_utils.target_weld": "TargetWeld",
     "env_utils._env_utils": "*",
     "mat_utils._mat_utils": "*",
     "node_utils._node_utils": "*",

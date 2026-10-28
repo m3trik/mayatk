@@ -1402,5 +1402,131 @@ class TestTransferMenu(MayaTkTestCase):
         self.assertIn(group, cmds.listConnections(shapes, type="shadingEngine") or [])
 
 
+class TestPolygonOperations(MayaTkTestCase):
+    """The polygon operations tentacle's composed polygons panel calls with
+    ``None``: ``[]`` back when nothing fits, each one undo step."""
+
+    def setUp(self):
+        super().setUp()
+        self.plane = cmds.polyPlane(sx=3, sy=3, name="pg_plane")[0]  # 16 verts
+
+    def _verts(self, node=None):
+        return cmds.polyEvaluate(node or self.plane, vertex=True)
+
+    def _faces(self, node=None):
+        return cmds.polyEvaluate(node or self.plane, face=True)
+
+    def test_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        for op in (
+            Components.extrude,
+            Components.inset_faces,
+            Components.divide_faces,
+            Components.circularize,
+            Components.fill_holes,
+            Components.symmetrize,
+            Components.bridge_edges,
+            Components.poke_faces,
+            Components.offset_edge_loops,
+            Components.edit_edge_flow,
+            Components.toggle_face_holes,
+        ):
+            with self.subTest(op=op.__name__):
+                self.assertEqual(op(None), [])
+        self.assertEqual(Components.collapse_components(None), ([], []))
+
+    def test_an_object_is_no_face(self):
+        cmds.select(self.plane)
+        self.assertEqual(Components.inset_faces(None), [])
+        self.assertEqual(Components.collapse_components(None), ([], []))
+        self.assertEqual(self._verts(), 16)
+
+    def test_extrude_swaps_its_settings_in_and_restores_maya_s(self):
+        names = ("polyExtrudeFaceDivisions", "polyExtrudeFaceThickness")
+        saved = {n: cmds.optionVar(q=n) for n in names if cmds.optionVar(exists=n)}
+        cmds.select(f"{self.plane}.f[4]")
+        Components.extrude(None, keep_faces_together=False, divisions=3, thickness=0.5)
+        node = (cmds.ls(type="polyExtrudeFace") or [None])[0]
+        self.assertIsNotNone(node)
+        self.assertEqual(cmds.getAttr(f"{node}.divisions"), 3)
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.thickness"), 0.5, places=4)
+        self.assertFalse(cmds.getAttr(f"{node}.keepFacesTogether"))
+        for n in names:
+            if n in saved:
+                self.assertEqual(cmds.optionVar(q=n), saved[n], n)
+            else:
+                self.assertFalse(cmds.optionVar(exists=n), n)
+
+    def test_inset_faces_offsets_and_raises_the_region(self):
+        result = Components.inset_faces(f"{self.plane}.f[4]", offset=0.05, depth=0.2)
+        node = cmds.ls(result, type="polyExtrudeFace")[0]
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.offset"), 0.05, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.thickness"), 0.2, places=4)
+        self.assertTrue(cmds.getAttr(f"{node}.keepFacesTogether"))
+        Components.inset_faces(f"{self.plane}.f[0]", individual=True)
+        node = cmds.ls(type="polyExtrudeFace")[-1]
+        self.assertFalse(cmds.getAttr(f"{node}.keepFacesTogether"))
+
+    def test_divide_faces_both_ways_makes_four_quads(self):
+        before = self._faces()
+        self.assertEqual(Components.divide_faces(f"{self.plane}.f[4]"), [f"{self.plane}.f[4]"])
+        self.assertEqual(self._faces(), before + 3)
+
+    def test_divide_faces_one_way_splits_in_strips(self):
+        before = self._faces()
+        Components.divide_faces(f"{self.plane}.f[4]", u=True, v=False, cuts=2)
+        self.assertEqual(self._faces(), before + 2)
+
+    def test_collapse_faces_each_to_its_own_point(self):
+        collapsed, skipped = Components.collapse_components(
+            [f"{self.plane}.f[0]", f"{self.plane}.f[8]"]
+        )
+        self.assertEqual(len(collapsed), 2)
+        self.assertEqual(skipped, [])
+        self.assertEqual(self._verts(), 10)
+
+    def test_collapse_names_the_edges_picked_beside_faces(self):
+        collapsed, skipped = Components.collapse_components(
+            [f"{self.plane}.f[0]", f"{self.plane}.e[20]"]
+        )
+        self.assertTrue(collapsed)
+        self.assertTrue(skipped)
+
+    def test_collapse_edges_merge_at_one_center(self):
+        collapsed, _ = Components.collapse_components(f"{self.plane}.e[0]")
+        self.assertTrue(collapsed)
+        self.assertEqual(self._verts(), 15)
+
+    def test_toggle_face_holes_round_trips(self):
+        holes, faces = Components.toggle_face_holes(f"{self.plane}.f[4]")
+        self.assertTrue(holes)
+        self.assertEqual(faces, [f"{self.plane}.f[4]"])
+        self.assertFalse(Components.toggle_face_holes(f"{self.plane}.f[4]")[0])
+
+    def test_distance_of_the_two_selected_vertices(self):
+        cmds.select([f"{self.plane}.vtx[0]", f"{self.plane}.vtx[1]"])
+        a = cmds.pointPosition(f"{self.plane}.vtx[0]", world=True)
+        b = cmds.pointPosition(f"{self.plane}.vtx[1]", world=True)
+        gap = sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
+        got = Components.adjusted_distance_between_vertices(
+            None, None, adjust=0.1, as_percentage=True
+        )
+        self.assertAlmostEqual(got, gap * 1.001, places=5)
+
+    def test_distance_needs_exactly_two_vertices(self):
+        cmds.select(f"{self.plane}.vtx[0]")
+        self.assertIsNone(Components.adjusted_distance_between_vertices(None, None))
+        cmds.select(self.plane)
+        self.assertIsNone(Components.adjusted_distance_between_vertices(None, None))
+
+    def test_poke_is_one_undo(self):
+        cmds.undoInfo(state=True)
+        cmds.select(f"{self.plane}.f[4]")
+        Components.poke_faces(None)
+        self.assertEqual(self._verts(), 17)
+        cmds.undo()
+        self.assertEqual(self._verts(), 16)
+
+
 if __name__ == "__main__":
     unittest.main()

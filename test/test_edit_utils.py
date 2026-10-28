@@ -1751,5 +1751,77 @@ class TestEditMenus(MayaTkTestCase):
         )
 
 
+class TestPolygonsPanelOperations(MayaTkTestCase):
+    """merge_vertices / boolean_objects / wedge / separate_objects(select) as
+    tentacle's composed polygons panel calls them."""
+
+    def _touching_cubes(self):
+        a = cmds.polyCube(w=1, h=1, d=1, name="mv_a")[0]
+        b = cmds.polyCube(w=1, h=1, d=1, name="mv_b")[0]
+        cmds.move(1, 0, 0, b)
+        return cmds.polyUnite(a, b, ch=False, name="mv_both")[0]
+
+    def test_merge_with_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.merge_vertices(None), [])
+
+    def test_merge_an_object_welds_every_coincident_vertex(self):
+        both = self._touching_cubes()
+        self.assertEqual(cmds.polyEvaluate(both, vertex=True), 16)
+        cmds.select(both)
+        EditUtils.merge_vertices(None, tolerance=0.001)
+        self.assertEqual(cmds.polyEvaluate(both, vertex=True), 12)
+
+    def test_merge_selected_vertices_only(self):
+        both = self._touching_cubes()
+        cmds.select(f"{both}.vtx[0:3]")  # one cube's verts: none coincide
+        EditUtils.merge_vertices(None, tolerance=0.001)
+        self.assertEqual(cmds.polyEvaluate(both, vertex=True), 16)
+
+    def test_boolean_needs_two_meshes(self):
+        cube = cmds.polyCube()[0]
+        self.assertEqual(EditUtils.boolean_objects([cube]), [])
+        with self.assertRaises(ValueError):
+            EditUtils.boolean_objects([cube, cube], operation="xor")
+
+    def test_boolean_difference_bakes_one_result(self):
+        a = cmds.polyCube(w=2, h=2, d=2, name="bo_a")[0]
+        b = cmds.polyCube(w=1, h=1, d=1, name="bo_b")[0]
+        cmds.move(1, 1, 1, b)
+        result = EditUtils.boolean_objects([a, b], operation="difference")
+        self.assertEqual(len(result), 1)
+        self.assertTrue(cmds.objExists(result[0]))
+
+    def test_wedge_with_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.wedge(None), [])
+
+    def test_separate_selects_its_results(self):
+        both = self._touching_cubes()
+        parts = EditUtils.separate_objects([both], select=True)
+        self.assertEqual(len(parts), 2)
+        self.assertEqual(
+            sorted(cmds.ls(selection=True, long=True)), sorted(cmds.ls(parts, long=True))
+        )
+
+
+class TestSelectEdgesByAngle(MayaTkTestCase):
+    """select_edges_by_angle as tentacle's selection panel calls it."""
+
+    def test_a_cube_s_right_angled_edges(self):
+        cube = cmds.polyCube(name="sea_cube")[0]
+        cmds.select(cube)
+        self.assertEqual(EditUtils.select_edges_by_angle(None, 80, 100), 12)
+        self.assertEqual(len(cmds.ls(selection=True, flatten=True)), 12)
+
+    def test_no_edge_in_range_is_zero(self):
+        cmds.select(cmds.polyCube(name="sea_none")[0])
+        self.assertEqual(EditUtils.select_edges_by_angle(None, 10, 20), 0)
+
+    def test_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.select_edges_by_angle(None), [])
+
+
 if __name__ == "__main__":
     unittest.main()

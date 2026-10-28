@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 268,
+          "line": 269,
           "deprecated": false
         }
       ]
@@ -5663,7 +5663,7 @@
         {
           "name": "Components",
           "summary": "",
-          "line": 471,
+          "line": 498,
           "bases": [
             "GetComponentsMixin",
             "pythontk.HelpMixin",
@@ -5676,7 +5676,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> List[str]",
               "summary": "Full paths of every mesh TRANSFORM in *objects*, descendants included.",
-              "line": 492,
+              "line": 519,
               "deprecated": false
             },
             {
@@ -5685,7 +5685,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, target, sample_limit: Optional[int] = None) -> Dict[str, float]",
               "summary": "Measure how far each mesh in *objects* stands off *target*'s surface.",
-              "line": 515,
+              "line": 542,
               "deprecated": false
             },
             {
@@ -5694,7 +5694,7 @@
               "kind": "staticmethod",
               "signature": "(components_list)",
               "summary": "Map a list of components to their respective objects.",
-              "line": 582,
+              "line": 609,
               "deprecated": false
             },
             {
@@ -5703,7 +5703,7 @@
               "kind": "classmethod",
               "signature": "(cls, components)",
               "summary": "Get a list containing sets of adjacent edges.",
-              "line": 641,
+              "line": 668,
               "deprecated": false
             },
             {
@@ -5712,7 +5712,7 @@
               "kind": "classmethod",
               "signature": "(cls, faces)",
               "summary": "Get a list containing sets of adjacent polygon faces grouped by islands.",
-              "line": 673,
+              "line": 700,
               "deprecated": false
             },
             {
@@ -5721,7 +5721,7 @@
               "kind": "staticmethod",
               "signature": "(obj, returned_type='str', flatten=False)",
               "summary": "Get the group of components in each separate island of a combined mesh.",
-              "line": 692,
+              "line": 719,
               "deprecated": false
             },
             {
@@ -5730,7 +5730,7 @@
               "kind": "classmethod",
               "signature": "(cls, components, returned_type='str', component_border=False)",
               "summary": "Get border components from given component(s) or a polygon object based on connectivity.",
-              "line": 728,
+              "line": 755,
               "deprecated": false
             },
             {
@@ -5739,7 +5739,7 @@
               "kind": "staticmethod",
               "signature": "(vertices_a, vertices_b)",
               "summary": "Determine the two furthest apart vertices, one from each of the two provided lists.",
-              "line": 850,
+              "line": 877,
               "deprecated": false
             },
             {
@@ -5748,7 +5748,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, tolerance=1000)",
               "summary": "Find the two closest vertices between the two sets of vertices.",
-              "line": 875,
+              "line": 902,
               "deprecated": false
             },
             {
@@ -5757,7 +5757,7 @@
               "kind": "staticmethod",
               "signature": "(shape)",
               "summary": "Temporary ``closestPointOnMesh`` node wired to *shape* for",
-              "line": 896,
+              "line": 923,
               "deprecated": false
             },
             {
@@ -5766,7 +5766,7 @@
               "kind": "classmethod",
               "signature": "(cls, vertices, obj, tolerance=0.0, freeze_transforms=False, returned_type='str')",
               "summary": "Find the closest vertex of the given object for each vertex in the list of given vertices.",
-              "line": 912,
+              "line": 939,
               "deprecated": false
             },
             {
@@ -5775,16 +5775,16 @@
               "kind": "staticmethod",
               "signature": "(reference_vertices, max_distance)",
               "summary": "Categorizes vertices of a mesh based on their distance from the first reference vertex.",
-              "line": 978,
+              "line": 1005,
               "deprecated": false
             },
             {
               "name": "adjusted_distance_between_vertices",
               "qualname": "Components.adjusted_distance_between_vertices",
               "kind": "staticmethod",
-              "signature": "(p1, p2, adjust: float = 0.0, as_percentage: bool = False)",
-              "summary": "Calculate adjusted distance between two points/vertices.",
-              "line": 1014,
+              "signature": "(p1=None, p2=None, adjust: float = 0.0, as_percentage: bool = False)",
+              "summary": "The distance between two points or vertices, adjusted by *adjust* (an",
+              "line": 1041,
               "deprecated": false
             },
             {
@@ -5793,7 +5793,7 @@
               "kind": "staticmethod",
               "signature": "(edges) -> None",
               "summary": "Bridges two connected edges.",
-              "line": 1035,
+              "line": 1080,
               "deprecated": false
             },
             {
@@ -5802,7 +5802,7 @@
               "kind": "classmethod",
               "signature": "(cls, components, path='edgeLoop', returned_type='str', flatten=False)",
               "summary": "Query the polySelect command for the components along different edge paths.",
-              "line": 1116,
+              "line": 1161,
               "deprecated": false
             },
             {
@@ -5811,7 +5811,7 @@
               "kind": "classmethod",
               "signature": "(cls, components, flatten=False)",
               "summary": "Calculate the shortest path between two specified edge or vertex components within the same 3D obje…",
-              "line": 1165,
+              "line": 1210,
               "deprecated": false
             },
             {
@@ -5820,7 +5820,7 @@
               "kind": "staticmethod",
               "signature": "(face)",
               "summary": "Get the normal of a face in world space.",
-              "line": 1219,
+              "line": 1264,
               "deprecated": false
             },
             {
@@ -5829,7 +5829,7 @@
               "kind": "staticmethod",
               "signature": "(x)",
               "summary": "Get the normal vectors of the given polygon object(s) or its components.",
-              "line": 1242,
+              "line": 1287,
               "deprecated": false
             },
             {
@@ -5838,7 +5838,7 @@
               "kind": "classmethod",
               "signature": "(cls, edges) -> Union[float, List[float]]",
               "summary": "Get the angle between the normals of the faces connected by one or more edges.",
-              "line": 1296,
+              "line": 1341,
               "deprecated": false
             },
             {
@@ -5847,7 +5847,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, low_angle: float = 0, high_angle: float = 180, return_angles: bool = False)",
               "summary": "Return edges whose adjacent face-normal angle falls within a range.",
-              "line": 1304,
+              "line": 1349,
               "deprecated": false
             },
             {
@@ -5856,7 +5856,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None, unlock_normals: bool = False) -> List[str]",
               "summary": "Set edge hardness based on normal angle thresholds.",
-              "line": 1352,
+              "line": 1397,
               "deprecated": false
             },
             {
@@ -5865,7 +5865,7 @@
               "kind": "classmethod",
               "signature": "(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')",
               "summary": "Filter for faces with normals that fall within an X,Y,Z tolerance.",
-              "line": 1476,
+              "line": 1521,
               "deprecated": false
             },
             {
@@ -5874,7 +5874,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, by_uv_shell=False)",
               "summary": "Average the normals of the given objects (``None``: the selection).",
-              "line": 1547,
+              "line": 1592,
               "deprecated": false
             },
             {
@@ -5883,7 +5883,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, soft: bool = True) -> None",
               "summary": "Soften (``soft=True``) or harden the edge normals of *objects*.",
-              "line": 1567,
+              "line": 1612,
               "deprecated": false
             },
             {
@@ -5892,7 +5892,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set the vertex normals of *objects* to their faces' (faceted shading).",
-              "line": 1586,
+              "line": 1631,
               "deprecated": false
             },
             {
@@ -5901,7 +5901,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, mode: int = 0) -> None",
               "summary": "Reverse the normals of *objects* (meshes, or just the given faces).",
-              "line": 1599,
+              "line": 1644,
               "deprecated": false
             },
             {
@@ -5910,7 +5910,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> Optional[bool]",
               "summary": "Lock the vertex normals of *objects*, or unlock them when every one",
-              "line": 1612,
+              "line": 1657,
               "deprecated": false
             },
             {
@@ -5919,7 +5919,7 @@
               "kind": "staticmethod",
               "signature": "(objects, space: str = 'world')",
               "summary": "Transfer vertex normals from the first mesh of *objects* to the rest",
-              "line": 1637,
+              "line": 1682,
               "deprecated": false
             },
             {
@@ -5928,7 +5928,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, str]",
               "summary": "The Transfer menu: ``{label: what it does}`` in menu order, each a",
-              "line": 1730,
+              "line": 1775,
               "deprecated": false
             },
             {
@@ -5937,7 +5937,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, transfer_type: str)",
               "summary": "Run a :meth:`get_transfer_types` transfer from the first surface of",
-              "line": 1738,
+              "line": 1783,
               "deprecated": false
             },
             {
@@ -5946,7 +5946,7 @@
               "kind": "classmethod",
               "signature": "(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')",
               "summary": "Get a list of components filtered by the number of their connected components.",
-              "line": 1825,
+              "line": 1870,
               "deprecated": false
             },
             {
@@ -5955,7 +5955,7 @@
               "kind": "classmethod",
               "signature": "(cls, vertex, angle_weighted=False)",
               "summary": "Return the normal at the given vertex.",
-              "line": 1854,
+              "line": 1899,
               "deprecated": false
             },
             {
@@ -5964,7 +5964,7 @@
               "kind": "staticmethod",
               "signature": "(components)",
               "summary": "Get a vector representing the averaged and normalized vertex-face normals.",
-              "line": 1875,
+              "line": 1920,
               "deprecated": false
             },
             {
@@ -5973,7 +5973,7 @@
               "kind": "staticmethod",
               "signature": "(edges=None, amount=None, angle=None)",
               "summary": "Crease *edges* (subdivision sharpness), optionally softening or hardening",
-              "line": 1891,
+              "line": 1936,
               "deprecated": false
             },
             {
@@ -5982,7 +5982,7 @@
               "kind": "staticmethod",
               "signature": "(edges)",
               "summary": "Return any creased edges from a list of edges.",
-              "line": 1935,
+              "line": 1980,
               "deprecated": false
             },
             {
@@ -5991,7 +5991,133 @@
               "kind": "staticmethod",
               "signature": "(frm=None, to=None)",
               "summary": "Copy the edge creases of *frm* to the same edge ids on each of *to*",
-              "line": 1949,
+              "line": 1994,
+              "deprecated": false
+            },
+            {
+              "name": "extrude",
+              "qualname": "Components.extrude",
+              "kind": "staticmethod",
+              "signature": "(components=None, keep_faces_together=True, divisions=1, thickness=0.0)",
+              "summary": "Extrude faces, edges or vertices with Maya's own Extrude, which",
+              "line": 2045,
+              "deprecated": false
+            },
+            {
+              "name": "inset_faces",
+              "qualname": "Components.inset_faces",
+              "kind": "staticmethod",
+              "signature": "(faces=None, offset=0.1, depth=0.0, individual=False)",
+              "summary": "Inset the selected faces: a new border ring *offset* inside the",
+              "line": 2092,
+              "deprecated": false
+            },
+            {
+              "name": "divide_faces",
+              "qualname": "Components.divide_faces",
+              "kind": "staticmethod",
+              "signature": "(faces=None, u=True, v=True, cuts=1, tris=False)",
+              "summary": "Divide the selected faces (``polySubdivideFacet``, face by face: on",
+              "line": 2123,
+              "deprecated": false
+            },
+            {
+              "name": "circularize",
+              "qualname": "Components.circularize",
+              "kind": "staticmethod",
+              "signature": "(components=None)",
+              "summary": "Reshape the selected vertices, edges or faces into an even circle",
+              "line": 2163,
+              "deprecated": false
+            },
+            {
+              "name": "fill_holes",
+              "qualname": "Components.fill_holes",
+              "kind": "staticmethod",
+              "signature": "(components)",
+              "summary": "Cap the open holes bounded by the selection's border edges (Maya's",
+              "line": 2179,
+              "deprecated": false
+            },
+            {
+              "name": "symmetrize",
+              "qualname": "Components.symmetrize",
+              "kind": "staticmethod",
+              "signature": "(components)",
+              "summary": "Mirror the selected components across the symmetry axis with Maya's",
+              "line": 2191,
+              "deprecated": false
+            },
+            {
+              "name": "bridge_edges",
+              "qualname": "Components.bridge_edges",
+              "kind": "staticmethod",
+              "signature": "(edges=None)",
+              "summary": "Span two edge selections with new faces (``polyBridgeEdge``), capping",
+              "line": 2203,
+              "deprecated": false
+            },
+            {
+              "name": "collapse_components",
+              "qualname": "Components.collapse_components",
+              "kind": "staticmethod",
+              "signature": "(components=None)",
+              "summary": "Collapse each selected face to its own point;",
+              "line": 2226,
+              "deprecated": false
+            },
+            {
+              "name": "connect_components",
+              "qualname": "Components.connect_components",
+              "kind": "staticmethod",
+              "signature": "(components=None)",
+              "summary": "Connect vertices and edges with Maya's interactive Connect tool,",
+              "line": 2270,
+              "deprecated": false
+            },
+            {
+              "name": "poke_faces",
+              "qualname": "Components.poke_faces",
+              "kind": "staticmethod",
+              "signature": "(faces)",
+              "summary": "Add a center vertex to each selected face, fanning it into triangles",
+              "line": 2288,
+              "deprecated": false
+            },
+            {
+              "name": "slide_edges",
+              "qualname": "Components.slide_edges",
+              "kind": "staticmethod",
+              "signature": "(edges=None)",
+              "summary": "Start Maya's Slide Edge tool: drag the selected edge loops along their",
+              "line": 2298,
+              "deprecated": false
+            },
+            {
+              "name": "offset_edge_loops",
+              "qualname": "Components.offset_edge_loops",
+              "kind": "staticmethod",
+              "signature": "(edges)",
+              "summary": "Add an edge loop on each side of the selected edges (Maya's Offset",
+              "line": 2315,
+              "deprecated": false
+            },
+            {
+              "name": "edit_edge_flow",
+              "qualname": "Components.edit_edge_flow",
+              "kind": "staticmethod",
+              "signature": "(edges)",
+              "summary": "Move the selected edges to follow the surrounding surface curvature",
+              "line": 2330,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_face_holes",
+              "qualname": "Components.toggle_face_holes",
+              "kind": "staticmethod",
+              "signature": "(faces=None)",
+              "summary": "Toggle the selected faces' hole state (``polyHole``): holes render",
+              "line": 2343,
               "deprecated": false
             }
           ]
@@ -7860,7 +7986,7 @@
               "name": "separate_objects",
               "qualname": "EditUtils.separate_objects",
               "kind": "staticmethod",
-              "signature": "(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False) -> List",
+              "signature": "(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False, select: bool = False) -> List",
               "summary": "Separate meshes into individual objects.",
               "line": 939,
               "deprecated": false
@@ -7869,9 +7995,36 @@
               "name": "merge_vertices",
               "qualname": "EditUtils.merge_vertices",
               "kind": "staticmethod",
-              "signature": "(objects, tolerance=0.001, selected_only=False)",
-              "summary": "Merge Vertices on the given objects.",
-              "line": 1137,
+              "signature": "(objects=None, tolerance=0.001, selected_only=None)",
+              "summary": "Merge the vertices within *tolerance*.",
+              "line": 1141,
+              "deprecated": false
+            },
+            {
+              "name": "boolean_objects",
+              "qualname": "EditUtils.boolean_objects",
+              "kind": "staticmethod",
+              "signature": "(objects=None, operation='difference', interactive=False)",
+              "summary": "Boolean meshes: the first is the base, the rest its operands.",
+              "line": 1210,
+              "deprecated": false
+            },
+            {
+              "name": "wedge",
+              "qualname": "EditUtils.wedge",
+              "kind": "staticmethod",
+              "signature": "(objects=None, angle=None, divisions=None)",
+              "summary": "Wedge the selected faces about a selected edge of theirs: they sweep",
+              "line": 1252,
+              "deprecated": false
+            },
+            {
+              "name": "select_edges_by_angle",
+              "qualname": "EditUtils.select_edges_by_angle",
+              "kind": "staticmethod",
+              "signature": "(objects=None, low_angle=0.0, high_angle=180.0)",
+              "summary": "Select the edges whose two faces meet at an angle within",
+              "line": 1291,
               "deprecated": false
             },
             {
@@ -7880,7 +8033,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Merge vertices in pairs by moving them to their center and merging.",
-              "line": 1180,
+              "line": 1328,
               "deprecated": false
             },
             {
@@ -7889,7 +8042,7 @@
               "kind": "staticmethod",
               "signature": "(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True, center_pivot: bool = True) -> Optional[List]",
               "summary": "Detach mesh components (vertices or faces) from their parent mesh.",
-              "line": 1220,
+              "line": 1368,
               "deprecated": false
             },
             {
@@ -7898,7 +8051,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, percentage: float = 50.0, preserve_borders: bool = True, preserve_hard_edges: bool = True, preserve_uv_borders: bool = True, preserve_quads: bool = True, symmetry: bool = False, symmetry_tolerance: float = 0.01, delete_history: bool = True) -> List[str]",
               "summary": "Decimate (``polyReduce``) meshes toward a target reduction percentage.",
-              "line": 1385,
+              "line": 1533,
               "deprecated": false
             },
             {
@@ -7907,7 +8060,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, angle_tolerance: float = 1.0, delete_history: bool = True) -> List[str]",
               "summary": "Planar decimation (limited dissolve) — merge faces across near-coplanar edges.",
-              "line": 1458,
+              "line": 1606,
               "deprecated": false
             },
             {
@@ -7916,7 +8069,7 @@
               "kind": "staticmethod",
               "signature": "(obj, axis='x', pivot='center', axis_frame=None)",
               "summary": "Get all faces on the specified axis of an object.",
-              "line": 1547,
+              "line": 1695,
               "deprecated": false
             },
             {
@@ -7925,7 +8078,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis='x', pivot='center', amount=1, offset=0, spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, invert=False, ortho=False, delete=False, mirror=False, axis_frame=None)",
               "summary": "Cut objects along the specified axis.",
-              "line": 1726,
+              "line": 1874,
               "deprecated": false
             },
             {
@@ -7934,7 +8087,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis='-x', pivot='center', delete_history=True, mirror=False, axis_frame=None)",
               "summary": "Delete faces along the specified axis and optionally mirror the result.",
-              "line": 1926,
+              "line": 2074,
               "deprecated": false
             },
             {
@@ -7943,7 +8096,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'x', pivot: Union[str, tuple] = 'object', mergeMode: int = -1, axis_frame: Optional[str] = None, delete_original: bool = False, center_pivot: bool = True, **kwargs)",
               "summary": "Mirror geometry across a given axis.",
-              "line": 2015,
+              "line": 2163,
               "deprecated": false
             },
             {
@@ -7952,7 +8105,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, axis: str = 'x', pivot: Union[str, tuple] = 'object', axis_frame: Optional[str] = None) -> list",
               "summary": "Mirror as **instances**: each object gets a linked copy reflected",
-              "line": 2158,
+              "line": 2306,
               "deprecated": false
             },
             {
@@ -7961,7 +8114,7 @@
               "kind": "staticmethod",
               "signature": "(mirror_node: str, center_pivot: bool = True, delete_original: bool = False) -> Optional[str]",
               "summary": "Separate mirrored geometry and clean up hierarchy, history, and parenting.",
-              "line": 2228,
+              "line": 2376,
               "deprecated": false
             },
             {
@@ -7970,7 +8123,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, retain_given_objects: bool = False, select: bool = False, verbose: bool = False) -> set",
               "summary": "Find duplicate, overlapping geometry at the object (transform) level.",
-              "line": 2394,
+              "line": 2542,
               "deprecated": false
             },
             {
@@ -7979,7 +8132,7 @@
               "kind": "staticmethod",
               "signature": "(objects, select=1)",
               "summary": "Locate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2568,
+              "line": 2716,
               "deprecated": false
             },
             {
@@ -7988,7 +8141,7 @@
               "kind": "staticmethod",
               "signature": "(vertex, select=True)",
               "summary": "Separate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2636,
+              "line": 2784,
               "deprecated": false
             },
             {
@@ -7997,7 +8150,7 @@
               "kind": "staticmethod",
               "signature": "(objects, threshold=0.0003)",
               "summary": "Query the given objects for overlapping vertices.",
-              "line": 2699,
+              "line": 2847,
               "deprecated": false
             },
             {
@@ -8006,7 +8159,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, delete_history=False)",
               "summary": "Get any duplicate overlapping faces of the given objects.",
-              "line": 2731,
+              "line": 2879,
               "deprecated": false
             },
             {
@@ -8015,7 +8168,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.0, inc_orig=False, select=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyEvaluate command.",
-              "line": 2807,
+              "line": 2955,
               "deprecated": false
             },
             {
@@ -8024,7 +8177,7 @@
               "kind": "staticmethod",
               "signature": "(obj, inc_orig=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyCompare command.",
-              "line": 2905,
+              "line": 3053,
               "deprecated": false
             },
             {
@@ -8033,7 +8186,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection to unselected mesh transforms.",
-              "line": 2944,
+              "line": 3092,
               "deprecated": false
             },
             {
@@ -8042,7 +8195,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection of mesh components (verts, edges, or faces).",
-              "line": 2982,
+              "line": 3130,
               "deprecated": false
             },
             {
@@ -8051,7 +8204,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Delete selected components and/or objects in Autodesk Maya.",
-              "line": 3044,
+              "line": 3192,
               "deprecated": false
             },
             {
@@ -8060,7 +8213,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, str]",
               "summary": "The Convert menu: ``{label: MEL}`` in menu order, each a conversion",
-              "line": 3132,
+              "line": 3280,
               "deprecated": false
             },
             {
@@ -8069,7 +8222,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, conversion: str) -> List[str]",
               "summary": "Convert *objects* (``None``: the selection) by a :meth:`get_conversion_types`",
-              "line": 3142,
+              "line": 3290,
               "deprecated": false
             },
             {
@@ -8078,7 +8231,7 @@
               "kind": "staticmethod",
               "signature": "(edges: Optional[List[str]] = None, **kwargs)",
               "summary": "Create a curve from selected polygon edges or a provided list of edges.",
-              "line": 3168,
+              "line": 3316,
               "deprecated": false
             }
           ]
@@ -9450,7 +9603,7 @@
               "name": "select_by_type",
               "qualname": "Selection.select_by_type",
               "kind": "staticmethod",
-              "signature": "(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace') -> List[object]",
+              "signature": "(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace', scope: str = None) -> List[object]",
               "summary": "Select objects by type with comprehensive type support.",
               "line": 125,
               "deprecated": false
@@ -9461,7 +9614,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[Union[str, object]]) -> Set[object]",
               "summary": "Select the immediate children of the given objects.",
-              "line": 178,
+              "line": 185,
               "deprecated": false
             },
             {
@@ -9470,7 +9623,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[Union[str, object]]) -> Set[object]",
               "summary": "Select all parent objects in the hierarchy above the given objects.",
-              "line": 200,
+              "line": 207,
               "deprecated": false
             },
             {
@@ -9479,7 +9632,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[Union[str, object]]) -> Set[object]",
               "summary": "Select all child objects in the hierarchy below the given objects.",
-              "line": 225,
+              "line": 232,
               "deprecated": false
             },
             {
@@ -9488,7 +9641,7 @@
               "kind": "staticmethod",
               "signature": "() -> List[str]",
               "summary": "Mesh shapes a rig makes unpickable: their display type is DRIVEN",
-              "line": 383,
+              "line": 390,
               "deprecated": false
             },
             {
@@ -9497,7 +9650,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "The live mode (see :meth:`set_rig_selection_mode`);",
-              "line": 412,
+              "line": 419,
               "deprecated": false
             },
             {
@@ -9506,7 +9659,115 @@
               "kind": "classmethod",
               "signature": "(cls, mode: str) -> List[str]",
               "summary": "How object picking treats rigged parts.",
-              "line": 428,
+              "line": 435,
+              "deprecated": false
+            },
+            {
+              "name": "objects_in_scope",
+              "qualname": "Selection.objects_in_scope",
+              "kind": "staticmethod",
+              "signature": "(scope: str = 'all') -> List[str]",
+              "summary": "The objects a selection filter draws from.",
+              "line": 475,
+              "deprecated": false
+            },
+            {
+              "name": "reorder_selection",
+              "qualname": "Selection.reorder_selection",
+              "kind": "staticmethod",
+              "signature": "(objects=None, method: str = 'name', reverse: bool = False) -> List[str]",
+              "summary": "Reselect *objects* in the order *method* sorts them",
+              "line": 496,
+              "deprecated": false
+            },
+            {
+              "name": "get_conversion_types",
+              "qualname": "Selection.get_conversion_types",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "The conversions :meth:`convert_selection` knows, in menu order.",
+              "line": 545,
+              "deprecated": false
+            },
+            {
+              "name": "convert_selection",
+              "qualname": "Selection.convert_selection",
+              "kind": "classmethod",
+              "signature": "(cls, conversion: str) -> List[str]",
+              "summary": "Convert the component selection (Maya's Select > Convert Selection).",
+              "line": 551,
+              "deprecated": false
+            },
+            {
+              "name": "get_selection_constraints",
+              "qualname": "Selection.get_selection_constraints",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "The selection constraints now on: Maya keeps each on, constraining",
+              "line": 596,
+              "deprecated": false
+            },
+            {
+              "name": "set_selection_constraint",
+              "qualname": "Selection.set_selection_constraint",
+              "kind": "classmethod",
+              "signature": "(cls, constraint: str, state: bool = True) -> List[str]",
+              "summary": "Switch one selection constraint on or off;",
+              "line": 607,
+              "deprecated": false
+            },
+            {
+              "name": "select_edge_path",
+              "qualname": "Selection.select_edge_path",
+              "kind": "classmethod",
+              "signature": "(cls, components=None, path: str = 'edge_loop', step: int = 1) -> List[str]",
+              "summary": "Select the edge path through *components*, keeping every *step*-th",
+              "line": 647,
+              "deprecated": false
+            },
+            {
+              "name": "select_similar",
+              "qualname": "Selection.select_similar",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, tolerance: float = 0.0, include_original: bool = False, **metrics)",
+              "summary": "Select what is similar to the selection.",
+              "line": 705,
+              "deprecated": false
+            },
+            {
+              "name": "select_island",
+              "qualname": "Selection.select_island",
+              "kind": "staticmethod",
+              "signature": "(faces=None, range_x: float = 0.05, range_y: float = 0.05, range_z: float = 0.05, delimit=None) -> List[str]",
+              "summary": "Select the contiguous faces, around the selected ones, whose normals",
+              "line": 794,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_selectability",
+              "qualname": "Selection.toggle_selectability",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None)",
+              "summary": "Toggle whether *objects* can be picked in the viewport: Maya's",
+              "line": 842,
+              "deprecated": false
+            },
+            {
+              "name": "get_ignore_backfacing",
+              "qualname": "Selection.get_ignore_backfacing",
+              "kind": "staticmethod",
+              "signature": "() -> bool",
+              "summary": "True while viewport picks skip what faces away from the camera",
+              "line": 886,
+              "deprecated": false
+            },
+            {
+              "name": "set_ignore_backfacing",
+              "qualname": "Selection.set_ignore_backfacing",
+              "kind": "staticmethod",
+              "signature": "(state: bool = True) -> bool",
+              "summary": "Turn camera-based selection on or off;",
+              "line": 893,
               "deprecated": false
             },
             {
@@ -9515,7 +9776,7 @@
               "kind": "staticmethod",
               "signature": "() -> List[str]",
               "summary": "Get a list of all available selection types.",
-              "line": 464,
+              "line": 899,
               "deprecated": false
             },
             {
@@ -9524,7 +9785,7 @@
               "kind": "staticmethod",
               "signature": "() -> dict",
               "summary": "Get a dictionary of selection types organized by category.",
-              "line": 474,
+              "line": 909,
               "deprecated": false
             }
           ]
@@ -9579,6 +9840,33 @@
               "signature": "(objects=None, grid_size: float = 1.0, axes: str = 'xyz') -> int",
               "summary": "Snap object pivots or vertices to the nearest grid point.",
               "line": 214,
+              "deprecated": false
+            }
+          ]
+        }
+      ],
+      "constants": []
+    },
+    {
+      "relpath": "edit_utils/target_weld.py",
+      "summary": "Target Weld: Maya's Merge Vertex Tool, set up to drag one vertex onto another.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "TargetWeld",
+          "summary": "Maya's interactive target weld (``MergeVertexTool``).",
+          "line": 18,
+          "bases": [
+            "pythontk.HelpMixin"
+          ],
+          "members": [
+            {
+              "name": "activate",
+              "qualname": "TargetWeld.activate",
+              "kind": "staticmethod",
+              "signature": "(merge_to_center: bool = False) -> bool",
+              "summary": "Start the Merge Vertex Tool in vertex component mode with nothing",
+              "line": 22,
               "deprecated": false
             }
           ]
