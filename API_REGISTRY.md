@@ -110,10 +110,8 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`env_utils/handoff_export.py`](#env_utils--handoff_export) — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - [`env_utils/hierarchy_sync/_hierarchy_sync.py`](#env_utils--hierarchy_sync--_hierarchy_sync)
 - [`env_utils/hierarchy_sync/hierarchy_baseline.py`](#env_utils--hierarchy_sync--hierarchy_baseline) — The scene's hierarchy baseline, stored in the scene.
-- [`env_utils/hierarchy_sync/hierarchy_sync_slots.py`](#env_utils--hierarchy_sync--hierarchy_sync_slots)
+- [`env_utils/hierarchy_sync/hierarchy_sync_session.py`](#env_utils--hierarchy_sync--hierarchy_sync_session) — Hierarchy Sync's host half: the reference a diff runs against, held in the
 - [`env_utils/hierarchy_sync/scene_data_sidecar.py`](#env_utils--hierarchy_sync--scene_data_sidecar) — Scene-data sidecar -- Maya's scene hooks over ``ptk.SceneDataSidecarBase``.
-- [`env_utils/hierarchy_sync/tree_renderer.py`](#env_utils--hierarchy_sync--tree_renderer) — Tree rendering, formatting, and selection management for the hierarchy sync UI.
-- [`env_utils/hierarchy_sync/tree_utils.py`](#env_utils--hierarchy_sync--tree_utils) — Tree widget utilities for hierarchy sync UI operations.
 - [`env_utils/material_records.py`](#env_utils--material_records) — The ``materials`` record's Maya producer.
 - [`env_utils/maya_connection.py`](#env_utils--maya_connection) — Maya Connection Module
 - [`env_utils/namespace_sandbox.py`](#env_utils--namespace_sandbox)
@@ -243,7 +241,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L262) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L264) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -2214,48 +2212,36 @@ The scene's hierarchy baseline, stored in the scene.
 
 - **[`class HierarchyBaseline(pythontk.HierarchyBaselineStore)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_baseline.py#L50)** — Read, compare and roll forward the scene's hierarchy baseline.
 
-<a id="env_utils--hierarchy_sync--hierarchy_sync_slots"></a>
-### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
+<a id="env_utils--hierarchy_sync--hierarchy_sync_session"></a>
+### `env_utils/hierarchy_sync/hierarchy_sync_session.py`
 
-- **[`class HierarchySyncController(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L26)** — Controller for hierarchy management operations.
-  - `HierarchySyncController.workspace(self) -> Optional[str]` *(property)* — Get the current workspace directory.
-  - `HierarchySyncController.reference_path(self) -> str` *(property)* — The current reference scene path.
-  - `HierarchySyncController.analyze_hierarchies(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool` — Analyze hierarchies and perform comparison.
-  - `HierarchySyncController.pull_objects(self, object_names: List[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool` — Pull objects from reference scene to current scene.
-  - `HierarchySyncController.repair_hierarchies(self, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool` — Run repair operations on the current scene to match reference hierarchy.
-  - `HierarchySyncController.select_objects_in_maya(self, object_names: List[str]) -> int` — Select objects in Maya scene by name.
-  - `HierarchySyncController.populate_reference_tree(self, tree_widget, reference_path: str = None)` — Populate the reference tree — handles cache, import, and rendering.
-  - `HierarchySyncController.refresh_trees(self, restore_selection: bool = True)` — Refresh both tree widgets with current hierarchy data.
-  - `HierarchySyncController.is_path_ignored(self, tree_widget, path)` — Check whether *path* (or any ancestor) is in the ignored set.
-  - `HierarchySyncController.clear_ignored_paths(self)` — Clear all ignored paths for both trees.
-  - `HierarchySyncController.log_diff_results(self)` — Log detailed hierarchy difference analysis results using rich formatting.
-  - `HierarchySyncController.get_recent_reference_scenes(self) -> List[str]` — Get recent reference scenes from settings.
-  - `HierarchySyncController.save_recent_reference_scene(self, scene_path: str)` — Save reference scene to recent list.
-- **[`class HierarchySyncSlots(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L1056)** — Slots class for hierarchy management UI operations.
-  - `HierarchySyncSlots.header_init(self, widget)` — Initialize the header widget.
-  - `HierarchySyncSlots.tree000_init(self, widget)` — Initialize the reference/imported hierarchy tree widget.
-  - `HierarchySyncSlots.tree001_init(self, widget)` — Initialize the current scene hierarchy tree widget.
-  - `HierarchySyncSlots.cmb_diff_options_init(self, widget)` — Populate the diff-options WidgetComboBox below the Diff button.
-  - `HierarchySyncSlots.cmb_pull_options_init(self, widget)` — Populate the pull-options WidgetComboBox below the Pull button.
-  - `HierarchySyncSlots.tb003_init(self, widget)` — Initialize the fix/repair toggle button with options menu.
-  - `HierarchySyncSlots.tb001(self, state=None)` — Run the diff analysis using settings from cmb_diff_options.
-  - `HierarchySyncSlots.tb002(self, state=None)` — Toggle button for pull objects with options menu.
-  - `HierarchySyncSlots.tb003(self, state=None)` — Toggle button for fix/repair operations.
-  - `HierarchySyncSlots.b003(self)` — Browse for reference scene file.
-  - `HierarchySyncSlots.b005(self)` — Refresh current scene hierarchy tree.
-  - `HierarchySyncSlots.b006(self)` — Select checked objects in Maya scene.
-  - `HierarchySyncSlots.b007(self)` — Expand all items in current scene tree.
-  - `HierarchySyncSlots.b008(self)` — Collapse all items in current scene tree.
-  - `HierarchySyncSlots.b009(self)` — Refresh reference hierarchy tree.
-  - `HierarchySyncSlots.b011(self)` — Show differences between hierarchies.
-  - `HierarchySyncSlots.b012(self)` — Analyze hierarchies and perform comparison.
-  - `HierarchySyncSlots.b013(self)` — Ignore selected items in the reference tree.
-  - `HierarchySyncSlots.b014(self)` — Unignore selected items in the reference tree.
-  - `HierarchySyncSlots.b015(self)` — Ignore selected items in the current scene tree.
-  - `HierarchySyncSlots.b016(self)` — Unignore selected items in the current scene tree.
-  - `HierarchySyncSlots.b018(self)` — Delete selected objects from the Maya scene and refresh the tree.
-  - `HierarchySyncSlots.b017(self)` — Rename current-scene items to match reference names.
-  - `HierarchySyncSlots.count_tree_items(self, tree_widget)` — Count total items in a tree widget.
+Hierarchy Sync's host half: the reference a diff runs against, held in the
+
+- **[`class HierarchySyncSession(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_session.py#L37)** — The reference held for a diff, the last analysis, and the scene calls
+  - `HierarchySyncSession.loggers(cls) -> list` *(class)* — The loggers this session's work reports through: its own and its
+  - `HierarchySyncSession.fuzzy_matching(self) -> bool` *(property)* — Whether the last analysis matched names fuzzily.
+  - `HierarchySyncSession.is_loaded(self, reference_path: str) -> bool` — Whether *reference_path* is the reference this session holds.
+  - `HierarchySyncSession.load_reference(self, reference_path: str) -> Optional[List[str]]` — Import *reference_path* into a temporary namespace, or reuse the
+  - `HierarchySyncSession.release_reference(self) -> None` — Remove the held reference import (its namespace and nodes).
+  - `HierarchySyncSession.analyze(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool` — Diff the whole scene against *reference_path* (loaded or reused).
+  - `HierarchySyncSession.clear_analysis(self) -> None` — Drop the last analysis and release the reference.
+  - `HierarchySyncSession.repair(self, differences: Optional[Dict[str, list]] = None, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool` — Repair the scene toward the reference, from the last analysis.
+  - `HierarchySyncSession.pull(self, targets: Sequence[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool` — Bring reference nodes into the current scene.
+  - `HierarchySyncSession.current_scene_nodes(self) -> List[str]` — The current scene's transforms the panel's tree shows: no default
+  - `HierarchySyncSession.hierarchy_structure(nodes) -> Tuple[Dict[str, dict], List[str]]` *(static)* — The tree a panel draws from *nodes*.
+  - `HierarchySyncSession.clean_path(path: str) -> str` *(static)* — *path* as the diff compares it: each component's namespace dropped.
+  - `HierarchySyncSession.node_path(node) -> str` *(static)* — The name a pull or a selection takes *node* by: its DAG path.
+  - `HierarchySyncSession.node_name(node) -> str` *(static)* — *node*'s name: its DAG path's leaf, namespace dropped.
+  - `HierarchySyncSession.node_alive(node) -> bool` *(static)* — Whether *node* (a tree item's node) names a node in the scene.
+  - `HierarchySyncSession.rename_nodes(self, pairs: Sequence[Tuple[Any, str]]) -> List[Optional[str]]` — Rename each ``(node, new_name)`` pair, as one undo chunk.
+  - `HierarchySyncSession.reparent_nodes(self, moves: Sequence[Tuple[Any, Any]]) -> int` — Reparent each ``(node, parent)`` move (``parent=None``: to the
+  - `HierarchySyncSession.delete_nodes(self, nodes: Sequence[Any]) -> List[str]` — Delete *nodes* (and so their subtrees), as one undo chunk.
+  - `HierarchySyncSession.select_nodes(nodes: Sequence[Any]) -> int` *(static)* — Select *nodes* in the scene (an ambiguous name is skipped).
+  - `HierarchySyncSession.scene_path() -> str` *(static)* — The open scene's file, or ``""`` (unsaved, or no Maya).
+  - `HierarchySyncSession.workspace() -> str` *(static)* — The current project's root, or ``""``.
+  - `HierarchySyncSession.recent_scenes() -> List[str]` *(static)* — The recently opened scenes, most recent first.
+  - `HierarchySyncSession.open_scene(path: str) -> None` *(static)* — Open *path* as the current scene (unsaved changes discarded, as
+  - `HierarchySyncSession.reference_formats() -> List[str]` *(static)* — The extensions a reference may have (what the sandbox imports).
 
 <a id="env_utils--hierarchy_sync--scene_data_sidecar"></a>
 ### `env_utils/hierarchy_sync/scene_data_sidecar.py`
@@ -2266,41 +2252,6 @@ Scene-data sidecar -- Maya's scene hooks over ``ptk.SceneDataSidecarBase``.
   - `SceneDataSidecar.build_clean_path_set(cls, objects) -> set` *(class)* — Build a set of namespace-stripped hierarchy paths from DAG long paths.
   - `SceneDataSidecar.expand_to_descendants(objects) -> list` *(static)* — Return *objects* plus all their DAG descendants (full paths).
   - `SceneDataSidecar.drop_intermediate(nodes) -> list` *(static)* — *nodes* minus intermediate shapes (``…ShapeOrig`` and kin).
-
-<a id="env_utils--hierarchy_sync--tree_renderer"></a>
-### `env_utils/hierarchy_sync/tree_renderer.py`
-
-Tree rendering, formatting, and selection management for the hierarchy sync UI.
-
-- **[`class HierarchyTreeRenderer(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_renderer.py#L29)** — Owns all QTreeWidget population, diff-colour formatting, ignore
-  - `HierarchyTreeRenderer.populate_current_scene_tree(self, tree_widget)` — Populate the current scene hierarchy tree.
-  - `HierarchyTreeRenderer.populate_reference_tree(self, tree_widget, transforms, reference_name='Reference Scene')` — Populate the reference hierarchy tree with pre-fetched transforms.
-  - `HierarchyTreeRenderer.show_reference_placeholder(self, tree_widget, reference_name='Reference Scene')` — Show a 'Browse for Reference Scene' placeholder in an empty tree.
-  - `HierarchyTreeRenderer.show_reference_error(self, tree_widget, reference_name='Reference Scene', message='File Not Found')` — Show an error or status message in the reference tree.
-  - `HierarchyTreeRenderer.populate_tree_with_hierarchy(self, tree_widget, objects, tree_type='current')` — Populate tree widget with proper Maya-style hierarchy.
-  - `HierarchyTreeRenderer.apply_difference_formatting(self, tree001, tree000)` — Apply color formatting to tree widgets based on hierarchy differences.
-  - `HierarchyTreeRenderer.clear_tree_colors(self, tree_widget)` — Remove foreground/background colors from every item in a tree widget.
-  - `HierarchyTreeRenderer.format_tree_differences(self, tree_widget, tree_type, tree_matcher, by_full, by_clean, by_last)` — Format a specific tree widget based on differences.
-  - `HierarchyTreeRenderer.apply_ignore_styling(self, tree_widget)` — Apply strikethrough/dim styling for ignored items — and, when the 'Hide Ignored'
-  - `HierarchyTreeRenderer.build_item_path(item)` *(static)* — Build a pipe-separated hierarchy path from a QTreeWidgetItem.
-  - `HierarchyTreeRenderer.find_tree_item_by_name(self, tree_widget, object_name)` — Find a tree item by object name (first column).
-  - `HierarchyTreeRenderer.get_selected_tree_items(self, tree_widget)` — Get selected items from a tree widget.
-  - `HierarchyTreeRenderer.get_selected_object_names(self, tree_widget)` — Extract object names from selected tree widget items.
-
-<a id="env_utils--hierarchy_sync--tree_utils"></a>
-### `env_utils/hierarchy_sync/tree_utils.py`
-
-Tree widget utilities for hierarchy sync UI operations.
-
-- **[`class TreePathMatcher(pythontk.LoggingMixin, _TreePathMatcherInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L46)** — Tree path matching functionality for UI tree widgets.
-  - `TreePathMatcher.build_tree_index(self, widget)` — Build tree indices for fast item lookup.
-  - `TreePathMatcher.find_path_matches(self, target_path: str, by_full: dict, by_clean_full: dict, by_last: dict, prefer_cleaned: bool = False, strict: bool = False)` — Find tree items matching a target path using multiple strategies.
-  - `TreePathMatcher.log_matching_debug(self, path, candidates, strategy, prefix='')` — Log debug information about path matching.
-  - `TreePathMatcher.log_tree_index_debug(self, by_full, by_clean_full, by_last, tree_type)` — Log debug information about tree indices.
-  - `TreePathMatcher.get_selected_object_names(tree_widget) -> List[str]` *(static)* — Extract object names from selected tree widget items.
-  - `TreePathMatcher.get_selected_tree_items(tree_widget) -> list` *(static)* — Get all selected items from tree widget.
-  - `TreePathMatcher.find_tree_item_by_name(tree_widget, object_name: str)` *(static)* — Find tree widget item by object name.
-  - `TreePathMatcher.build_hierarchy_structure(objects: list) -> Tuple[Dict[str, Dict], List[str]]` *(static)* — Build hierarchical structure from Maya transform objects.
 
 <a id="env_utils--material_records"></a>
 ### `env_utils/material_records.py`

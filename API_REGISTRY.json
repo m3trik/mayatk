@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 262,
+          "line": 264,
           "deprecated": false
         }
       ]
@@ -13351,359 +13351,232 @@
       "constants": []
     },
     {
-      "relpath": "env_utils/hierarchy_sync/hierarchy_sync_slots.py",
-      "summary": "",
+      "relpath": "env_utils/hierarchy_sync/hierarchy_sync_session.py",
+      "summary": "Hierarchy Sync's host half: the reference a diff runs against, held in the",
       "functions": [],
       "classes": [
         {
-          "name": "HierarchySyncController",
-          "summary": "Controller for hierarchy management operations.",
-          "line": 26,
+          "name": "HierarchySyncSession",
+          "summary": "The reference held for a diff, the last analysis, and the scene calls",
+          "line": 37,
           "bases": [
             "pythontk.LoggingMixin"
           ],
           "members": [
             {
-              "name": "workspace",
-              "qualname": "HierarchySyncController.workspace",
-              "kind": "property",
-              "signature": "(self) -> Optional[str]",
-              "summary": "Get the current workspace directory.",
-              "line": 81,
+              "name": "loggers",
+              "qualname": "HierarchySyncSession.loggers",
+              "kind": "classmethod",
+              "signature": "(cls) -> list",
+              "summary": "The loggers this session's work reports through: its own and its",
+              "line": 62,
               "deprecated": false
             },
             {
-              "name": "reference_path",
-              "qualname": "HierarchySyncController.reference_path",
+              "name": "fuzzy_matching",
+              "qualname": "HierarchySyncSession.fuzzy_matching",
               "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "The current reference scene path.",
-              "line": 89,
+              "signature": "(self) -> bool",
+              "summary": "Whether the last analysis matched names fuzzily.",
+              "line": 86,
               "deprecated": false
             },
             {
-              "name": "analyze_hierarchies",
-              "qualname": "HierarchySyncController.analyze_hierarchies",
+              "name": "is_loaded",
+              "qualname": "HierarchySyncSession.is_loaded",
+              "kind": "method",
+              "signature": "(self, reference_path: str) -> bool",
+              "summary": "Whether *reference_path* is the reference this session holds.",
+              "line": 91,
+              "deprecated": false
+            },
+            {
+              "name": "load_reference",
+              "qualname": "HierarchySyncSession.load_reference",
+              "kind": "method",
+              "signature": "(self, reference_path: str) -> Optional[List[str]]",
+              "summary": "Import *reference_path* into a temporary namespace, or reuse the",
+              "line": 98,
+              "deprecated": false
+            },
+            {
+              "name": "release_reference",
+              "qualname": "HierarchySyncSession.release_reference",
+              "kind": "method",
+              "signature": "(self) -> None",
+              "summary": "Remove the held reference import (its namespace and nodes).",
+              "line": 173,
+              "deprecated": false
+            },
+            {
+              "name": "analyze",
+              "qualname": "HierarchySyncSession.analyze",
               "kind": "method",
               "signature": "(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool",
-              "summary": "Analyze hierarchies and perform comparison.",
-              "line": 132,
+              "summary": "Diff the whole scene against *reference_path* (loaded or reused).",
+              "line": 227,
               "deprecated": false
             },
             {
-              "name": "pull_objects",
-              "qualname": "HierarchySyncController.pull_objects",
+              "name": "clear_analysis",
+              "qualname": "HierarchySyncSession.clear_analysis",
               "kind": "method",
-              "signature": "(self, object_names: List[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool",
-              "summary": "Pull objects from reference scene to current scene.",
-              "line": 310,
+              "signature": "(self) -> None",
+              "summary": "Drop the last analysis and release the reference.",
+              "line": 295,
               "deprecated": false
             },
             {
-              "name": "repair_hierarchies",
-              "qualname": "HierarchySyncController.repair_hierarchies",
+              "name": "repair",
+              "qualname": "HierarchySyncSession.repair",
               "kind": "method",
-              "signature": "(self, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool",
-              "summary": "Run repair operations on the current scene to match reference hierarchy.",
-              "line": 396,
+              "signature": "(self, differences: Optional[Dict[str, list]] = None, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool",
+              "summary": "Repair the scene toward the reference, from the last analysis.",
+              "line": 303,
               "deprecated": false
             },
             {
-              "name": "select_objects_in_maya",
-              "qualname": "HierarchySyncController.select_objects_in_maya",
+              "name": "pull",
+              "qualname": "HierarchySyncSession.pull",
               "kind": "method",
-              "signature": "(self, object_names: List[str]) -> int",
-              "summary": "Select objects in Maya scene by name.",
+              "signature": "(self, targets: Sequence[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool",
+              "summary": "Bring reference nodes into the current scene.",
+              "line": 425,
+              "deprecated": false
+            },
+            {
+              "name": "current_scene_nodes",
+              "qualname": "HierarchySyncSession.current_scene_nodes",
+              "kind": "method",
+              "signature": "(self) -> List[str]",
+              "summary": "The current scene's transforms the panel's tree shows: no default",
+              "line": 566,
+              "deprecated": false
+            },
+            {
+              "name": "hierarchy_structure",
+              "qualname": "HierarchySyncSession.hierarchy_structure",
+              "kind": "staticmethod",
+              "signature": "(nodes) -> Tuple[Dict[str, dict], List[str]]",
+              "summary": "The tree a panel draws from *nodes*.",
+              "line": 589,
+              "deprecated": false
+            },
+            {
+              "name": "clean_path",
+              "qualname": "HierarchySyncSession.clean_path",
+              "kind": "staticmethod",
+              "signature": "(path: str) -> str",
+              "summary": "*path* as the diff compares it: each component's namespace dropped.",
+              "line": 624,
+              "deprecated": false
+            },
+            {
+              "name": "node_path",
+              "qualname": "HierarchySyncSession.node_path",
+              "kind": "staticmethod",
+              "signature": "(node) -> str",
+              "summary": "The name a pull or a selection takes *node* by: its DAG path.",
+              "line": 629,
+              "deprecated": false
+            },
+            {
+              "name": "node_name",
+              "qualname": "HierarchySyncSession.node_name",
+              "kind": "staticmethod",
+              "signature": "(node) -> str",
+              "summary": "*node*'s name: its DAG path's leaf, namespace dropped.",
+              "line": 634,
+              "deprecated": false
+            },
+            {
+              "name": "node_alive",
+              "qualname": "HierarchySyncSession.node_alive",
+              "kind": "staticmethod",
+              "signature": "(node) -> bool",
+              "summary": "Whether *node* (a tree item's node) names a node in the scene.",
+              "line": 639,
+              "deprecated": false
+            },
+            {
+              "name": "rename_nodes",
+              "qualname": "HierarchySyncSession.rename_nodes",
+              "kind": "method",
+              "signature": "(self, pairs: Sequence[Tuple[Any, str]]) -> List[Optional[str]]",
+              "summary": "Rename each ``(node, new_name)`` pair, as one undo chunk.",
+              "line": 648,
+              "deprecated": false
+            },
+            {
+              "name": "reparent_nodes",
+              "qualname": "HierarchySyncSession.reparent_nodes",
+              "kind": "method",
+              "signature": "(self, moves: Sequence[Tuple[Any, Any]]) -> int",
+              "summary": "Reparent each ``(node, parent)`` move (``parent=None``: to the",
               "line": 682,
               "deprecated": false
             },
             {
-              "name": "populate_reference_tree",
-              "qualname": "HierarchySyncController.populate_reference_tree",
+              "name": "delete_nodes",
+              "qualname": "HierarchySyncSession.delete_nodes",
               "kind": "method",
-              "signature": "(self, tree_widget, reference_path: str = None)",
-              "summary": "Populate the reference tree — handles cache, import, and rendering.",
-              "line": 688,
+              "signature": "(self, nodes: Sequence[Any]) -> List[str]",
+              "summary": "Delete *nodes* (and so their subtrees), as one undo chunk.",
+              "line": 752,
               "deprecated": false
             },
             {
-              "name": "refresh_trees",
-              "qualname": "HierarchySyncController.refresh_trees",
-              "kind": "method",
-              "signature": "(self, restore_selection: bool = True)",
-              "summary": "Refresh both tree widgets with current hierarchy data.",
-              "line": 736,
+              "name": "select_nodes",
+              "qualname": "HierarchySyncSession.select_nodes",
+              "kind": "staticmethod",
+              "signature": "(nodes: Sequence[Any]) -> int",
+              "summary": "Select *nodes* in the scene (an ambiguous name is skipped).",
+              "line": 778,
               "deprecated": false
             },
             {
-              "name": "is_path_ignored",
-              "qualname": "HierarchySyncController.is_path_ignored",
-              "kind": "method",
-              "signature": "(self, tree_widget, path)",
-              "summary": "Check whether *path* (or any ancestor) is in the ignored set.",
-              "line": 805,
+              "name": "scene_path",
+              "qualname": "HierarchySyncSession.scene_path",
+              "kind": "staticmethod",
+              "signature": "() -> str",
+              "summary": "The open scene's file, or ``\"\"`` (unsaved, or no Maya).",
+              "line": 787,
               "deprecated": false
             },
             {
-              "name": "clear_ignored_paths",
-              "qualname": "HierarchySyncController.clear_ignored_paths",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Clear all ignored paths for both trees.",
-              "line": 812,
+              "name": "workspace",
+              "qualname": "HierarchySyncSession.workspace",
+              "kind": "staticmethod",
+              "signature": "() -> str",
+              "summary": "The current project's root, or ``\"\"``.",
+              "line": 794,
               "deprecated": false
             },
             {
-              "name": "log_diff_results",
-              "qualname": "HierarchySyncController.log_diff_results",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Log detailed hierarchy difference analysis results using rich formatting.",
-              "line": 852,
+              "name": "recent_scenes",
+              "qualname": "HierarchySyncSession.recent_scenes",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "The recently opened scenes, most recent first.",
+              "line": 804,
               "deprecated": false
             },
             {
-              "name": "get_recent_reference_scenes",
-              "qualname": "HierarchySyncController.get_recent_reference_scenes",
-              "kind": "method",
-              "signature": "(self) -> List[str]",
-              "summary": "Get recent reference scenes from settings.",
-              "line": 1026,
+              "name": "open_scene",
+              "qualname": "HierarchySyncSession.open_scene",
+              "kind": "staticmethod",
+              "signature": "(path: str) -> None",
+              "summary": "Open *path* as the current scene (unsaved changes discarded, as",
+              "line": 811,
               "deprecated": false
             },
             {
-              "name": "save_recent_reference_scene",
-              "qualname": "HierarchySyncController.save_recent_reference_scene",
-              "kind": "method",
-              "signature": "(self, scene_path: str)",
-              "summary": "Save reference scene to recent list.",
-              "line": 1034,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "HierarchySyncSlots",
-          "summary": "Slots class for hierarchy management UI operations.",
-          "line": 1056,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "HierarchySyncSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the header widget.",
-              "line": 1178,
-              "deprecated": false
-            },
-            {
-              "name": "tree000_init",
-              "qualname": "HierarchySyncSlots.tree000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the reference/imported hierarchy tree widget.",
-              "line": 1245,
-              "deprecated": false
-            },
-            {
-              "name": "tree001_init",
-              "qualname": "HierarchySyncSlots.tree001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the current scene hierarchy tree widget.",
-              "line": 1498,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_diff_options_init",
-              "qualname": "HierarchySyncSlots.cmb_diff_options_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the diff-options WidgetComboBox below the Diff button.",
-              "line": 1598,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_pull_options_init",
-              "qualname": "HierarchySyncSlots.cmb_pull_options_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Populate the pull-options WidgetComboBox below the Pull button.",
-              "line": 1703,
-              "deprecated": false
-            },
-            {
-              "name": "tb003_init",
-              "qualname": "HierarchySyncSlots.tb003_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the fix/repair toggle button with options menu.",
-              "line": 1732,
-              "deprecated": false
-            },
-            {
-              "name": "tb001",
-              "qualname": "HierarchySyncSlots.tb001",
-              "kind": "method",
-              "signature": "(self, state=None)",
-              "summary": "Run the diff analysis using settings from cmb_diff_options.",
-              "line": 1782,
-              "deprecated": false
-            },
-            {
-              "name": "tb002",
-              "qualname": "HierarchySyncSlots.tb002",
-              "kind": "method",
-              "signature": "(self, state=None)",
-              "summary": "Toggle button for pull objects with options menu.",
-              "line": 1960,
-              "deprecated": false
-            },
-            {
-              "name": "tb003",
-              "qualname": "HierarchySyncSlots.tb003",
-              "kind": "method",
-              "signature": "(self, state=None)",
-              "summary": "Toggle button for fix/repair operations.",
-              "line": 2145,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "HierarchySyncSlots.b003",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Browse for reference scene file.",
-              "line": 2208,
-              "deprecated": false
-            },
-            {
-              "name": "b005",
-              "qualname": "HierarchySyncSlots.b005",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Refresh current scene hierarchy tree.",
-              "line": 2252,
-              "deprecated": false
-            },
-            {
-              "name": "b006",
-              "qualname": "HierarchySyncSlots.b006",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Select checked objects in Maya scene.",
-              "line": 2256,
-              "deprecated": false
-            },
-            {
-              "name": "b007",
-              "qualname": "HierarchySyncSlots.b007",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Expand all items in current scene tree.",
-              "line": 2265,
-              "deprecated": false
-            },
-            {
-              "name": "b008",
-              "qualname": "HierarchySyncSlots.b008",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Collapse all items in current scene tree.",
-              "line": 2269,
-              "deprecated": false
-            },
-            {
-              "name": "b009",
-              "qualname": "HierarchySyncSlots.b009",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Refresh reference hierarchy tree.",
-              "line": 2273,
-              "deprecated": false
-            },
-            {
-              "name": "b011",
-              "qualname": "HierarchySyncSlots.b011",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Show differences between hierarchies.",
-              "line": 2281,
-              "deprecated": false
-            },
-            {
-              "name": "b012",
-              "qualname": "HierarchySyncSlots.b012",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Analyze hierarchies and perform comparison.",
-              "line": 2294,
-              "deprecated": false
-            },
-            {
-              "name": "b013",
-              "qualname": "HierarchySyncSlots.b013",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Ignore selected items in the reference tree.",
-              "line": 2335,
-              "deprecated": false
-            },
-            {
-              "name": "b014",
-              "qualname": "HierarchySyncSlots.b014",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Unignore selected items in the reference tree.",
-              "line": 2339,
-              "deprecated": false
-            },
-            {
-              "name": "b015",
-              "qualname": "HierarchySyncSlots.b015",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Ignore selected items in the current scene tree.",
-              "line": 2343,
-              "deprecated": false
-            },
-            {
-              "name": "b016",
-              "qualname": "HierarchySyncSlots.b016",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Unignore selected items in the current scene tree.",
-              "line": 2347,
-              "deprecated": false
-            },
-            {
-              "name": "b018",
-              "qualname": "HierarchySyncSlots.b018",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Delete selected objects from the Maya scene and refresh the tree.",
-              "line": 2351,
-              "deprecated": false
-            },
-            {
-              "name": "b017",
-              "qualname": "HierarchySyncSlots.b017",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Rename current-scene items to match reference names.",
-              "line": 2395,
-              "deprecated": false
-            },
-            {
-              "name": "count_tree_items",
-              "qualname": "HierarchySyncSlots.count_tree_items",
-              "kind": "method",
-              "signature": "(self, tree_widget)",
-              "summary": "Count total items in a tree widget.",
-              "line": 2994,
+              "name": "reference_formats",
+              "qualname": "HierarchySyncSession.reference_formats",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "The extensions a reference may have (what the sandbox imports).",
+              "line": 817,
               "deprecated": false
             }
           ]
@@ -13749,232 +13622,6 @@
               "signature": "(nodes) -> list",
               "summary": "*nodes* minus intermediate shapes (``…ShapeOrig`` and kin).",
               "line": 75,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "env_utils/hierarchy_sync/tree_renderer.py",
-      "summary": "Tree rendering, formatting, and selection management for the hierarchy sync UI.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "HierarchyTreeRenderer",
-          "summary": "Owns all QTreeWidget population, diff-colour formatting, ignore",
-          "line": 29,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "populate_current_scene_tree",
-              "qualname": "HierarchyTreeRenderer.populate_current_scene_tree",
-              "kind": "method",
-              "signature": "(self, tree_widget)",
-              "summary": "Populate the current scene hierarchy tree.",
-              "line": 49,
-              "deprecated": false
-            },
-            {
-              "name": "populate_reference_tree",
-              "qualname": "HierarchyTreeRenderer.populate_reference_tree",
-              "kind": "method",
-              "signature": "(self, tree_widget, transforms, reference_name='Reference Scene')",
-              "summary": "Populate the reference hierarchy tree with pre-fetched transforms.",
-              "line": 143,
-              "deprecated": false
-            },
-            {
-              "name": "show_reference_placeholder",
-              "qualname": "HierarchyTreeRenderer.show_reference_placeholder",
-              "kind": "method",
-              "signature": "(self, tree_widget, reference_name='Reference Scene')",
-              "summary": "Show a 'Browse for Reference Scene' placeholder in an empty tree.",
-              "line": 178,
-              "deprecated": false
-            },
-            {
-              "name": "show_reference_error",
-              "qualname": "HierarchyTreeRenderer.show_reference_error",
-              "kind": "method",
-              "signature": "(self, tree_widget, reference_name='Reference Scene', message='File Not Found')",
-              "summary": "Show an error or status message in the reference tree.",
-              "line": 189,
-              "deprecated": false
-            },
-            {
-              "name": "populate_tree_with_hierarchy",
-              "qualname": "HierarchyTreeRenderer.populate_tree_with_hierarchy",
-              "kind": "method",
-              "signature": "(self, tree_widget, objects, tree_type='current')",
-              "summary": "Populate tree widget with proper Maya-style hierarchy.",
-              "line": 197,
-              "deprecated": false
-            },
-            {
-              "name": "apply_difference_formatting",
-              "qualname": "HierarchyTreeRenderer.apply_difference_formatting",
-              "kind": "method",
-              "signature": "(self, tree001, tree000)",
-              "summary": "Apply color formatting to tree widgets based on hierarchy differences.",
-              "line": 291,
-              "deprecated": false
-            },
-            {
-              "name": "clear_tree_colors",
-              "qualname": "HierarchyTreeRenderer.clear_tree_colors",
-              "kind": "method",
-              "signature": "(self, tree_widget)",
-              "summary": "Remove foreground/background colors from every item in a tree widget.",
-              "line": 327,
-              "deprecated": false
-            },
-            {
-              "name": "format_tree_differences",
-              "qualname": "HierarchyTreeRenderer.format_tree_differences",
-              "kind": "method",
-              "signature": "(self, tree_widget, tree_type, tree_matcher, by_full, by_clean, by_last)",
-              "summary": "Format a specific tree widget based on differences.",
-              "line": 363,
-              "deprecated": false
-            },
-            {
-              "name": "apply_ignore_styling",
-              "qualname": "HierarchyTreeRenderer.apply_ignore_styling",
-              "kind": "method",
-              "signature": "(self, tree_widget)",
-              "summary": "Apply strikethrough/dim styling for ignored items — and, when the 'Hide Ignored'",
-              "line": 501,
-              "deprecated": false
-            },
-            {
-              "name": "build_item_path",
-              "qualname": "HierarchyTreeRenderer.build_item_path",
-              "kind": "staticmethod",
-              "signature": "(item)",
-              "summary": "Build a pipe-separated hierarchy path from a QTreeWidgetItem.",
-              "line": 547,
-              "deprecated": false
-            },
-            {
-              "name": "find_tree_item_by_name",
-              "qualname": "HierarchyTreeRenderer.find_tree_item_by_name",
-              "kind": "method",
-              "signature": "(self, tree_widget, object_name)",
-              "summary": "Find a tree item by object name (first column).",
-              "line": 556,
-              "deprecated": false
-            },
-            {
-              "name": "get_selected_tree_items",
-              "qualname": "HierarchyTreeRenderer.get_selected_tree_items",
-              "kind": "method",
-              "signature": "(self, tree_widget)",
-              "summary": "Get selected items from a tree widget.",
-              "line": 573,
-              "deprecated": false
-            },
-            {
-              "name": "get_selected_object_names",
-              "qualname": "HierarchyTreeRenderer.get_selected_object_names",
-              "kind": "method",
-              "signature": "(self, tree_widget)",
-              "summary": "Extract object names from selected tree widget items.",
-              "line": 581,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "env_utils/hierarchy_sync/tree_utils.py",
-      "summary": "Tree widget utilities for hierarchy sync UI operations.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "TreePathMatcher",
-          "summary": "Tree path matching functionality for UI tree widgets.",
-          "line": 46,
-          "bases": [
-            "pythontk.LoggingMixin",
-            "_TreePathMatcherInternal"
-          ],
-          "members": [
-            {
-              "name": "build_tree_index",
-              "qualname": "TreePathMatcher.build_tree_index",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Build tree indices for fast item lookup.",
-              "line": 49,
-              "deprecated": false
-            },
-            {
-              "name": "find_path_matches",
-              "qualname": "TreePathMatcher.find_path_matches",
-              "kind": "method",
-              "signature": "(self, target_path: str, by_full: dict, by_clean_full: dict, by_last: dict, prefer_cleaned: bool = False, strict: bool = False)",
-              "summary": "Find tree items matching a target path using multiple strategies.",
-              "line": 92,
-              "deprecated": false
-            },
-            {
-              "name": "log_matching_debug",
-              "qualname": "TreePathMatcher.log_matching_debug",
-              "kind": "method",
-              "signature": "(self, path, candidates, strategy, prefix='')",
-              "summary": "Log debug information about path matching.",
-              "line": 181,
-              "deprecated": false
-            },
-            {
-              "name": "log_tree_index_debug",
-              "qualname": "TreePathMatcher.log_tree_index_debug",
-              "kind": "method",
-              "signature": "(self, by_full, by_clean_full, by_last, tree_type)",
-              "summary": "Log debug information about tree indices.",
-              "line": 187,
-              "deprecated": false
-            },
-            {
-              "name": "get_selected_object_names",
-              "qualname": "TreePathMatcher.get_selected_object_names",
-              "kind": "staticmethod",
-              "signature": "(tree_widget) -> List[str]",
-              "summary": "Extract object names from selected tree widget items.",
-              "line": 195,
-              "deprecated": false
-            },
-            {
-              "name": "get_selected_tree_items",
-              "qualname": "TreePathMatcher.get_selected_tree_items",
-              "kind": "staticmethod",
-              "signature": "(tree_widget) -> list",
-              "summary": "Get all selected items from tree widget.",
-              "line": 205,
-              "deprecated": false
-            },
-            {
-              "name": "find_tree_item_by_name",
-              "qualname": "TreePathMatcher.find_tree_item_by_name",
-              "kind": "staticmethod",
-              "signature": "(tree_widget, object_name: str)",
-              "summary": "Find tree widget item by object name.",
-              "line": 217,
-              "deprecated": false
-            },
-            {
-              "name": "build_hierarchy_structure",
-              "qualname": "TreePathMatcher.build_hierarchy_structure",
-              "kind": "staticmethod",
-              "signature": "(objects: list) -> Tuple[Dict[str, Dict], List[str]]",
-              "summary": "Build hierarchical structure from Maya transform objects.",
-              "line": 231,
               "deprecated": false
             }
           ]

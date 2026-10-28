@@ -577,23 +577,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/hierarchy_sync/hierarchy_baseline.py` — The scene's hierarchy baseline, stored in the scene.
 - `class HierarchyBaseline(pythontk.HierarchyBaselineStore)`
 
-### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
-- `class HierarchySyncController(pythontk.LoggingMixin)`
-  - methods: workspace, reference_path, analyze_hierarchies, pull_objects, repair_hierarchies, select_objects_in_maya, populate_reference_tree, refresh_trees, is_path_ignored, clear_ignored_paths, log_diff_results, get_recent_reference_scenes, save_recent_reference_scene
-- `class HierarchySyncSlots(pythontk.LoggingMixin)`
-  - methods: header_init, tree000_init, tree001_init, cmb_diff_options_init, cmb_pull_options_init, tb003_init, tb001, tb002, tb003, b003, b005, b006, b007, b008, b009, b011, b012, b013, b014, b015, b016, b018, b017, count_tree_items
+### `env_utils/hierarchy_sync/hierarchy_sync_session.py` — Hierarchy Sync's host half: the reference a diff runs against, held in the
+- `class HierarchySyncSession(pythontk.LoggingMixin)`
+  - methods: loggers, fuzzy_matching, is_loaded, load_reference, release_reference, analyze, clear_analysis, repair, pull, current_scene_nodes, hierarchy_structure, clean_path, node_path, node_name, node_alive, rename_nodes, reparent_nodes, delete_nodes, select_nodes, scene_path, workspace, recent_scenes, open_scene, reference_formats
 
 ### `env_utils/hierarchy_sync/scene_data_sidecar.py` — Scene-data sidecar -- Maya's scene hooks over ``ptk.SceneDataSidecarBase``.
 - `class SceneDataSidecar(pythontk.SceneDataSidecarBase)`
   - methods: build_clean_path_set, expand_to_descendants, drop_intermediate
-
-### `env_utils/hierarchy_sync/tree_renderer.py` — Tree rendering, formatting, and selection management for the hierarchy sync UI.
-- `class HierarchyTreeRenderer(pythontk.LoggingMixin)`
-  - methods: populate_current_scene_tree, populate_reference_tree, show_reference_placeholder, show_reference_error, populate_tree_with_hierarchy, apply_difference_formatting, clear_tree_colors, format_tree_differences, apply_ignore_styling, build_item_path, find_tree_item_by_name, get_selected_tree_items, get_selected_object_names
-
-### `env_utils/hierarchy_sync/tree_utils.py` — Tree widget utilities for hierarchy sync UI operations.
-- `class TreePathMatcher(pythontk.LoggingMixin, _TreePathMatcherInternal)`
-  - methods: build_tree_index, find_path_matches, log_matching_debug, log_tree_index_debug, get_selected_object_names, get_selected_tree_items, find_tree_item_by_name, build_hierarchy_structure
 
 ### `env_utils/material_records.py` — The ``materials`` record's Maya producer.
 - `class MaterialRecords(pythontk.HelpMixin)`

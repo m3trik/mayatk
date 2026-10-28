@@ -159,6 +159,8 @@ DEFAULT_INCLUDE = {
         "HierarchySync",
         "ObjectSwapper",
     ],
+    # What the shared Hierarchy Sync panel asks of the scene (its panel is tentacle's).
+    "env_utils.hierarchy_sync.hierarchy_sync_session": "HierarchySyncSession",
     "env_utils.hierarchy_sync.scene_data_sidecar": "SceneDataSidecar",
     "env_utils.fbx_utils": "FbxUtils",
     # USD import/export over the native mayaUsd runtime — the USD sibling of
@@ -539,6 +541,23 @@ MOVED_NAMES = {
     ),
     "ChannelsSlots": (
         "tentacle.slots.tools.channels.ChannelsSlots",
+        "0.30.0",
+    ),
+    "HierarchySyncSlots": (
+        "tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots",
+        "0.30.0",
+    ),
+    # Hierarchy Sync's panel helpers: tentacle's private _hierarchy_sync package.
+    "HierarchySyncController": (
+        "tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController",
+        "0.30.0",
+    ),
+    "HierarchyTreeRenderer": (
+        "tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer",
+        "0.30.0",
+    ),
+    "TreePathMatcher": (
+        "tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher",
         "0.30.0",
     ),
 }

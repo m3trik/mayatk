@@ -149,10 +149,9 @@ GUI_REQUIRED = {
         "cmds.hotkeySet raises RuntimeError under mayapy batch "
         "(hotkey infrastructure is GUI-only)"
     ),
-    # Confirmed native mayapy crashers (2026-07-17 full run; hierarchy_sync
-    # re-confirmed crashing ALONE in a fresh process — Qt reference-tree
-    # population). All pass under the GUI pass.
-    "test_hierarchy_sync": "native-crashes mayapy at Qt reference-tree population",
+    # Confirmed native mayapy crashers (2026-07-17 full run). All pass under the
+    # GUI pass. (test_hierarchy_sync left this list 2026-10-28: its Qt reference
+    # tree moved to tentacle with the panel.)
     "test_hdr_manager": "native-crashes mayapy (2026-07-17 full run)",
     "test_mat_marmoset_bridge": "native-crashes mayapy (2026-07-17 full run)",
     "test_maya_menu_handler": "builds native GUI menus; native-crashes mayapy",

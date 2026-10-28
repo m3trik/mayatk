@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (544)
+## Moved out (606)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -212,6 +212,68 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/snap.py::SnapSlots.b002` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.b002_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.header_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.analyze_hierarchies` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.clear_ignored_paths` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.get_recent_reference_scenes` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.is_path_ignored` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.log_diff_results` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.populate_reference_tree` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.pull_objects` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.reference_path` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.refresh_trees` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.repair_hierarchies` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.save_recent_reference_scene` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.select_objects_in_maya` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.workspace` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b003` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b005` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b006` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b007` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b008` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b009` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b011` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b012` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b013` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b014` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b015` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b016` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b017` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.b018` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.cmb_diff_options_init` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.cmb_pull_options_init` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.count_tree_items` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.header_init` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.tb001` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.tb002` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.tb003` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.tb003_init` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.tree000_init` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncSlots.tree001_init` → `tentacle.slots.tools.hierarchy_sync.HierarchySyncSlots` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.apply_difference_formatting` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.apply_ignore_styling` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.build_item_path` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.clear_tree_colors` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.find_tree_item_by_name` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.format_tree_differences` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.get_selected_object_names` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.get_selected_tree_items` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.populate_current_scene_tree` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.populate_reference_tree` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.populate_tree_with_hierarchy` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.show_reference_error` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_renderer.py::HierarchyTreeRenderer.show_reference_placeholder` → `tentacle.slots.tools._hierarchy_sync.tree_renderer.HierarchyTreeRenderer` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.build_hierarchy_structure` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.build_tree_index` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.find_path_matches` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.find_tree_item_by_name` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.get_selected_object_names` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.get_selected_tree_items` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.log_matching_debug` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
+- `env_utils/hierarchy_sync/tree_utils.py::TreePathMatcher.log_tree_index_debug` → `tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher` (from 0.30.0)
 - `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
 - `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b000` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
 - `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b006` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
@@ -549,7 +611,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (164)
+## Added (189)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -610,6 +672,31 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/naming/_naming.py::Naming.select_by_name(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]`
 - `edit_utils/naming/_naming.py::Naming.select_link(cls, node: str) -> str`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession(class)`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.analyze(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.clean_path(path: str) -> str`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.clear_analysis(self) -> None`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.current_scene_nodes(self) -> List[str]`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.delete_nodes(self, nodes: Sequence[Any]) -> List[str]`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.fuzzy_matching(self) -> bool`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.hierarchy_structure(nodes) -> Tuple[Dict[str, dict], List[str]]`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.is_loaded(self, reference_path: str) -> bool`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.load_reference(self, reference_path: str) -> Optional[List[str]]`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.loggers(cls) -> list`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.node_alive(node) -> bool`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.node_name(node) -> str`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.node_path(node) -> str`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.open_scene(path: str) -> None`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.pull(self, targets: Sequence[str], reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, pull_children: bool = False, pull_mode: str = 'Add to Scene') -> bool`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.recent_scenes() -> List[str]`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.reference_formats() -> List[str]`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.release_reference(self) -> None`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.rename_nodes(self, pairs: Sequence[Tuple[Any, str]]) -> List[Optional[str]]`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.repair(self, differences: Optional[Dict[str, list]] = None, create_stubs: bool = True, quarantine_extras: bool = True, quarantine_group: str = '_QUARANTINE', skip_animated: bool = True, fix_reparented: bool = True, fix_fuzzy_renames: bool = True, dry_run: bool = True) -> bool`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.reparent_nodes(self, moves: Sequence[Tuple[Any, Any]]) -> int`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.scene_path() -> str`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.select_nodes(nodes: Sequence[Any]) -> int`
+- `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.workspace() -> str`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.edit_fbx_preset(self, preset: Optional[str] = None) -> None`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.fbx_preset_dir(self) -> Optional[str]`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.fbx_preset_metadata(self, preset: Optional[str]) -> Dict[str, str]`
