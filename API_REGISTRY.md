@@ -96,7 +96,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`edit_utils/duplicate_radial.py`](#edit_utils--duplicate_radial)
 - [`edit_utils/dynamic_pipe.py`](#edit_utils--dynamic_pipe)
 - [`edit_utils/macros/_macros.py`](#edit_utils--macros--_macros)
-- [`edit_utils/mirror.py`](#edit_utils--mirror)
 - [`edit_utils/naming/_naming.py`](#edit_utils--naming--_naming)
 - [`edit_utils/naming/naming_slots.py`](#edit_utils--naming--naming_slots) — Switchboard slots for the Naming panel.
 - [`edit_utils/primitives.py`](#edit_utils--primitives) — Primitive creation utilities for Maya.
@@ -263,7 +262,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L261) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L256) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -1806,14 +1805,6 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
 - **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L2152)**
-
-<a id="edit_utils--mirror"></a>
-### `edit_utils/mirror.py`
-
-- **[`class MirrorSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/mirror.py#L12)**
-  - `MirrorSlots.header_init(self, widget)` — Configure header help text.
-  - `MirrorSlots.prepare_operation(self, objects)` — Break instance links once, before the preview contract exists.
-  - `MirrorSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--naming--_naming"></a>
 ### `edit_utils/naming/_naming.py`
@@ -4199,32 +4190,21 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 
 Sweep a circular profile along NURBS curve(s) to build a tube.
 
-- **[`class CurveToTube(pythontk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L53)** — Extrude a circular profile along NURBS curve(s) to build a tube.
+- **[`class CurveToTube(pythontk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L50)** — Extrude a circular profile along NURBS curve(s) to build a tube.
   - `CurveToTube.create(cls, curves, output_type: str = 'nurbs', radius: float = 1.0, sections: int = 8, path_divisions: int = 1, degree: int = 3, caps: bool = True, quads: bool = True, live: bool = False, cleanup: bool = True, name: str = 'tube') -> List[str]` *(class)* — Build a tube along each selected curve.
-- **[`class CurveToTubeSlots(pythontk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L702)** — Switchboard slot wiring for the Curve to Tube UI (hermetic preview).
-  - `CurveToTubeSlots.header_init(self, widget)` — Configure header help text.
-  - `CurveToTubeSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
-  - `CurveToTubeSlots.perform_operation(self, objects, contract)` — Build the tube(s) from the selected curves (Preview entry point).
+  - `CurveToTube.describe(tubes) -> str` *(static)* — One line of stats for built tubes: a polygon tube's triangle count,
 
 <a id="nurbs_utils--image_tracer"></a>
 ### `nurbs_utils/image_tracer.py`
 
 - **[`class BluePencilMixin(object)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L29)** — Mixin for handling Blue Pencil operations.
+  - `BluePencilMixin.open_blue_pencil() -> None` *(static)* — Open Maya's Blue Pencil tool, whose strokes ``use_blue_pencil``
   - `BluePencilMixin.get_blue_pencil_curves(self)` — Converts active Blue Pencil strokes to NURBS curves.
-- **[`class ImageTracer(BluePencilMixin)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L109)** — A class to trace images into Maya NURBS curves and generate geometry.
+- **[`class ImageTracer(BluePencilMixin)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L115)** — A class to trace images into Maya NURBS curves and generate geometry.
   - `ImageTracer.trace_curves(self) -> List[str]` — Traces the image and returns a list of created NURBS curves.
   - `ImageTracer.create_mesh(self, curves: Optional[List[str]] = None, combine: bool = True, name: str = 'traced_mesh', group_output: bool = True) -> Union[str, List[str]]` — Creates a polygon mesh from the traced curves (positive space).
   - `ImageTracer.create_negative_space_mesh(self, curves: Optional[List[str]] = None, margin_scale: float = 0.1, name: str = 'negative_space_mesh', group_output: bool = True) -> Optional[str]` — Creates a mesh representing the negative space (plane with holes).
   - `ImageTracer.project_on_plane(self, curves: Optional[List[str]] = None, name: str = 'projected_curves', group_output: bool = True) -> Union[str, List[str], None]` — Projects curves onto a plane.
-- **[`class ImageTracerSlots`](mayatk/mayatk/nurbs_utils/image_tracer.py#L414)** — UI slots for the Image Tracer tool.
-  - `ImageTracerSlots.header_init(self, widget)` — Initialize the header widget.
-  - `ImageTracerSlots.txt000_init(self, widget)`
-  - `ImageTracerSlots.browse_image(self)`
-  - `ImageTracerSlots.chk000(self, state)` — Use Blue Pencil
-  - `ImageTracerSlots.b002(self)` — Trace the source image into curves.
-  - `ImageTracerSlots.b003(self)` — Build a mesh from the traced curves.
-  - `ImageTracerSlots.b004(self)` — Build a mesh from the traced negative space.
-  - `ImageTracerSlots.b005(self)` — Project the traced result onto a plane.
 
 <a id="render_utils--_render_utils"></a>
 ### `render_utils/_render_utils.py`

@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 261,
+          "line": 256,
           "deprecated": false
         }
       ]
@@ -8803,7 +8803,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'x', pivot: Union[str, tuple] = 'object', mergeMode: int = -1, axis_frame: Optional[str] = None, delete_original: bool = False, center_pivot: bool = True, **kwargs)",
               "summary": "Mirror geometry across a given axis.",
-              "line": 1942,
+              "line": 1946,
               "deprecated": false
             },
             {
@@ -8812,7 +8812,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, axis: str = 'x', pivot: Union[str, tuple] = 'object', axis_frame: Optional[str] = None) -> list",
               "summary": "Mirror as **instances**: each object gets a linked copy reflected",
-              "line": 2085,
+              "line": 2089,
               "deprecated": false
             },
             {
@@ -8821,7 +8821,7 @@
               "kind": "staticmethod",
               "signature": "(mirror_node: str, center_pivot: bool = True, delete_original: bool = False) -> Optional[str]",
               "summary": "Separate mirrored geometry and clean up hierarchy, history, and parenting.",
-              "line": 2155,
+              "line": 2159,
               "deprecated": false
             },
             {
@@ -8830,7 +8830,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, retain_given_objects: bool = False, select: bool = False, verbose: bool = False) -> set",
               "summary": "Find duplicate, overlapping geometry at the object (transform) level.",
-              "line": 2321,
+              "line": 2325,
               "deprecated": false
             },
             {
@@ -8839,7 +8839,7 @@
               "kind": "staticmethod",
               "signature": "(objects, select=1)",
               "summary": "Locate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2495,
+              "line": 2499,
               "deprecated": false
             },
             {
@@ -8848,7 +8848,7 @@
               "kind": "staticmethod",
               "signature": "(vertex, select=True)",
               "summary": "Separate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2563,
+              "line": 2567,
               "deprecated": false
             },
             {
@@ -8857,7 +8857,7 @@
               "kind": "staticmethod",
               "signature": "(objects, threshold=0.0003)",
               "summary": "Query the given objects for overlapping vertices.",
-              "line": 2626,
+              "line": 2630,
               "deprecated": false
             },
             {
@@ -8866,7 +8866,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, delete_history=False)",
               "summary": "Get any duplicate overlapping faces of the given objects.",
-              "line": 2658,
+              "line": 2662,
               "deprecated": false
             },
             {
@@ -8875,7 +8875,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.0, inc_orig=False, select=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyEvaluate command.",
-              "line": 2734,
+              "line": 2738,
               "deprecated": false
             },
             {
@@ -8884,7 +8884,7 @@
               "kind": "staticmethod",
               "signature": "(obj, inc_orig=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyCompare command.",
-              "line": 2832,
+              "line": 2836,
               "deprecated": false
             },
             {
@@ -8893,7 +8893,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection to unselected mesh transforms.",
-              "line": 2871,
+              "line": 2875,
               "deprecated": false
             },
             {
@@ -8902,7 +8902,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection of mesh components (verts, edges, or faces).",
-              "line": 2909,
+              "line": 2913,
               "deprecated": false
             },
             {
@@ -8911,7 +8911,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Delete selected components and/or objects in Autodesk Maya.",
-              "line": 2970,
+              "line": 2974,
               "deprecated": false
             },
             {
@@ -8920,7 +8920,7 @@
               "kind": "staticmethod",
               "signature": "(edges: Optional[List[str]] = None, **kwargs)",
               "summary": "Create a curve from selected polygon edges or a provided list of edges.",
-              "line": 3035,
+              "line": 3039,
               "deprecated": false
             }
           ]
@@ -10011,51 +10011,6 @@
             "UiMacros"
           ],
           "members": []
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "edit_utils/mirror.py",
-      "summary": "",
-      "functions": [],
-      "classes": [
-        {
-          "name": "MirrorSlots",
-          "summary": "",
-          "line": 12,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "MirrorSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 73,
-              "deprecated": false
-            },
-            {
-              "name": "prepare_operation",
-              "qualname": "MirrorSlots.prepare_operation",
-              "kind": "method",
-              "signature": "(self, objects)",
-              "summary": "Break instance links once, before the preview contract exists.",
-              "line": 137,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "MirrorSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "",
-              "line": 153,
-              "deprecated": false
-            }
-          ]
         }
       ],
       "constants": []
@@ -26779,7 +26734,7 @@
         {
           "name": "CurveToTube",
           "summary": "Extrude a circular profile along NURBS curve(s) to build a tube.",
-          "line": 53,
+          "line": 50,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -26790,44 +26745,16 @@
               "kind": "classmethod",
               "signature": "(cls, curves, output_type: str = 'nurbs', radius: float = 1.0, sections: int = 8, path_divisions: int = 1, degree: int = 3, caps: bool = True, quads: bool = True, live: bool = False, cleanup: bool = True, name: str = 'tube') -> List[str]",
               "summary": "Build a tube along each selected curve.",
-              "line": 78,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "CurveToTubeSlots",
-          "summary": "Switchboard slot wiring for the Curve to Tube UI (hermetic preview).",
-          "line": 702,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "CurveToTubeSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 757,
+              "line": 75,
               "deprecated": false
             },
             {
-              "name": "b001_init",
-              "qualname": "CurveToTubeSlots.b001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the",
-              "line": 805,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "CurveToTubeSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "Build the tube(s) from the selected curves (Preview entry point).",
-              "line": 812,
+              "name": "describe",
+              "qualname": "CurveToTube.describe",
+              "kind": "staticmethod",
+              "signature": "(tubes) -> str",
+              "summary": "One line of stats for built tubes: a polygon tube's triangle count,",
+              "line": 180,
               "deprecated": false
             }
           ]
@@ -26849,12 +26776,21 @@
           ],
           "members": [
             {
+              "name": "open_blue_pencil",
+              "qualname": "BluePencilMixin.open_blue_pencil",
+              "kind": "staticmethod",
+              "signature": "() -> None",
+              "summary": "Open Maya's Blue Pencil tool, whose strokes ``use_blue_pencil``",
+              "line": 33,
+              "deprecated": false
+            },
+            {
               "name": "get_blue_pencil_curves",
               "qualname": "BluePencilMixin.get_blue_pencil_curves",
               "kind": "method",
               "signature": "(self)",
               "summary": "Converts active Blue Pencil strokes to NURBS curves.",
-              "line": 32,
+              "line": 38,
               "deprecated": false
             }
           ]
@@ -26862,7 +26798,7 @@
         {
           "name": "ImageTracer",
           "summary": "A class to trace images into Maya NURBS curves and generate geometry.",
-          "line": 109,
+          "line": 115,
           "bases": [
             "BluePencilMixin"
           ],
@@ -26873,7 +26809,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "Traces the image and returns a list of created NURBS curves.",
-              "line": 139,
+              "line": 145,
               "deprecated": false
             },
             {
@@ -26882,7 +26818,7 @@
               "kind": "method",
               "signature": "(self, curves: Optional[List[str]] = None, combine: bool = True, name: str = 'traced_mesh', group_output: bool = True) -> Union[str, List[str]]",
               "summary": "Creates a polygon mesh from the traced curves (positive space).",
-              "line": 180,
+              "line": 186,
               "deprecated": false
             },
             {
@@ -26891,7 +26827,7 @@
               "kind": "method",
               "signature": "(self, curves: Optional[List[str]] = None, margin_scale: float = 0.1, name: str = 'negative_space_mesh', group_output: bool = True) -> Optional[str]",
               "summary": "Creates a mesh representing the negative space (plane with holes).",
-              "line": 251,
+              "line": 257,
               "deprecated": false
             },
             {
@@ -26900,87 +26836,7 @@
               "kind": "method",
               "signature": "(self, curves: Optional[List[str]] = None, name: str = 'projected_curves', group_output: bool = True) -> Union[str, List[str], None]",
               "summary": "Projects curves onto a plane.",
-              "line": 346,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "ImageTracerSlots",
-          "summary": "UI slots for the Image Tracer tool.",
-          "line": 414,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ImageTracerSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the header widget.",
-              "line": 439,
-              "deprecated": false
-            },
-            {
-              "name": "txt000_init",
-              "qualname": "ImageTracerSlots.txt000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "",
-              "line": 476,
-              "deprecated": false
-            },
-            {
-              "name": "browse_image",
-              "qualname": "ImageTracerSlots.browse_image",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 483,
-              "deprecated": false
-            },
-            {
-              "name": "chk000",
-              "qualname": "ImageTracerSlots.chk000",
-              "kind": "method",
-              "signature": "(self, state)",
-              "summary": "Use Blue Pencil",
-              "line": 516,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "ImageTracerSlots.b002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Trace the source image into curves.",
-              "line": 520,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "ImageTracerSlots.b003",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Build a mesh from the traced curves.",
-              "line": 526,
-              "deprecated": false
-            },
-            {
-              "name": "b004",
-              "qualname": "ImageTracerSlots.b004",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Build a mesh from the traced negative space.",
-              "line": 532,
-              "deprecated": false
-            },
-            {
-              "name": "b005",
-              "qualname": "ImageTracerSlots.b005",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Project the traced result onto a plane.",
-              "line": 538,
+              "line": 352,
               "deprecated": false
             }
           ]

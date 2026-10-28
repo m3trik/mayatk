@@ -1936,6 +1936,10 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                     axis_frame=frame or "world",
                 )
 
+    #: The ``mergeMode`` values :meth:`mirror` does: -1 OFF (separate), 0
+    #: combine, 1 merge border edges, 2 extrude (bridge the seam).
+    MIRROR_MERGE_MODES = (-1, 0, 1, 2)
+
     @classmethod
     @CoreUtils.undoable
     @DisplayUtils.add_to_isolation

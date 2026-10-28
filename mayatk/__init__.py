@@ -138,11 +138,6 @@ DEFAULT_INCLUDE = {
         "OccupantSpec",
         "EIA310",
     ],
-    # ``edit_utils.mirror`` defines only ``MirrorSlots`` — the panel, which
-    # ``MayaUiHandler`` discovers and which is deliberately NOT registered (see
-    # CLAUDE.md's tool-panel contract). The mirror ENGINE is ``EditUtils.mirror``.
-    # The entry that named a nonexistent ``Mirror`` here made ``mtk.Mirror`` raise
-    # AttributeError; blendertk's twin correctly registers nothing.
     # Display utils
     "display_utils.color_id": "ColorId",
     "display_utils.exploded_view": "ExplodedView",
@@ -396,6 +391,18 @@ MOVED_NAMES = {
     ),
     "CutOnAxisSlots": (
         "tentacle.slots.tools.cut_on_axis.CutOnAxisSlots",
+        "0.30.0",
+    ),
+    "MirrorSlots": (
+        "tentacle.slots.tools.mirror.MirrorSlots",
+        "0.30.0",
+    ),
+    "ImageTracerSlots": (
+        "tentacle.slots.tools.image_tracer.ImageTracerSlots",
+        "0.30.0",
+    ),
+    "CurveToTubeSlots": (
+        "tentacle.slots.tools.curve_to_tube.CurveToTubeSlots",
         "0.30.0",
     ),
 }

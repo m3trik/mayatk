@@ -7,7 +7,6 @@ Covers:
     - Bridge.bridge / get_child_curves_from_bridge / cleanup (bridge.py)
     - Snap.snap_to_closest_vertex / snap_to_surface / snap_to_grid (snap.py)
     - CutOnAxis.perform_cut_on_axis (cut_on_axis.py)
-    - MirrorSlots._resolve_pivot (mirror.py — static helper, only testable surface)
 
 The Slots classes themselves are UI-bound and skipped here.
 """
@@ -22,7 +21,6 @@ from mayatk.edit_utils.bevel import Bevel
 from mayatk.edit_utils.bridge import Bridge
 from mayatk.edit_utils.snap import Snap
 from mayatk.edit_utils.cut_on_axis import CutOnAxis
-from mayatk.edit_utils.mirror import MirrorSlots
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.core_utils.preview import Preview, OperationError
@@ -1015,41 +1013,6 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         )
 
 
-class TestMirrorResolvePivot(QuickTestCase):
-    """MirrorSlots._resolve_pivot is a static helper — pure Python."""
-
-    def test_index_to_label_mapping(self):
-        self.assertEqual(MirrorSlots._resolve_pivot(0, "x"), "manip")
-        self.assertEqual(MirrorSlots._resolve_pivot(1, "x"), "object")
-        self.assertEqual(MirrorSlots._resolve_pivot(2, "x"), "world")
-        self.assertEqual(MirrorSlots._resolve_pivot(3, "x"), "center")
-
-    def test_axis_aware_index_4(self):
-        # Border pivot: +axis -> max face, -axis -> min face. The sign FLIPS the
-        # side the geometry doubles toward (was always xmax — the '-' was a no-op).
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "x"), "xmax")
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "-x"), "xmin")
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "y"), "ymax")
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "-y"), "ymin")
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "z"), "zmax")
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "-z"), "zmin")
-
-    def test_index_4_unknown_axis_falls_back(self):
-        self.assertEqual(MirrorSlots._resolve_pivot(4, "bogus"), "xmax")
-
-    def test_unknown_index_defaults_manip(self):
-        self.assertEqual(MirrorSlots._resolve_pivot(99, "x"), "manip")
-
-    def test_axis_sign_relevant_only_for_bbox_pivots(self):
-        # The '-' toggle is enabled only for the bounding-box pivots (Center 3,
-        # Border 4); Manip/Object/World reflect across a fixed plane (no-op sign).
-        self.assertFalse(MirrorSlots._axis_sign_relevant(0))  # manip
-        self.assertFalse(MirrorSlots._axis_sign_relevant(1))  # object
-        self.assertFalse(MirrorSlots._axis_sign_relevant(2))  # world
-        self.assertTrue(MirrorSlots._axis_sign_relevant(3))  # bbox center
-        self.assertTrue(MirrorSlots._axis_sign_relevant(4))  # bbox border
-
-
 class TestEditUtilsMirror(MayaTkTestCase):
     """EditUtils.mirror — the actual mirror operation (not just _resolve_pivot).
 
@@ -1128,7 +1091,7 @@ class TestEditUtilsMirror(MayaTkTestCase):
         cube_pos = cmds.polyCube(name="border_pos")[0]
         cmds.move(2, 0, 0, cube_pos)  # x in [1, 3]
         EditUtils.mirror(
-            [cube_pos], axis="x", pivot=MirrorSlots._resolve_pivot(4, "x"), mergeMode=1
+            [cube_pos], axis="x", pivot="xmax", mergeMode=1
         )
         pos_bb = cmds.exactWorldBoundingBox(cube_pos)
 
@@ -1137,7 +1100,7 @@ class TestEditUtilsMirror(MayaTkTestCase):
         EditUtils.mirror(
             [cube_neg],
             axis="-x",
-            pivot=MirrorSlots._resolve_pivot(4, "-x"),
+            pivot="xmin",
             mergeMode=1,
         )
         neg_bb = cmds.exactWorldBoundingBox(cube_neg)
@@ -1150,11 +1113,11 @@ class TestEditUtilsMirror(MayaTkTestCase):
     def test_center_symmetrize_sign_convention(self):
         """Pin the cut_along_axis convention the center symmetrize relies on.
 
-        MirrorSlots routes the 'Bounding Box (center)' pivot through
+        tentacle's MirrorSlots routes the 'Bounding Box (center)' pivot through
         cut_along_axis(delete=True, mirror=True) and INVERTS the UI sign because
         cut_along_axis's 'x' keeps the -X half while '-x' keeps the +X half. If
         that convention ever changes, this fails — update the inversion in
-        MirrorSlots.perform_operation to match.
+        its perform_operation to match.
         """
 
         def tall_plus_x(name):

@@ -9,7 +9,6 @@ Covers both output types and the invariants the preview relies on:
 - input validation.
 """
 
-import types
 import unittest
 import importlib
 import math
@@ -26,7 +25,7 @@ from base_test import MayaTkTestCase
 import mayatk.nurbs_utils.curve_to_tube as ctt_mod
 
 importlib.reload(ctt_mod)
-from mayatk.nurbs_utils.curve_to_tube import CurveToTube, CurveToTubeSlots
+from mayatk.nurbs_utils.curve_to_tube import CurveToTube
 from mayatk.core_utils.preview import OperationError
 
 
@@ -652,45 +651,25 @@ class TestCurveToTube(MayaTkTestCase):
                     cmds.filterExpand(cmds.ls(selection=True), sm=(31, 32, 34)) or []
                 )
 
-    def test_update_footer_reports_stats(self):
-        """_update_footer reports the triangle count for a polygon result, span
-        counts for a NURBS one, and clears when there is no result."""
-
-        class _Footer:
-            def __init__(self):
-                self._t = ""
-
-            def setStatusText(self, t):
-                self._t = t
-
-        def fake_for(output_type, tubes):
-            return types.SimpleNamespace(
-                ui=types.SimpleNamespace(
-                    footer=_Footer(),
-                    cmb000=types.SimpleNamespace(currentData=lambda o=output_type: o),
-                ),
-                last_tubes=tubes,
-            )
-
+    def test_describe_reports_stats(self):
+        """describe (the panel's footer) reports the triangle count for a
+        polygon result, span counts for a NURBS one, and nothing when there is
+        no result."""
         poly = CurveToTube.create(
             self.path, output_type="polygon", sections=8, caps=True
         )
-        f = fake_for("polygon", poly)
-        CurveToTubeSlots._update_footer(f)
-        self.assertIn("tris", f.ui.footer._t)
-        self.assertNotIn("verts", f.ui.footer._t)  # tri count only
+        text = CurveToTube.describe(poly)
+        self.assertIn("tris", text)
+        self.assertNotIn("verts", text)  # tri count only
 
         cmds.file(new=True, force=True)
         crv = cmds.curve(d=3, p=[(0, 0, 0), (3, 3, 0), (6, 0, 0)])
         nurbs = CurveToTube.create(crv, output_type="nurbs", sections=8)
-        f = fake_for("nurbs", nurbs)
-        CurveToTubeSlots._update_footer(f)
-        self.assertIn("spans", f.ui.footer._t)
+        self.assertIn("spans", CurveToTube.describe(nurbs))
 
-        # No result -> cleared.
-        f = fake_for("polygon", [])
-        CurveToTubeSlots._update_footer(f)
-        self.assertEqual(f.ui.footer._t, "")
+        # No result, or one a rollback removed -> nothing to say.
+        self.assertEqual(CurveToTube.describe([]), "")
+        self.assertEqual(CurveToTube.describe(["no_such_tube"]), "")
 
     def test_non_curve_selection_raises(self):
         loc = cmds.spaceLocator()[0]

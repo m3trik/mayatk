@@ -458,10 +458,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: m_set_selected_keys, m_unset_selected_keys
 - `class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`
 
-### `edit_utils/mirror.py`
-- `class MirrorSlots(pythontk.LoggingMixin)`
-  - methods: header_init, prepare_operation, perform_operation
-
 ### `edit_utils/naming/_naming.py`
 - `class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`
   - methods: SUFFIX_TYPES, affix_rules, rename, scene_objects, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, affix_for, suffix_by_type, append_location_based_suffix
@@ -1052,17 +1048,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `nurbs_utils/curve_to_tube.py` — Sweep a circular profile along NURBS curve(s) to build a tube.
 - `class CurveToTube(pythontk.LoggingMixin)`
-  - methods: create
-- `class CurveToTubeSlots(pythontk.LoggingMixin)`
-  - methods: header_init, b001_init, perform_operation
+  - methods: create, describe
 
 ### `nurbs_utils/image_tracer.py`
 - `class BluePencilMixin(object)`
-  - methods: get_blue_pencil_curves
+  - methods: open_blue_pencil, get_blue_pencil_curves
 - `class ImageTracer(BluePencilMixin)`
   - methods: trace_curves, create_mesh, create_negative_space_mesh, project_on_plane
-- `class ImageTracerSlots`
-  - methods: header_init, txt000_init, browse_image, chk000, b002, b003, b004, b005
 
 ### `render_utils/_render_utils.py` — Render-control helpers.
 - `class RenderUtils(pythontk.HelpMixin)`
