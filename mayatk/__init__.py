@@ -127,9 +127,10 @@ DEFAULT_INCLUDE = {
     "edit_utils.duplicate_linear": "DuplicateLinear",
     "edit_utils.duplicate_radial": "DuplicateRadial",
     "edit_utils.dynamic_pipe": "DynamicPipe",
-    # The curtain's wire rig (``btk.CurtainRig`` twin). The drape engine,
+    # Curtain: the tool's API (``Curtain``, what the shared panel calls) and its
+    # wire rig (``btk.Curtain`` / ``btk.CurtainRig`` twins). The drape engine,
     # ``Rail`` + ``CurtainMesh`` (same names in blendertk), stays unregistered.
-    "edit_utils.curtain._curtain": "CurtainRig",
+    "edit_utils.curtain._curtain": ["Curtain", "CurtainRig"],
     "edit_utils.rack_builder": [
         "RackBuilder",
         "RackSpec",
@@ -461,6 +462,14 @@ MOVED_NAMES = {
     ),
     "ShadowRigSlots": (
         "tentacle.slots.tools.shadow_rig.ShadowRigSlots",
+        "0.30.0",
+    ),
+    "CurtainSlots": (
+        "tentacle.slots.tools.curtain.CurtainSlots",
+        "0.30.0",
+    ),
+    "NamingSlots": (
+        "tentacle.slots.tools.naming.NamingSlots",
         "0.30.0",
     ),
 }

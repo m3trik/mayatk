@@ -691,5 +691,57 @@ class TestConformShapeNames(MayaTkTestCase):
         self.assertIn("smoothyShapeOrig", leafs)
 
 
+class TestNamingToolApi(MayaTkTestCase):
+    """What the Naming panel (tentacle) asks of the engine."""
+
+    def test_scope_objects_is_the_selection_or_the_scene(self):
+        a = cmds.polyCube(n="scopeA")[0]
+        cmds.polyCube(n="scopeB")
+        cmds.select(a)
+        self.assertEqual(Naming.scope_objects(), cmds.ls(a, long=True))
+        names = {n.split("|")[-1] for n in Naming.scope_objects(scene=True)}
+        self.assertLessEqual({"scopeA", "scopeB"}, names)
+        cmds.select(clear=True)
+        self.assertEqual(Naming.scope_objects(), [])
+
+    def test_select_by_name_selects_the_matches(self):
+        cube = cmds.polyCube(n="findMe")[0]
+        loc = cmds.spaceLocator(n="findLoc")[0]
+        found, searched = Naming.select_by_name("findMe|findLoc")  # exact terms
+        self.assertEqual(sorted(found), sorted(cmds.ls([cube, loc], long=True)))
+        self.assertEqual(sorted(cmds.ls(selection=True, long=True)), sorted(found))
+        self.assertGreater(searched, len(found))
+        found, searched = Naming.select_by_name("find*", locators_only=True)
+        self.assertEqual((found, searched), (cmds.ls(loc, long=True), 1))
+
+    def test_select_by_name_with_no_match_clears_the_selection(self):
+        cmds.select(cmds.polyCube(n="keepMe")[0])
+        self.assertEqual(Naming.select_by_name("noSuchName")[0], [])
+        self.assertEqual(cmds.ls(selection=True), [])
+
+    def test_select_link_labels_the_leaf_and_selects_the_path(self):
+        path = cmds.ls(cmds.polyCube(n="linked")[0], long=True)[0]
+        self.assertEqual(
+            Naming.select_link(path), Naming.log_link("linked", "select", node=path)
+        )
+
+    def test_location_suffix_skips_what_has_no_location(self):
+        near = cmds.polyCube(n="row")[0]
+        far = cmds.polyCube(n="row")[0]  # Maya names it row1
+        cmds.move(5, 0, 0, far)
+        material = cmds.shadingNode("lambert", asShader=True, n="rowMat")
+        Naming.append_location_based_suffix([far, near, material])
+        self.assertTrue(cmds.objExists("row_01") and cmds.objExists("row_02"))
+        self.assertTrue(cmds.objExists("rowMat"))
+
+    def test_location_suffix_with_no_transform_renames_nothing(self):
+        material = cmds.shadingNode("lambert", asShader=True, n="loneMat")
+        self.assertEqual(Naming.append_location_based_suffix([material]), [])
+        self.assertTrue(cmds.objExists("loneMat"))
+
+    def test_every_convention_entry_applies_in_maya(self):
+        self.assertEqual(Naming.UNSUPPORTED_TYPES, {})
+
+
 if __name__ == "__main__":
     unittest.main()

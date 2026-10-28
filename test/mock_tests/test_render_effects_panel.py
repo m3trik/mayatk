@@ -3,8 +3,9 @@
 """Render Effects panel (render_effects.ui + RenderEffectsSlots), loaded for real.
 
 Mocked ``maya.cmds`` (this dir's conftest) + a real ``Switchboard`` /
-``MayaUiHandler`` load through real (offscreen) Qt -- the convention of
-test_naming_panel.py. Covers what a stub UI cannot see: the pages the init
+``MayaUiHandler`` load through real (offscreen) Qt -- this directory's
+convention: real Maya and real Qt widgets in one process crash natively.
+Covers what a stub UI cannot see: the pages the init
 slots build, how their fields bind to the scene's effect recipe, the readouts
 they keep, and the focus the Shot Manifest opens. The recipe lives on a pure
 ``ShotStore`` here (the Maya store needs a scene); keying against real nodes is

@@ -402,14 +402,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: create, build
 - `class CurtainRig`
   - methods: attach
+- `class Curtain`
+  - methods: rail_from_selection, create, rail_curve, delete_rail_curve, triangle_count
 
 ### `edit_utils/curtain/_curtain_drape.py` — Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
 - `class CurtainDrape(_CurtainDrapeInternal)`
   - methods: prepare, grid_points, drape
-
-### `edit_utils/curtain/curtain_slots.py` — Curtain panel — the Switchboard slots for ``curtain.ui``.
-- `class CurtainSlots(pythontk.LoggingMixin)`
-  - methods: header_init, cmb000_init, b001_init, b002, perform_operation
 
 ### `edit_utils/cut_on_axis.py`
 - `class CutOnAxis`
@@ -448,11 +446,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/naming/_naming.py`
 - `class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`
-  - methods: SUFFIX_TYPES, affix_rules, rename, scene_objects, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, affix_for, suffix_by_type, append_location_based_suffix
-
-### `edit_utils/naming/naming_slots.py` — Switchboard slots for the Naming panel.
-- `class NamingSlots(Naming)`
-  - methods: header_init, scope, dry_run, file_scope, base_names, valid_suffixes, txt000_init, txt000, txt001_init, txt001, tb000_init, tb000, tb001_init, tb001, tb002_init, tb002, tb003_init, tb003
+  - methods: SUFFIX_TYPES, affix_rules, rename, scene_objects, scope_objects, select_by_name, select_link, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, affix_for, suffix_by_type, append_location_based_suffix
 
 ### `edit_utils/primitives.py` — Primitive creation utilities for Maya.
 - `class Primitives`

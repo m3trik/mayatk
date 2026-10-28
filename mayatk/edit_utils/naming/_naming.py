@@ -57,6 +57,12 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         ("set_suffix", "objectSet", "objectSet"),
     )
 
+    #: The convention entries this host has no type for, ``{convention key:
+    #: why}``: :meth:`suffix_by_type` never applies them, and the Naming panel
+    #: greys their rows. Every entry names a Maya node type, so none here
+    #: (blendertk's lists its gaps).
+    UNSUPPORTED_TYPES: Dict[str, str] = {}
+
     @ptk.ClassProperty
     def SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]:
         """``(keyword, affix, label, type key)`` -- the live convention, joined
@@ -265,6 +271,67 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         skip.update(cmds.ls(readOnly=True, long=True) or [])
         skip.update(cmds.ls(shapes=True, long=True) or [])
         return [n for n in cmds.ls(long=True) or [] if n not in skip]
+
+    @classmethod
+    def scope_objects(cls, scene: bool = False) -> List[str]:
+        """What a naming operation acts on in a scene scope: every renameable
+        node (*scene*, :meth:`scene_objects`), else the current selection.
+
+        Returns:
+            list[str]: Long names, so a plan frozen now still resolves each
+            node unambiguously when it is applied later.
+        """
+        if scene:
+            return cls.scene_objects()
+        return cmds.ls(selection=True, long=True) or []
+
+    @classmethod
+    def select_by_name(
+        cls,
+        pattern: str,
+        regex: bool = False,
+        ignore_case: bool = False,
+        locators_only: bool = False,
+    ) -> Tuple[List[str], int]:
+        """Select the scene nodes whose name matches *pattern* (Find).
+
+        Matches each node's leaf name (no path, no namespace) through
+        :func:`pythontk.find_str`; the matches replace the selection, and none
+        found clears it.
+
+        Parameters:
+            pattern: ``*`` / ``|`` wildcards (``startswith*``, ``*contains*``,
+                ``a|b``), or a regular expression with *regex*.
+            regex: Read *pattern* as a regular expression.
+            ignore_case: Match case-insensitively.
+            locators_only: Search locator transforms only.
+
+        Returns:
+            tuple: ``(matches, searched)`` -- the matched nodes (long names),
+            now the selection, and how many nodes were searched.
+        """
+        cmds.select(clear=True)  # first, so the outliner never shows a stale mix
+        if locators_only:
+            shapes = cmds.ls(type="locator", long=True) or []
+            # listRelatives([]) falls back to the selection -- never pass it nothing.
+            objects = (
+                cmds.listRelatives(shapes, parent=True, fullPath=True) or []
+                if shapes
+                else []
+            )
+        else:
+            objects = cmds.ls(long=True) or []
+        names = [cls._leaf(o) for o in objects]
+        hits = set(ptk.find_str(pattern, names, regex=regex, ignore_case=ignore_case))
+        found = [o for o, name in zip(objects, names) if name in hits]
+        if found:
+            cmds.select(found)
+        return found, len(objects)
+
+    @classmethod
+    def select_link(cls, node: str) -> str:
+        """A report link labeled with *node*'s leaf name that selects it."""
+        return cls.log_link(cls._leaf(node), "select", node=node)
 
     @classmethod
     def generate_unique_name(cls, base_name, suffix="_", padding=3):
@@ -768,7 +835,8 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         """Rename objects with a suffix defined by its location from origin.
 
         Parameters:
-            objects (str)(int/list): The object(s) to rename.
+            objects (str)(int/list): The object(s) to rename. Only transforms
+                have a location to order by; anything else is skipped.
             first_obj_as_ref (bool): When True, use the first object's bounding box center as reference_point instead of origin.
             alphabetical (str): When True use an alphabetical character as a suffix when there is less than 26 objects else use integers.
             strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
@@ -780,12 +848,17 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
 
         Returns:
             list[str]: The final names, in distance order (grouped when
-                ``independent_groups``).
+                ``independent_groups``); ``[]`` with no transform to rename.
         """
-
-        objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True)
+        # A scene scope also holds shapes, shaders and sets: none of them has a
+        # location, so only the transforms are numbered.
+        objects = (
+            cmds.ls(CoreUtils.as_strings(objects), type="transform", flatten=True)
+            or []
+        )
         if not objects:
-            return
+            cls.logger.warning("No transforms to suffix by location.")
+            return []
 
         # Determine the reference point
         reference_point = [0, 0, 0]

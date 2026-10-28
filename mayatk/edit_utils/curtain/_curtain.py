@@ -24,13 +24,14 @@ Responsibilities are deliberately split so each stays reusable on its own
   are separate steps (:meth:`CurtainRig._add_wire` /
   :meth:`CurtainRig._add_clusters`).
 
-The panel, :class:`CurtainSlots` (``curtain_slots.py``), drives this engine
-through the hermetic :class:`~mayatk.core_utils.preview.Preview` and a
-built-in preset combo (``presets/``).
+:class:`Curtain` is the tool's API over the three, in object names: what
+tentacle's Curtain panel calls (through the host's ``Preview``), with the
+shipped presets (``presets/``) as its built-in tier.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 try:
@@ -426,3 +427,98 @@ class CurtainRig:
         for i, cv in enumerate(cmds.ls(f"{curve}.cv[*]", flatten=True) or []):
             handles.append(cmds.cluster(cv, name=f"{curve}_ctrl_{i}_cluster")[1])
         return handles
+
+
+# ----------------------------------------------------------------------------
+# Tool API -- what the Curtain panel (tentacle) calls
+# ----------------------------------------------------------------------------
+
+
+class Curtain:
+    """The Curtain tool's API: drape a curtain from a rail, and keep the
+    auto-rail curve a panel shows while nothing usable is selected.
+
+    The tool's one entry point over :class:`Rail` (where the cloth hangs),
+    :class:`CurtainMesh` (the drape) and :class:`CurtainRig` (the rig). Every
+    result is an object NAME, which a panel can hold across preview refreshes.
+    blendertk's ``Curtain`` is its twin (names and behavior).
+    """
+
+    #: The user tier of the tool's presets (a ``PresetManager`` ``preset_dir``).
+    PRESET_DIR = "mayatk/curtain"
+    #: The shipped presets: snapshots of the panel's fields, identical in both
+    #: hosts (one vendored drape engine, so a preset drapes the same).
+    BUILTIN_PRESET_DIR = str(Path(__file__).resolve().parent / "presets")
+    #: The name a new rail curve takes.
+    RAIL_CURVE_NAME = "curtain_rail"
+
+    @staticmethod
+    def rail_from_selection(objects) -> Optional[Tuple[List[Vec], bool]]:
+        """The rail ``(points, closed)`` *objects* describe, or None: polygon
+        edges, a NURBS curve, or two or more transforms
+        (:meth:`Rail.from_selection`)."""
+        return Rail.from_selection(objects)
+
+    @staticmethod
+    def create(rail: Sequence[Vec], **opts) -> str:
+        """Drape a curtain from the *rail* points.
+
+        Parameters:
+            rail: Ordered world-space points the cloth hangs from.
+            **opts: :class:`CurtainMesh`'s keywords.
+
+        Returns:
+            str: The curtain's transform.
+        """
+        return CurtainMesh(rail, **opts).build()
+
+    @staticmethod
+    def rail_curve(
+        points: Sequence[Vec],
+        closed: bool = False,
+        curve: Optional[str] = None,
+        select: bool = False,
+    ) -> str:
+        """A curve with its CVs on *points*: a visible stand-in for a rail.
+
+        *curve* is reshaped in place when it exists, so a preview's refreshes
+        keep one node (Maya's Preview rolls back only the nodes an operation
+        creates, so an in-place reshape survives it); otherwise a new curve
+        named :attr:`RAIL_CURVE_NAME` is built.
+
+        Parameters:
+            points: The CV positions, in world space (the curve's own transform
+                stays at identity).
+            closed: Close the curve into a loop.
+            curve: An existing rail curve to reshape.
+            select: Make the curve the selection (what a Preview reads).
+
+        Returns:
+            str: The curve's transform.
+        """
+        points = [tuple(p) for p in points]
+        degree = min(3, max(1, len(points) - 1))
+        if curve and cmds.objExists(curve):
+            cmds.curve(curve, replace=True, point=points, degree=degree)
+        else:
+            curve = cmds.rename(
+                cmds.curve(point=points, degree=degree), Curtain.RAIL_CURVE_NAME
+            )
+        if closed:
+            cmds.closeCurve(curve, constructionHistory=False, replaceOriginal=True)
+        if select:
+            cmds.select(curve, replace=True)
+        return curve
+
+    @staticmethod
+    def delete_rail_curve(curve: Optional[str]) -> None:
+        """Delete a :meth:`rail_curve` curve; a no-op when it is gone."""
+        if curve and cmds.objExists(curve):
+            cmds.delete(curve)
+
+    @staticmethod
+    def triangle_count(curtain: Optional[str]) -> Optional[int]:
+        """The *curtain* mesh's triangle count, or None when it is gone."""
+        if not curtain or not cmds.objExists(curtain):
+            return None
+        return int(cmds.polyEvaluate(curtain, triangle=True) or 0)

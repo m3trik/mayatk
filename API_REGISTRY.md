@@ -87,7 +87,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`edit_utils/bridge.py`](#edit_utils--bridge) — Bridge: connect open edge loops with new faces (``polyBridgeEdge``).
 - [`edit_utils/curtain/_curtain.py`](#edit_utils--curtain--_curtain) — Procedural draped-cloth (curtain) generator for Maya.
 - [`edit_utils/curtain/_curtain_drape.py`](#edit_utils--curtain--_curtain_drape) — Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
-- [`edit_utils/curtain/curtain_slots.py`](#edit_utils--curtain--curtain_slots) — Curtain panel — the Switchboard slots for ``curtain.ui``.
 - [`edit_utils/cut_on_axis.py`](#edit_utils--cut_on_axis)
 - [`edit_utils/duplicate_grid.py`](#edit_utils--duplicate_grid)
 - [`edit_utils/duplicate_linear.py`](#edit_utils--duplicate_linear)
@@ -95,7 +94,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`edit_utils/dynamic_pipe.py`](#edit_utils--dynamic_pipe)
 - [`edit_utils/macros/_macros.py`](#edit_utils--macros--_macros)
 - [`edit_utils/naming/_naming.py`](#edit_utils--naming--_naming)
-- [`edit_utils/naming/naming_slots.py`](#edit_utils--naming--naming_slots) — Switchboard slots for the Naming panel.
 - [`edit_utils/primitives.py`](#edit_utils--primitives) — Primitive creation utilities for Maya.
 - [`edit_utils/rack_builder.py`](#edit_utils--rack_builder) — Parametric EIA-310 (19-inch) equipment-rack generator.
 - [`edit_utils/selection.py`](#edit_utils--selection)
@@ -255,7 +253,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L258) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L259) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -1634,14 +1632,20 @@ Bridge: connect open edge loops with new faces (``polyBridgeEdge``).
 
 Procedural draped-cloth (curtain) generator for Maya.
 
-- **[`class Rail(pythontk.Polyline)`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L69)** — Rail-polyline geometry — the line a curtain hangs from.
+- **[`class Rail(pythontk.Polyline)`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L70)** — Rail-polyline geometry — the line a curtain hangs from.
   - `Rail.from_selection(objects) -> Optional[Tuple[List[Vec], bool]]` *(static)* — Resolve a rail polyline from a Maya selection.
   - `Rail.sample_curve(shape: str, count: int = 200) -> Tuple[List[Vec], bool]` *(static)* — Sample a NURBS curve into a dense polyline (resampled later by length).
-- **[`class CurtainMesh(CurtainDrape)`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L158)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
+- **[`class CurtainMesh(CurtainDrape)`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L159)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
   - `CurtainMesh.create(cls, rail: Sequence[Vec], **opts) -> str` *(class)*
   - `CurtainMesh.build(self) -> str` — Create the curtain mesh and return its transform name.
-- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L374)** — Make a curve drive a finished curtain.
+- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L375)** — Make a curve drive a finished curtain.
   - `CurtainRig.attach(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str` *(static)* — Wire-deform *curtain* with *curve* and add per-CV cluster controls.
+- **[`class Curtain`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L437)** — The Curtain tool's API: drape a curtain from a rail, and keep the
+  - `Curtain.rail_from_selection(objects) -> Optional[Tuple[List[Vec], bool]]` *(static)* — The rail ``(points, closed)`` *objects* describe, or None: polygon
+  - `Curtain.create(rail: Sequence[Vec], **opts) -> str` *(static)* — Drape a curtain from the *rail* points.
+  - `Curtain.rail_curve(points: Sequence[Vec], closed: bool = False, curve: Optional[str] = None, select: bool = False) -> str` *(static)* — A curve with its CVs on *points*: a visible stand-in for a rail.
+  - `Curtain.delete_rail_curve(curve: Optional[str]) -> None` *(static)* — Delete a :meth:`rail_curve` curve;
+  - `Curtain.triangle_count(curtain: Optional[str]) -> Optional[int]` *(static)* — The *curtain* mesh's triangle count, or None when it is gone.
 
 <a id="edit_utils--curtain--_curtain_drape"></a>
 ### `edit_utils/curtain/_curtain_drape.py`
@@ -1652,18 +1656,6 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
   - `CurtainDrape.prepare(self) -> Tuple[int, int, List[Tuple[Vec, Vec, Vec]]]` — Precompute the per-build state and return ``(u_segs, v_segs, frames)``.
   - `CurtainDrape.grid_points(self) -> Tuple[int, int, List[Vec]]` — The full draped grid: ``(u_segs, v_segs, points)``.
   - `CurtainDrape.drape(self, u, v, pos, tan, normal) -> Vec` — Place one cloth vertex.
-
-<a id="edit_utils--curtain--curtain_slots"></a>
-### `edit_utils/curtain/curtain_slots.py`
-
-Curtain panel — the Switchboard slots for ``curtain.ui``.
-
-- **[`class CurtainSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain/curtain_slots.py#L32)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
-  - `CurtainSlots.header_init(self, widget)` — Configure header help text (the preset combo lives in the panel).
-  - `CurtainSlots.cmb000_init(self, widget)` — Wire the in-panel preset selector (built-in + user tiers).
-  - `CurtainSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
-  - `CurtainSlots.b002(self)` — Set Position to the bounding-box center of the selected object(s).
-  - `CurtainSlots.perform_operation(self, objects, contract)` — Build the curtain from the resolved rail (Preview entry point).
 
 <a id="edit_utils--cut_on_axis"></a>
 ### `edit_utils/cut_on_axis.py`
@@ -1781,6 +1773,9 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
   - `Naming.affix_rules(cls, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> Dict[str, 'ptk.AffixRule']` *(class)* — ``{Maya type key: AffixRule}`` -- the convention bound to this host.
   - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
   - `Naming.scene_objects(cls) -> List[str]` *(class)* — Every renameable node in the scene — the naming tools' "Scene" scope.
+  - `Naming.scope_objects(cls, scene: bool = False) -> List[str]` *(class)* — What a naming operation acts on in a scene scope: every renameable
+  - `Naming.select_by_name(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]` *(class)* — Select the scene nodes whose name matches *pattern* (Find).
+  - `Naming.select_link(cls, node: str) -> str` *(class)* — A report link labeled with *node*'s leaf name that selects it.
   - `Naming.generate_unique_name(cls, base_name, suffix='_', padding=3)` *(class)* — Generate a unique name based on the base_name.
   - `Naming.conform_shape_names(cls, objects: Union[str, 'object', List[Union[str, 'object']], None] = None, force: bool = False) -> List[Tuple[str, str]]` *(class)* — Rename shape nodes to Maya's conventional ``<transform>Shape`` form.
   - `Naming.strip_illegal_chars(input_data, replace_with='_')` *(static)* — Strips illegal characters from a string or a list of strings, replacing them with a specified chara…
@@ -1790,31 +1785,6 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
   - `Naming.affix_for(cls, obj: str, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> 'ptk.AffixRule'` *(class)* — The convention's affix rule for *obj*'s OWN type.
   - `Naming.suffix_by_type(cls, objects: Union[str, object, List[Union[str, object]]], group_suffix: Optional[str] = None, locator_suffix: Optional[str] = None, joint_suffix: Optional[str] = None, mesh_suffix: Optional[str] = None, nurbs_curve_suffix: Optional[str] = None, camera_suffix: Optional[str] = None, light_suffix: Optional[str] = None, display_layer_suffix: Optional[str] = None, ik_handle_suffix: Optional[str] = None, nurbs_surface_suffix: Optional[str] = None, cluster_suffix: Optional[str] = None, lattice_suffix: Optional[str] = None, skin_cluster_suffix: Optional[str] = None, blend_shape_suffix: Optional[str] = None, constraint_suffix: Optional[str] = None, material_suffix: Optional[str] = None, shading_group_suffix: Optional[str] = None, texture_suffix: Optional[str] = None, set_suffix: Optional[str] = None, custom_suffixes: Optional[Dict[str, str]] = None, affix_mode: Optional[str] = None, affix_modes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Apply each object's conventional type **affix**, stripping any other it carries.
   - `Naming.append_location_based_suffix(cls, objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False, dry_run: bool = False)` *(class)* — Rename objects with a suffix defined by its location from origin.
-
-<a id="edit_utils--naming--naming_slots"></a>
-### `edit_utils/naming/naming_slots.py`
-
-Switchboard slots for the Naming panel.
-
-- **[`class NamingSlots(Naming)`](mayatk/mayatk/edit_utils/naming/naming_slots.py#L39)**
-  - `NamingSlots.header_init(self, widget)` — Configure header menu with tool description and workflow instructions.
-  - `NamingSlots.scope(self) -> str` *(property)*
-  - `NamingSlots.dry_run(self) -> bool` *(property)*
-  - `NamingSlots.file_scope(self) -> bool` *(property)*
-  - `NamingSlots.base_names(self) -> bool` *(property)* — Operate on map-suffix-free base names — file scopes only.
-  - `NamingSlots.valid_suffixes(self)` *(property)* — The current Suffix By Type strings (non-empty), from the tb003 option box.
-  - `NamingSlots.txt000_init(self, widget)` — Initialize Find
-  - `NamingSlots.txt000(self, widget)` — Find: select scene objects (or browse for files) whose name matches the pattern.
-  - `NamingSlots.txt001_init(self, widget)` — Initialize Rename
-  - `NamingSlots.txt001(self, widget)` — Rename: rename matched objects or files (find → replace, with regex / suffix options).
-  - `NamingSlots.tb000_init(self, widget)` — Initialize Convert Case
-  - `NamingSlots.tb000(self, widget)` — Convert Case
-  - `NamingSlots.tb001_init(self, widget)` — Initialize Suffix By Location
-  - `NamingSlots.tb001(self, widget)` — Suffix By Location
-  - `NamingSlots.tb002_init(self, widget)` — Initialize Strip Chars
-  - `NamingSlots.tb002(self, widget)` — Strip Chars: remove a number of leading/trailing characters from the names in scope.
-  - `NamingSlots.tb003_init(self, widget)` — Initialize Suffix By Type — the editor for the shared naming convention.
-  - `NamingSlots.tb003(self, widget)` — Suffix By Type
 
 <a id="edit_utils--primitives"></a>
 ### `edit_utils/primitives.py`
