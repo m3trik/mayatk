@@ -4768,7 +4768,7 @@
         {
           "name": "CoreUtils",
           "summary": "",
-          "line": 280,
+          "line": 291,
           "bases": [
             "pythontk.CoreUtils",
             "_CoreUtilsInternal"
@@ -4780,7 +4780,7 @@
               "kind": "staticmethod",
               "signature": "(name: str = '')",
               "summary": "Group operations into a single Maya undo chunk.",
-              "line": 285,
+              "line": 296,
               "deprecated": false
             },
             {
@@ -4789,7 +4789,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Run a block without recording anything into the undo queue.",
-              "line": 305,
+              "line": 316,
               "deprecated": false
             },
             {
@@ -4798,7 +4798,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Suspend viewport refresh for the duration of a bulk operation.",
-              "line": 336,
+              "line": 347,
               "deprecated": false
             },
             {
@@ -4807,16 +4807,43 @@
               "kind": "staticmethod",
               "signature": "(func: Callable) -> Callable",
               "summary": "Pass the selection (:meth:`selected_objects`) to *func*'s target parameter",
-              "line": 364,
+              "line": 375,
               "deprecated": false
             },
             {
               "name": "selected_objects",
               "qualname": "CoreUtils.selected_objects",
               "kind": "staticmethod",
-              "signature": "() -> List[str]",
+              "signature": "(**kwargs) -> List[str]",
               "summary": "The current selection, ``[]`` when it is empty (``cmds.ls(selection=True)``).",
-              "line": 403,
+              "line": 414,
+              "deprecated": false
+            },
+            {
+              "name": "active_object",
+              "qualname": "CoreUtils.active_object",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[str]",
+              "summary": "The selection's lead object: the last one selected, which Maya draws",
+              "line": 427,
+              "deprecated": false
+            },
+            {
+              "name": "ensure_component_mode",
+              "qualname": "CoreUtils.ensure_component_mode",
+              "kind": "staticmethod",
+              "signature": "(object_type: str = 'mesh', component: Optional[str] = None) -> Optional[str]",
+              "summary": "Enter component mode on the selected (or hilited) objects of",
+              "line": 442,
+              "deprecated": false
+            },
+            {
+              "name": "ensure_object_mode",
+              "qualname": "CoreUtils.ensure_object_mode",
+              "kind": "staticmethod",
+              "signature": "() -> bool",
+              "summary": "Leave component mode for object mode;",
+              "line": 494,
               "deprecated": false
             },
             {
@@ -4825,7 +4852,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Restore the viewport selection after a scene-mutating block.",
-              "line": 411,
+              "line": 509,
               "deprecated": false
             },
             {
@@ -4834,7 +4861,7 @@
               "kind": "staticmethod",
               "signature": "(values: Dict[str, Union[int, float, str]])",
               "summary": "Set Maya optionVars for a block, then put the user's values back.",
-              "line": 440,
+              "line": 538,
               "deprecated": false
             },
             {
@@ -4843,7 +4870,7 @@
               "kind": "staticmethod",
               "signature": "(fn=None, *, name: str = '', suspend_refresh: bool = False)",
               "summary": "A decorator to place a function into Maya's undo chunk.",
-              "line": 492,
+              "line": 590,
               "deprecated": false
             },
             {
@@ -4852,7 +4879,7 @@
               "kind": "staticmethod",
               "signature": "(func: Callable) -> Callable",
               "summary": "A decorator to manage reparenting of Maya nodes before and after an operation.",
-              "line": 536,
+              "line": 634,
               "deprecated": false
             },
             {
@@ -4861,7 +4888,7 @@
               "kind": "staticmethod",
               "signature": "(control_name, container)",
               "summary": "Embed a Maya Native UI Object.",
-              "line": 569,
+              "line": 667,
               "deprecated": false
             },
             {
@@ -4870,7 +4897,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str]) -> Tuple[List[str], List[str]]",
               "summary": "Confirms the existence of each object in the provided list in Maya.",
-              "line": 590,
+              "line": 688,
               "deprecated": false
             },
             {
@@ -4879,7 +4906,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> list",
               "summary": "Rename-proof references to *nodes*, to be resolved after a renaming operation.",
-              "line": 604,
+              "line": 702,
               "deprecated": false
             },
             {
@@ -4888,7 +4915,7 @@
               "kind": "staticmethod",
               "signature": "(handles, drop_dead: bool = True) -> List[str]",
               "summary": "Current full path (DAG) / name (DG) for each :meth:`node_handles` handle.",
-              "line": 626,
+              "line": 724,
               "deprecated": false
             },
             {
@@ -4897,7 +4924,7 @@
               "kind": "staticmethod",
               "signature": "(objects, api_version: int = 2)",
               "summary": "Get MFnMesh function set(s) from transform or shape node(s).",
-              "line": 649,
+              "line": 747,
               "deprecated": false
             },
             {
@@ -4906,7 +4933,7 @@
               "kind": "staticmethod",
               "signature": "(array)",
               "summary": "Determine the given element(s) type.",
-              "line": 703,
+              "line": 801,
               "deprecated": false
             },
             {
@@ -4915,7 +4942,7 @@
               "kind": "staticmethod",
               "signature": "(lst, returned_type='str', flatten=False)",
               "summary": "Convert the given element(s) to <obj>, 'str', or int values.",
-              "line": 726,
+              "line": 824,
               "deprecated": false
             },
             {
@@ -4924,7 +4951,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Query a specified Maya command and return a dict mapping parameters to their values.",
-              "line": 808,
+              "line": 906,
               "deprecated": false
             },
             {
@@ -4933,7 +4960,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Apply a set of parameter values to a specified Maya node using a given Maya command.",
-              "line": 818,
+              "line": 916,
               "deprecated": false
             },
             {
@@ -4942,7 +4969,7 @@
               "kind": "classmethod",
               "signature": "(cls, source, target, tolerance: float = 0.1) -> dict",
               "summary": "Build a mapping of source meshes to target meshes based on geometric similarity.",
-              "line": 829,
+              "line": 927,
               "deprecated": false
             },
             {
@@ -4951,7 +4978,7 @@
               "kind": "staticmethod",
               "signature": "(keyword=None, ignore_case=True)",
               "summary": "Get global MEL variables.",
-              "line": 864,
+              "line": 962,
               "deprecated": false
             },
             {
@@ -4960,7 +4987,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, method='name', reverse=False)",
               "summary": "Reorder a given set of objects using various sorting methods.",
-              "line": 882,
+              "line": 980,
               "deprecated": false
             },
             {
@@ -4969,7 +4996,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> List[str]",
               "summary": "Coerce a node-or-iterable-of-nodes to a list of plain DAG-path strings.",
-              "line": 1006,
+              "line": 1104,
               "deprecated": false
             },
             {
@@ -4978,7 +5005,7 @@
               "kind": "staticmethod",
               "signature": "(node) -> str",
               "summary": "Leaf name with namespace stripped: ``\"|grp|ns:obj\"`` -> ``\"obj\"``.",
-              "line": 1024,
+              "line": 1122,
               "deprecated": false
             },
             {
@@ -4987,7 +5014,7 @@
               "kind": "staticmethod",
               "signature": "(node) -> str",
               "summary": "Leaf name with namespace preserved: ``\"|grp|ns:obj\"`` -> ``\"ns:obj\"``.",
-              "line": 1029,
+              "line": 1127,
               "deprecated": false
             },
             {
@@ -4996,7 +5023,7 @@
               "kind": "staticmethod",
               "signature": "(node, world: bool = True) -> BoundingBox",
               "summary": "Moved to ``XformUtils.get_bounding_box(node, \"box\", world_space=world)``,",
-              "line": 1039,
+              "line": 1137,
               "deprecated": true,
               "remove_in": "0.30.0"
             }
@@ -26166,12 +26193,39 @@
               "deprecated": false
             },
             {
+              "name": "get_tool_types",
+              "qualname": "UiUtils.get_tool_types",
+              "kind": "classmethod",
+              "signature": "(cls) -> dict",
+              "summary": "The friendly-name -> MEL map understood by :meth:`set_tool`.",
+              "line": 132,
+              "deprecated": false
+            },
+            {
+              "name": "set_tool",
+              "qualname": "UiUtils.set_tool",
+              "kind": "classmethod",
+              "signature": "(cls, tool: str) -> str",
+              "summary": "Activate a viewport tool: a friendly name from :meth:`get_tool_types`,",
+              "line": 141,
+              "deprecated": false
+            },
+            {
+              "name": "current_tool",
+              "qualname": "UiUtils.current_tool",
+              "kind": "classmethod",
+              "signature": "(cls) -> Optional[str]",
+              "summary": "The active tool: its friendly name from :meth:`get_tool_types` when",
+              "line": 170,
+              "deprecated": false
+            },
+            {
               "name": "get_main_window",
               "qualname": "UiUtils.get_main_window",
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Get the main Maya window as a QMainWindow instance.",
-              "line": 115,
+              "line": 186,
               "deprecated": false
             },
             {
@@ -26180,7 +26234,7 @@
               "kind": "staticmethod",
               "signature": "(qt_object_name: str) -> Optional[str]",
               "summary": "Retrieve the internal Maya name of a menu given its Qt object name.",
-              "line": 144,
+              "line": 215,
               "deprecated": false
             },
             {
@@ -26189,7 +26243,7 @@
               "kind": "staticmethod",
               "signature": "(*args, **kwargs)",
               "summary": "Returns panel and panel configuration information.",
-              "line": 166,
+              "line": 237,
               "deprecated": false
             },
             {
@@ -26198,7 +26252,7 @@
               "kind": "staticmethod",
               "signature": "(with_focus: bool = True) -> Optional[str]",
               "summary": "Return a 3D model panel (viewport), suitable for commands like isolateSelect.",
-              "line": 183,
+              "line": 254,
               "deprecated": false
             },
             {
@@ -26207,7 +26261,7 @@
               "kind": "staticmethod",
               "signature": "(size, name='progressBar#', step_amount=1)",
               "summary": "# add esc key pressed return False",
-              "line": 223,
+              "line": 294,
               "deprecated": false
             },
             {
@@ -26216,7 +26270,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "List all UI objects.",
-              "line": 261,
+              "line": 332,
               "deprecated": false
             },
             {
@@ -26225,7 +26279,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.",
-              "line": 277,
+              "line": 348,
               "deprecated": false
             },
             {
@@ -26234,7 +26288,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Select *objects* and scroll the Outliner to them.",
-              "line": 322,
+              "line": 393,
               "deprecated": false
             },
             {
@@ -26243,7 +26297,7 @@
               "kind": "staticmethod",
               "signature": "() -> int",
               "summary": "Redraw every Outliner panel.",
-              "line": 340,
+              "line": 411,
               "deprecated": false
             },
             {
@@ -26252,7 +26306,7 @@
               "kind": "staticmethod",
               "signature": "(url, logger=None) -> bool",
               "summary": "Handle ``action://`` links emitted by ``log_link()`` in a QTextBrowser.",
-              "line": 358,
+              "line": 429,
               "deprecated": false
             }
           ]

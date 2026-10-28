@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (324)
+## Added (330)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1020,7 +1020,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.tracks_at(frame: float) -> List[str]`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch_snap(callback, widget=None) -> Optional[Callable[[], None]]`
-- `core_utils/_core_utils.py::CoreUtils.selected_objects() -> List[str]`
+- `core_utils/_core_utils.py::CoreUtils.active_object() -> Optional[str]`
+- `core_utils/_core_utils.py::CoreUtils.ensure_component_mode(object_type: str = 'mesh', component: Optional[str] = None) -> Optional[str]`
+- `core_utils/_core_utils.py::CoreUtils.ensure_object_mode() -> bool`
+- `core_utils/_core_utils.py::CoreUtils.selected_objects(**kwargs) -> List[str]`
 - `core_utils/components.py::Components.reverse_normals(cls, objects, mode: int = 0) -> None`
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`
 - `core_utils/components.py::Components.set_to_face_normals(objects) -> None`
@@ -1224,6 +1227,9 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `rig_utils/wheel_rig.py::WheelRig.default_rig_name(cls, control=None) -> Optional[str]`
 - `rig_utils/wheel_rig.py::WheelRig.from_selection(cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs) -> 'WheelRig'`
 - `rig_utils/wheel_rig.py::WheelRig.wheel_size(obj=None, movement_axis: str = 'translateZ') -> Optional[float]`
+- `ui_utils/_ui_utils.py::UiUtils.current_tool(cls) -> Optional[str]`
+- `ui_utils/_ui_utils.py::UiUtils.get_tool_types(cls) -> dict`
+- `ui_utils/_ui_utils.py::UiUtils.set_tool(cls, tool: str) -> str`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 - `uv_utils/_uv_utils.py::UvUtils.align_uvs(cls, objects, axis: str = 'u', mode: str = 'avg') -> int`
 - `uv_utils/_uv_utils.py::UvUtils.distribute_uv_shells(cls, objects, axis: str = 'u', spacing: float = 0.0) -> int`

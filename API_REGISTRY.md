@@ -932,12 +932,15 @@ Consumer-facing segment discovery for sequencer + manifest.
 
 - **[`class BoundingBox`](mayatk/mayatk/core_utils/_core_utils.py#L20)** — Plain-data bounding box with ``MVector`` extents.
   - `BoundingBox.corners(self)` *(property)* — The box's 8 corner ``MVector``s (every min/max combination per axis).
-- **[`class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L280)**
+- **[`class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L291)**
   - `CoreUtils.undo_chunk(name: str = '')` *(static)* — Group operations into a single Maya undo chunk.
   - `CoreUtils.undo_disabled()` *(static)* — Run a block without recording anything into the undo queue.
   - `CoreUtils.suspended_refresh()` *(static)* — Suspend viewport refresh for the duration of a bulk operation.
   - `CoreUtils.selected(func: Callable) -> Callable` *(static)* — Pass the selection (:meth:`selected_objects`) to *func*'s target parameter
-  - `CoreUtils.selected_objects() -> List[str]` *(static)* — The current selection, ``[]`` when it is empty (``cmds.ls(selection=True)``).
+  - `CoreUtils.selected_objects(**kwargs) -> List[str]` *(static)* — The current selection, ``[]`` when it is empty (``cmds.ls(selection=True)``).
+  - `CoreUtils.active_object() -> Optional[str]` *(static)* — The selection's lead object: the last one selected, which Maya draws
+  - `CoreUtils.ensure_component_mode(object_type: str = 'mesh', component: Optional[str] = None) -> Optional[str]` *(static)* — Enter component mode on the selected (or hilited) objects of
+  - `CoreUtils.ensure_object_mode() -> bool` *(static)* — Leave component mode for object mode;
   - `CoreUtils.preserved_selection()` *(static)* — Restore the viewport selection after a scene-mutating block.
   - `CoreUtils.temp_option_vars(values: Dict[str, Union[int, float, str]])` *(static)* — Set Maya optionVars for a block, then put the user's values back.
   - `CoreUtils.undoable(fn=None, *, name: str = '', suspend_refresh: bool = False)` *(static)* — A decorator to place a function into Maya's undo chunk.
@@ -3983,6 +3986,9 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 - **[`class UiUtils`](mayatk/mayatk/ui_utils/_ui_utils.py#L12)**
   - `UiUtils.get_editor_types(cls) -> dict` *(class)* — The friendly-name -> runtime-command map understood by :meth:`open_editor`.
   - `UiUtils.open_editor(cls, editor: str) -> Optional[str]` *(class)* — Open ``editor`` -- a friendly name from :meth:`get_editor_types`, or a
+  - `UiUtils.get_tool_types(cls) -> dict` *(class)* — The friendly-name -> MEL map understood by :meth:`set_tool`.
+  - `UiUtils.set_tool(cls, tool: str) -> str` *(class)* — Activate a viewport tool: a friendly name from :meth:`get_tool_types`,
+  - `UiUtils.current_tool(cls) -> Optional[str]` *(class)* — The active tool: its friendly name from :meth:`get_tool_types` when
   - `UiUtils.get_main_window()` *(static)* — Get the main Maya window as a QMainWindow instance.
   - `UiUtils.get_menu_name(qt_object_name: str) -> Optional[str]` *(static)* — Retrieve the internal Maya name of a menu given its Qt object name.
   - `UiUtils.get_panel(*args, **kwargs)` *(static)* — Returns panel and panel configuration information.

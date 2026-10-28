@@ -160,5 +160,86 @@ class TestLogLinks(MayaTkTestCase):
         self.assertIn("|gone", logger.warning.call_args.args[0])
 
 
+class TestToolRegistry(MayaTkTestCase):
+    """UiUtils.get_tool_types / set_tool / current_tool -- the mirror of
+    blendertk's trio, what a panel shared by both hosts calls to pick a tool.
+
+    ``mel.eval`` is stubbed where it would activate a real tool (GUI-only); what
+    is pinned here is the lookup and the raise-on-refusal contract.
+    """
+
+    @skipIfBatch("tool runtime commands and contexts are registered by the GUI")
+    def test_every_tool_maps_to_a_context_or_a_command(self):
+        for name, command in mtk.UiUtils.get_tool_types().items():
+            if command.startswith("setToolTo "):
+                ok = cmds.contextInfo(command.split(" ", 1)[1], exists=True)
+            else:
+                ok = cmds.runTimeCommand(command, exists=True) or mel.eval(
+                    f'exists "{command}"'
+                )
+            self.assertTrue(ok, f"{name}: {command} is no context or command")
+
+    def test_a_copy_is_returned(self):
+        mtk.UiUtils.get_tool_types()["Multi-Cut"] = "nope"
+        self.assertEqual(mtk.UiUtils.get_tool_types()["Multi-Cut"], "dR_multiCutTool")
+
+    def test_set_runs_the_mapped_mel_a_context_or_a_raw_command(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev, mock.patch.object(
+            _ui_utils.cmds,
+            "contextInfo",
+            side_effect=lambda name, **_: name == "lassoSelectContext",
+        ):
+            self.assertEqual(mtk.UiUtils.set_tool("Multi-Cut"), "dR_multiCutTool")
+            self.assertEqual(
+                mtk.UiUtils.set_tool("Marquee Select"), "setToolTo selectSuperContext"
+            )
+            self.assertEqual(
+                mtk.UiUtils.set_tool("lassoSelectContext"),
+                "setToolTo lassoSelectContext",
+            )
+            self.assertEqual(mtk.UiUtils.set_tool("MergeVertexTool"), "MergeVertexTool")
+        self.assertEqual(
+            [c.args[0] for c in ev.call_args_list],
+            [
+                "dR_multiCutTool",
+                "setToolTo selectSuperContext",
+                "setToolTo lassoSelectContext",
+                "MergeVertexTool",
+            ],
+        )
+
+    def test_a_refused_tool_raises(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.mel, "eval", side_effect=RuntimeError("Cannot find procedure")
+        ):
+            with self.assertRaises(RuntimeError):
+                mtk.UiUtils.set_tool("Quad Draw")
+
+    def test_current_tool_names_a_registered_context(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.cmds, "currentCtx", return_value="lassoSelectContext"
+        ):
+            self.assertEqual(mtk.UiUtils.current_tool(), "Lasso Select")
+        with mock.patch.object(
+            _ui_utils.cmds, "currentCtx", return_value="moveSuperContext"
+        ):
+            self.assertEqual(mtk.UiUtils.current_tool(), "moveSuperContext")
+
+    @skipIfBatch("tool contexts need a GUI session")
+    def test_a_select_style_round_trips(self):
+        prior = cmds.currentCtx()
+        try:
+            mtk.UiUtils.set_tool("Lasso Select")
+            self.assertEqual(mtk.UiUtils.current_tool(), "Lasso Select")
+        finally:
+            cmds.setToolTo(prior)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

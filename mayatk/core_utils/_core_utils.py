@@ -60,6 +60,17 @@ class _CoreUtilsInternal(object):
     """Internal utilities for Maya CoreUtils."""
 
     @staticmethod
+    def _transform_of(node: str) -> str:
+        """*node*'s transform when it is a shape -- what ``ls -objectsOnly``
+        resolves a component to -- else *node* itself; named as ``cmds.ls``
+        names it."""
+        if cmds.objectType(node, isAType="shape"):
+            parents = cmds.listRelatives(node, parent=True, fullPath=True) or []
+            if parents:
+                return (cmds.ls(parents[0]) or parents)[0]
+        return node
+
+    @staticmethod
     def _prepare_reparent(
         nodes: List[object],
     ) -> Tuple[Optional[str], List[str]]:
@@ -400,11 +411,98 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         return wrapped
 
     @staticmethod
-    def selected_objects() -> List[str]:
+    def selected_objects(**kwargs) -> List[str]:
         """The current selection, ``[]`` when it is empty (``cmds.ls(selection=True)``).
         What :meth:`selected` passes; twin of blendertk's ``CoreUtils.selected_objects``.
+
+        Parameters:
+            **kwargs: ``cmds.ls`` filters (``objectsOnly``, ``flatten``, ``type``,
+                ``long``); ``selection=True`` is always applied. Maya's own: the
+                blendertk twin takes none (a Blender selection is objects), so a
+                panel shared by both hosts calls it bare.
         """
-        return cmds.ls(selection=True) or []
+        return cmds.ls(selection=True, **kwargs) or []
+
+    @staticmethod
+    def active_object() -> Optional[str]:
+        """The selection's lead object: the last one selected, which Maya draws
+        green and makes the target of parent, constraints and align. A selected
+        component stands for its object's transform; in component mode with no
+        component selected, the last hilited object leads. Twin of blendertk's
+        ``CoreUtils.active_object`` (Blender's active object).
+
+        Returns:
+            (str/None): The node as ``cmds.ls`` names it; ``None`` with nothing
+                selected or hilited.
+        """
+        nodes = cmds.ls(selection=True, objectsOnly=True) or cmds.ls(hilite=True) or []
+        return CoreUtils._transform_of(nodes[-1]) if nodes else None
+
+    @staticmethod
+    def ensure_component_mode(
+        object_type: str = "mesh", component: Optional[str] = None
+    ) -> Optional[str]:
+        """Enter component mode on the selected (or hilited) objects of
+        *object_type*, optionally setting the component mask.
+
+        Twin of blendertk's ``CoreUtils.ensure_component_mode`` (Edit Mode
+        there): what a tool calls before it works on components. Every object
+        of the type is hilited -- Maya edits each hilited object's components,
+        as Blender's multi-object Edit Mode does -- and the mode stays.
+
+        Parameters:
+            object_type (str): ``"mesh"`` or ``"curve"`` (NURBS and Bezier), or
+                a Maya shape type; case-insensitive.
+            component (str, optional): ``"vertex"``, ``"edge"`` or ``"face"``
+                (meshes): the component mask to set.
+
+        Returns:
+            (str/None): The lead object of the type (the last selected one), as
+                ``cmds.ls`` names it; ``None`` when no selected or hilited
+                object is of the type, and nothing changes.
+        """
+        shape_type = {"mesh": "mesh", "curve": "nurbsCurve"}.get(
+            object_type.lower(), object_type
+        )
+        nodes = list(reversed(cmds.ls(selection=True, objectsOnly=True) or []))
+        nodes += cmds.ls(hilite=True) or []
+        objects = []
+        for node in nodes:
+            obj = CoreUtils._transform_of(node)
+            if obj in objects:
+                continue
+            try:
+                shapes = cmds.listRelatives(
+                    obj, shapes=True, type=shape_type, noIntermediate=True
+                )
+                if shapes or cmds.objectType(obj, isAType=shape_type):
+                    objects.append(obj)
+            except RuntimeError:  # a DG node (a selected set or shader)
+                continue
+        if not objects:
+            return None
+        cmds.hilite(objects)
+        cmds.selectMode(component=True)
+        if component:
+            flag = {"vertex": "vertex", "vert": "vertex", "face": "facet"}.get(
+                component.lower(), component.lower()
+            )
+            cmds.selectType(**{flag: True})
+        return objects[0]
+
+    @staticmethod
+    def ensure_object_mode() -> bool:
+        """Leave component mode for object mode; the hilited objects stay
+        selected. Twin of blendertk's ``CoreUtils.ensure_object_mode`` (Object
+        Mode there): what object-level work calls first. Set, not queried --
+        setting it is idempotent and ``selectMode`` queries read False in batch.
+
+        Returns:
+            bool: ``True``. Maya never refuses (the blendertk twin raises
+                ``RuntimeError`` when Blender does).
+        """
+        cmds.selectMode(object=True)
+        return True
 
     @staticmethod
     @contextlib.contextmanager

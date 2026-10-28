@@ -173,7 +173,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BoundingBox`
   - methods: corners
 - `class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`
-  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, selected_objects, preserved_selection, temp_option_vars, undoable, reparent, wrap_control, confirm_existence, node_handles, resolve_handles, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
+  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, selected_objects, active_object, ensure_component_mode, ensure_object_mode, preserved_selection, temp_option_vars, undoable, reparent, wrap_control, confirm_existence, node_handles, resolve_handles, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
 
 ### `core_utils/auto_instancer/_auto_instancer.py` — Scene auto-instancer: convert geometrically identical meshes to instances.
 - `class InstanceCandidate`
@@ -964,7 +964,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/_ui_utils.py`
 - `class UiUtils`
-  - methods: get_editor_types, open_editor, get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, refresh_outliners, dispatch_log_link
+  - methods: get_editor_types, open_editor, get_tool_types, set_tool, current_tool, get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, refresh_outliners, dispatch_log_link
 
 ### `ui_utils/calculator.py`
 - `class CalculatorController`

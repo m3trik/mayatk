@@ -111,6 +111,77 @@ class UiUtils:
             return None
         return command
 
+    #: Friendly tool name -> the MEL that activates it (a runtime command, or
+    #: ``setToolTo`` a tool context): the registry behind :meth:`get_tool_types`
+    #: / :meth:`set_tool`, named as the shared ``.ui`` names the tools. Mirror
+    #: of blendertk's ``UiUtils._TOOLS`` (workspace tool idnames there).
+    #: Annotation is no tool here (``CreateAnnotateNode`` makes a node).
+    _TOOLS = {
+        "Multi-Cut": "dR_multiCutTool",
+        "Insert Edgeloop": "SplitEdgeRingTool",
+        "Quad Draw": "dR_quadDrawTool",
+        "Edit Curve Tool": "CurveEditTool",
+        "Add Points Tool": "AddPointsTool",
+        "Measure": "DistanceTool",
+        "Marquee Select": "setToolTo selectSuperContext",
+        "Lasso Select": "setToolTo lassoSelectContext",
+        "Paint Select": "setToolTo artSelectContext",
+    }
+
+    @classmethod
+    def get_tool_types(cls) -> dict:
+        """The friendly-name -> MEL map understood by :meth:`set_tool`.
+
+        Mirror of blendertk's ``UiUtils.get_tool_types`` (there the values are
+        ``(tool idname, object type)``). A copy: editing it changes nothing.
+        """
+        return dict(cls._TOOLS)
+
+    @classmethod
+    def set_tool(cls, tool: str) -> str:
+        """Activate a viewport tool: a friendly name from :meth:`get_tool_types`,
+        a tool context (``"lassoSelectContext"``) or a MEL runtime command
+        (``"MergeVertexTool"``).
+
+        Mirror of blendertk's ``UiUtils.set_tool``, the call a panel shared by
+        both hosts makes. Maya's tools need no selection and enter component
+        mode on their own, so nothing is checked first.
+
+        Parameters:
+            tool (str): A friendly name, a tool context or a runtime command.
+
+        Returns:
+            (str): The MEL that ran.
+
+        Raises:
+            RuntimeError: Maya refused it (an unknown command or context).
+        """
+        command = cls._TOOLS.get(tool)
+        if command is None:
+            try:
+                is_context = bool(cmds.contextInfo(tool, exists=True))
+            except RuntimeError:
+                is_context = False
+            command = f"setToolTo {tool}" if is_context else tool
+        mel.eval(command)
+        return command
+
+    @classmethod
+    def current_tool(cls) -> Optional[str]:
+        """The active tool: its friendly name from :meth:`get_tool_types` when
+        it is a registered context, else the context's own name; ``None`` when
+        Maya reports none. Mirror of blendertk's ``UiUtils.current_tool``.
+        """
+        context = cmds.currentCtx() or None
+        return next(
+            (
+                name
+                for name, command in cls._TOOLS.items()
+                if command == f"setToolTo {context}"
+            ),
+            context,
+        )
+
     @staticmethod
     def get_main_window():
         """Get the main Maya window as a QMainWindow instance.
