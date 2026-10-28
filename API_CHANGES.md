@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (432)
+## Added (440)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1062,9 +1062,11 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `display_utils/_display_utils.py::DisplayUtils.cycle_normals_display() -> Optional[str]`
 - `display_utils/_display_utils.py::DisplayUtils.get_smooth_level(objects=None) -> Optional[dict]`
 - `display_utils/_display_utils.py::DisplayUtils.hide_objects(objects=None) -> List[str]`
+- `display_utils/_display_utils.py::DisplayUtils.joint_display_scale(cls, kind: str = 'joint', value: Optional[float] = None) -> float`
 - `display_utils/_display_utils.py::DisplayUtils.set_smooth_level(cls, objects=None, level: int = None, adaptive_level: int = None) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.set_wireframe(objects=None, state: bool = True) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.show_objects(objects=None) -> List[str]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_local_axes(objects=None, joints: bool = False) -> Optional[bool]`
 - `display_utils/_display_utils.py::DisplayUtils.toggle_material_override() -> Optional[bool]`
 - `display_utils/_display_utils.py::DisplayUtils.toggle_soft_edge_display() -> Optional[bool]`
 - `display_utils/_display_utils.py::DisplayUtils.toggle_template(cls, objects=None)`
@@ -1290,7 +1292,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `nurbs_utils/_nurbs_utils.py::NurbsUtils.revolve(cls, curves=None, axis: str = 'y', start_sweep: float = 0.0, end_sweep: float = 360.0, sections: int = 8, degree: int = 3, range_: bool = False, polygon: bool = True, use_tolerance: bool = False, tolerance: float = 0.001, auto_correct_normal: bool = False) -> List[str]`
 - `nurbs_utils/curve_to_tube.py::CurveToTube.describe(tubes) -> str`
 - `nurbs_utils/image_tracer.py::BluePencilMixin.open_blue_pencil() -> None`
+- `render_utils/_render_utils.py::RenderUtils.render_cameras() -> List[str]`
+- `rig_utils/_rig_utils.py::RigUtils.add_locator(cls, size: float = 1.0, rotate_order: str = 'xyz') -> str`
+- `rig_utils/_rig_utils.py::RigUtils.auto_rig(cls, rig_type: str) -> str`
+- `rig_utils/_rig_utils.py::RigUtils.create_utility_node(cls, node_type: str)`
 - `rig_utils/_rig_utils.py::RigUtils.freeze_and_reanchor(cls, objects=None, reanchor: bool = True, **freeze_options) -> list`
+- `rig_utils/_rig_utils.py::RigUtils.lock_transforms(cls, objects=None, lock: bool = True, scope: str = 'all') -> Tuple[List[str], List[str]]`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.group_uuid(self) -> Optional[str]`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.parts_of(self, nodes: Sequence[str]) -> List[str]`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.select(nodes: Sequence[str]) -> None`
@@ -1349,6 +1356,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_transfer.py::TextureTransfer.shader_types() -> Dict[str, str]`
 - `xform_utils/_xform_utils.py::XformUtils.align_to(cls, mode, objects=None) -> List[str]`
 - `xform_utils/_xform_utils.py::XformUtils.center_pivot(objects=None, mode: str = 'object') -> list`
+- `xform_utils/_xform_utils.py::XformUtils.get_rotate_order(cls, objects=None) -> dict`
 - `xform_utils/_xform_utils.py::XformUtils.get_transform_constraint(cls) -> dict`
 - `xform_utils/_xform_utils.py::XformUtils.get_transform_snap(cls) -> dict`
 - `xform_utils/_xform_utils.py::XformUtils.move_to_target(cls, objects=None, pivot='center', all_to_last=True, match_scale=False) -> List[str]`
@@ -1399,7 +1407,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (17)
+## Signature changed (19)
 
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
@@ -1431,6 +1439,12 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `node_utils/_node_utils.py::NodeUtils.uninstance`
   - was: `(cls, objects, freeze=False, delete_history=False, quiet=True)`
   - now: `(cls, objects=None, freeze=False, delete_history=False, quiet=True)`
+- `rig_utils/_rig_utils.py::RigUtils.create_locator_at_object`
+  - was: `(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, grp_affix_mode: str = 'auto', loc_suffix: Optional[str] = None, loc_affix_mode: str = 'auto', obj_suffix: Optional[str] = None, obj_affix_mode: str = 'auto', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True, rotate_order: str = 'xyz') -> List[str]`
+  - now: `(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, grp_affix_mode: str = 'auto', loc_suffix: Optional[str] = None, loc_affix_mode: str = 'auto', obj_suffix: Optional[str] = None, obj_affix_mode: str = 'auto', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True, rotate_order: str = 'xyz', group_display: Optional[str] = None) -> List[str]`
+- `rig_utils/_rig_utils.py::RigUtils.remove_locator`
+  - was: `(cls, objects)`
+  - now: `(cls, objects=None)`
 - `rig_utils/controls.py::Controls.create`
   - was: `(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, **kwargs) -> Union[str, ControlNodes]`
   - now: `(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, select: bool = False, **kwargs) -> Union[str, ControlNodes]`

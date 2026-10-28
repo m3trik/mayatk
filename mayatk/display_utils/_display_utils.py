@@ -1062,6 +1062,74 @@ class DisplayUtils(ptk.HelpMixin):
         return "on" if state else "off"
 
     @staticmethod
+    @CoreUtils.undoable
+    def toggle_local_axes(objects=None, joints: bool = False) -> Optional[bool]:
+        """Toggle the local rotation axes display (``displayLocalAxis``), the lead
+        (the first) deciding the state for all. Twin of blendertk's
+        ``DisplayUtils.toggle_local_axes`` (bone / object axes there).
+
+        Parameters:
+            objects (str/obj/list): Nodes; ``None``: the selection.
+            joints (bool): Toggle the joints among them; called bare with no
+                joint selected, every joint in the scene. False: the transforms
+                themselves (joints included).
+
+        Returns:
+            (bool/None): True when the axes now show; None with nothing to toggle.
+        """
+        names = (
+            CoreUtils.selected_objects()
+            if objects is None
+            else CoreUtils.as_strings(objects)
+        )
+        kind = "joint" if joints else "transform"
+        nodes = (cmds.ls(names, type=kind, long=True) or []) if names else []
+        if not nodes and joints and objects is None:
+            nodes = cmds.ls(type="joint", long=True) or []
+        if not nodes:
+            return None
+        state = not cmds.getAttr(f"{nodes[0]}.displayLocalAxis")
+        for node in nodes:
+            try:
+                cmds.setAttr(f"{node}.displayLocalAxis", state)
+            except RuntimeError:  # locked, or a locked reference edit
+                continue
+        return state
+
+    #: ``{kind: (command, flags)}`` behind :meth:`joint_display_scale`.
+    _JOINT_DISPLAY_SCALES = {
+        "joint": ("jointDisplayScale", {}),
+        "ik_handle": ("ikHandleDisplayScale", {}),
+        "ik_fk": ("jointDisplayScale", {"ikfk": True}),
+    }
+
+    @classmethod
+    def joint_display_scale(
+        cls, kind: str = "joint", value: Optional[float] = None
+    ) -> float:
+        """Maya's global display scale of joints ("joint"), IK handles
+        ("ik_handle") or IK/FK joints ("ik_fk"): read it, or set it to *value*
+        first (Display > Animation). Maya's own: Blender has no global bone
+        display scale.
+
+        Returns:
+            float: The scale, after any change.
+
+        Raises:
+            ValueError: An unknown *kind*.
+        """
+        if kind not in cls._JOINT_DISPLAY_SCALES:
+            raise ValueError(
+                f"Unknown display scale {kind!r}; expected one of "
+                f"{tuple(cls._JOINT_DISPLAY_SCALES)}."
+            )
+        command, flags = cls._JOINT_DISPLAY_SCALES[kind]
+        scale = getattr(cmds, command)
+        if value is not None:
+            scale(float(value), **flags)
+        return float(scale(query=True, **flags))
+
+    @staticmethod
     def reset_viewport(max_res=4096):
         """Resets Viewport 2.0 to fix graphical glitches (e.g. green scrambled textures).
 

@@ -1245,6 +1245,20 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         """
         return cls._set_rotate_order(objects=objects, order=order, preserve=preserve)
 
+    @classmethod
+    def get_rotate_order(cls, objects=None) -> dict:
+        """Each transform's rotate order, by long name: ``{node: "xyz"}``. What
+        :meth:`set_rotate_order` reports against (the order before and after a
+        change). Twin of blendertk's ``XformUtils.get_rotate_order``.
+
+        Parameters:
+            objects (str/obj/list): Transforms; ``None``: the selected ones.
+
+        Returns:
+            (dict): ``{long name: order}`` in input order; ``{}`` with none.
+        """
+        return cls._get_rotate_order(objects=objects)
+
 
 # -----------------------------------------------------------------------------
 

@@ -295,7 +295,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(pythontk.HelpMixin)`
-  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, get_isolated_panels, add_to_isolation_set, set_smooth_preview, get_smooth_level, set_smooth_level, get_surface_shapes, is_xray, set_xray, toggle_xray, resync_viewport_xray, clear_xray, toggle_xray_others, hide_objects, show_objects, cycle_component_ids, cycle_normals_display, toggle_soft_edge_display, toggle_uv_border_edges, toggle_material_override, set_wireframe, toggle_wireframe, toggle_wireframe_inactive, toggle_template, toggle_uv_checker, toggle_uv_distortion, reset_viewport
+  - methods: add_to_isolation, is_templated, set_visibility, set_hidden_in_outliner, is_visible, get_visible_geometry, get_isolated_panels, add_to_isolation_set, set_smooth_preview, get_smooth_level, set_smooth_level, get_surface_shapes, is_xray, set_xray, toggle_xray, resync_viewport_xray, clear_xray, toggle_xray_others, hide_objects, show_objects, cycle_component_ids, cycle_normals_display, toggle_soft_edge_display, toggle_uv_border_edges, toggle_material_override, set_wireframe, toggle_wireframe, toggle_wireframe_inactive, toggle_template, toggle_uv_checker, toggle_uv_distortion, toggle_local_axes, joint_display_scale, reset_viewport
 
 ### `display_utils/color_id.py`
 - `class ColorUtils`
@@ -894,11 +894,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `render_utils/_render_utils.py` — Render-control helpers.
 - `class RenderUtils(pythontk.HelpMixin)`
-  - methods: get_available_renderers, current_renderer, set_renderer, ensure_arnold_options, render_settings, set_render_settings, render_preset_store, render_camera, redo_previous_render, supports_ipr, start_ipr, prepare_arnold_preview, sync_arnold_backface_culling
+  - methods: get_available_renderers, current_renderer, set_renderer, ensure_arnold_options, render_settings, set_render_settings, render_preset_store, render_cameras, render_camera, redo_previous_render, supports_ipr, start_ipr, prepare_arnold_preview, sync_arnold_backface_culling
 
 ### `rig_utils/_rig_utils.py`
 - `class RigUtils(pythontk.HelpMixin)`
-  - methods: create_helper, create_group, create_locator, create_locator_at_object, remove_locator, freeze_and_reanchor, restore_rig_anchors, connect_switch_to_constraint, create_ik_handle, create_pole_vector, get_ik_handles_for_joint, ik_handles_by_joint, joint_in_ik_chain, get_joint_chain_from_root, invert_joint_chain, rebind_skin_clusters
+  - methods: create_helper, create_group, create_locator, add_locator, create_locator_at_object, remove_locator, freeze_and_reanchor, restore_rig_anchors, connect_switch_to_constraint, create_ik_handle, create_pole_vector, get_ik_handles_for_joint, ik_handles_by_joint, joint_in_ik_chain, get_joint_chain_from_root, invert_joint_chain, create_utility_node, auto_rig, lock_transforms, rebind_skin_clusters
 
 ### `rig_utils/articulated_rig/_articulated_rig.py` — Articulated Rig engine -- rigid parts on hinge, swivel, ball and slide joints.
 - `class ArticulatedRig(pythontk.LoggingMixin, _ArticulatedRigInternal)`
@@ -1050,7 +1050,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `xform_utils/_xform_utils.py` — ``XformUtils`` -- the public index of mayatk's transform operations.
 - `class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`
-  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, move_to_target, align_to, get_transform_snap, set_transform_snap, get_transform_constraint, set_transform_constraint, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, reset_pivot, center_pivot, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix, set_rotate_order
+  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, move_to_target, align_to, get_transform_snap, set_transform_snap, get_transform_constraint, set_transform_constraint, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, reset_pivot, center_pivot, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix, set_rotate_order, get_rotate_order
 
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
 - constants: SPACE_OBJECT, SPACE_WORLD

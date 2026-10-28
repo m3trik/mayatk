@@ -3010,5 +3010,24 @@ class TestTransformPanelOps(MayaTkTestCase):
         self.assertEqual(mtk.RigUtils.freeze_and_reanchor(None), [])
 
 
+class TestGetRotateOrder(MayaTkTestCase):
+    """``XformUtils.get_rotate_order``: what the Rigging panel's Fix Rotate
+    Order reports against (blendertk's twin answers the same call)."""
+
+    def test_reads_each_transform_by_long_name(self):
+        cube = cmds.polyCube(name="order_cube")[0]
+        cmds.setAttr(f"{cube}.rotateOrder", 5)
+        long_name = cmds.ls(cube, long=True)[0]
+        self.assertEqual(XformUtils.get_rotate_order(cube), {long_name: "zyx"})
+
+    def test_none_is_the_selection_and_nothing_is_empty(self):
+        cube = cmds.polyCube(name="sel_order_cube")[0]
+        cmds.select(cube)
+        self.assertEqual(list(XformUtils.get_rotate_order().values()), ["xyz"])
+        cmds.select(clear=True)
+        self.assertEqual(XformUtils.get_rotate_order(), {})
+        self.assertEqual(XformUtils.get_rotate_order([]), {})
+
+
 if __name__ == "__main__":
     unittest.main()

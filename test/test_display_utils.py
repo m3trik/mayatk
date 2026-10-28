@@ -1175,5 +1175,49 @@ class TestSmoothLevel(MayaTkTestCase):
         self.assertEqual(mtk.DisplayUtils.set_smooth_level(None, level=2), [])
 
 
+class TestToggleLocalAxes(MayaTkTestCase):
+    """``DisplayUtils.toggle_local_axes`` / ``joint_display_scale``: the Rigging
+    panel's Local Rotation Axes button and its Maya display scale."""
+
+    def test_joints_with_nothing_selected_toggle_every_joint(self):
+        cmds.select(clear=True)
+        a = cmds.joint(name="axes_a")
+        cmds.select(clear=True)
+        b = cmds.joint(name="axes_b", position=(0, 2, 0))
+        cmds.select(clear=True)
+        self.assertIs(mtk.DisplayUtils.toggle_local_axes(None, joints=True), True)
+        self.assertTrue(cmds.getAttr(f"{a}.displayLocalAxis"))
+        self.assertTrue(cmds.getAttr(f"{b}.displayLocalAxis"))
+        self.assertIs(mtk.DisplayUtils.toggle_local_axes(None, joints=True), False)
+        self.assertFalse(cmds.getAttr(f"{a}.displayLocalAxis"))
+
+    def test_selected_joints_toggle_alone(self):
+        cmds.select(clear=True)
+        a = cmds.joint(name="only_a")
+        cmds.select(clear=True)
+        b = cmds.joint(name="only_b", position=(0, 2, 0))
+        cmds.select(a)
+        mtk.DisplayUtils.toggle_local_axes(None, joints=True)
+        self.assertTrue(cmds.getAttr(f"{a}.displayLocalAxis"))
+        self.assertFalse(cmds.getAttr(f"{b}.displayLocalAxis"))
+
+    def test_objects_toggle_their_own_axes_and_nothing_is_none(self):
+        cube = cmds.polyCube(name="axes_cube")[0]
+        cmds.select(cube)
+        self.assertIs(mtk.DisplayUtils.toggle_local_axes(None), True)
+        self.assertTrue(cmds.getAttr(f"{cube}.displayLocalAxis"))
+        cmds.select(clear=True)
+        self.assertIsNone(mtk.DisplayUtils.toggle_local_axes(None))
+        self.assertIsNone(mtk.DisplayUtils.toggle_local_axes(None, joints=True))
+
+    @skipIfBatch("Joint display scales are a GUI session's display preference")
+    def test_joint_display_scale_reads_and_sets(self):
+        before = mtk.DisplayUtils.joint_display_scale("joint")
+        self.addCleanup(mtk.DisplayUtils.joint_display_scale, "joint", before)
+        self.assertAlmostEqual(mtk.DisplayUtils.joint_display_scale("joint", 1.5), 1.5)
+        with self.assertRaises(ValueError):
+            mtk.DisplayUtils.joint_display_scale("bone")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

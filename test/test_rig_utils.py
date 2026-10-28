@@ -1516,5 +1516,85 @@ class TestRebindKeepsBindPoses(MayaTkTestCase):
         self._rebind("rest")
 
 
+class TestRiggingPanelOperations(MayaTkTestCase):
+    """The operations the Rigging panel (tentacle's ``RiggingSlots``) calls in
+    both hosts: blendertk's twins take the same calls."""
+
+    def test_add_locator_is_display_sized_ordered_and_selected(self):
+        loc = RigUtils.add_locator(size=2.5, rotate_order="zyx")
+        shape = cmds.listRelatives(loc, shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{shape}.localScale")[0]], [2.5] * 3
+        )
+        self.assertEqual([round(v, 6) for v in cmds.getAttr(f"{loc}.scale")[0]], [1.0] * 3)
+        self.assertEqual(cmds.getAttr(f"{loc}.rotateOrder", asString=True), "zyx")
+        self.assertEqual(cmds.ls(selection=True), cmds.ls(loc))
+
+    def test_add_locator_refuses_a_bad_rotate_order(self):
+        with self.assertRaises(ValueError):
+            RigUtils.add_locator(rotate_order="xxy")
+
+    def test_utility_nodes_are_sorted_and_unknown_ones_refused(self):
+        self.assertEqual(list(RigUtils.UTILITY_NODES), sorted(RigUtils.UTILITY_NODES))
+        self.assertEqual(
+            set(RigUtils.UTILITY_NODES), {"Cluster", "IK Handle", "Joints", "Lattice"}
+        )
+        with self.assertRaises(ValueError):
+            RigUtils.create_utility_node("Armature")
+
+    def test_a_lattice_surrounds_the_selection(self):
+        cmds.select(self.create_test_cube("lattice_cube"))
+        nodes = RigUtils.create_utility_node("Lattice")
+        self.assertTrue(cmds.ls(nodes, type="transform"))
+        self.assertTrue(cmds.ls(type="ffd"))
+
+    def test_auto_rig_names_the_maya_riggers(self):
+        self.assertEqual(RigUtils.AUTO_RIGS, ("Quick Rig", "HumanIK"))
+        with self.assertRaises(ValueError):
+            RigUtils.auto_rig("Generate Rig")
+
+    def test_remove_locator_returns_what_it_removed(self):
+        loc = RigUtils.create_locator_at_object(self.create_test_cube("rigged_cube"))[0]
+        other = self.create_test_cube("not_a_locator")
+        self.assertEqual(RigUtils.remove_locator(other), [])  # not a locator
+        self.assertEqual(RigUtils.remove_locator(loc), [loc])
+        self.assertFalse(cmds.objExists(loc))
+        cmds.select(clear=True)
+        self.assertEqual(RigUtils.remove_locator(None), [])
+
+    def test_remove_locator_takes_the_selection(self):
+        loc = RigUtils.create_locator_at_object(self.create_test_cube("sel_cube"))[0]
+        cmds.select(loc)
+        self.assertEqual(RigUtils.remove_locator(), [loc])
+
+    def test_create_locator_at_object_takes_blenders_group_display(self):
+        cube = self.create_test_cube("display_cube")
+        locs = RigUtils.create_locator_at_object(cube, group_display="ring")
+        self.assertEqual(len(locs), 1)
+
+    def test_lock_transforms_locks_the_scope_named(self):
+        cube = cmds.ls(self.create_test_cube("lock_cube"), long=True)[0]
+        nodes, attrs = RigUtils.lock_transforms(cube, lock=True, scope="rotate")
+        self.assertEqual((nodes, attrs), ([cube], ["rx", "ry", "rz"]))
+        self.assertTrue(cmds.getAttr(f"{cube}.ry", lock=True))
+        self.assertFalse(cmds.getAttr(f"{cube}.tx", lock=True))
+        RigUtils.lock_transforms(cube, lock=False, scope="all")
+        self.assertFalse(cmds.getAttr(f"{cube}.ry", lock=True))
+
+    def test_lock_transforms_takes_the_selection(self):
+        cube = self.create_test_cube("sel_lock_cube")
+        cmds.select(cube)
+        nodes, attrs = RigUtils.lock_transforms(None, lock=True, scope="all")
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(len(attrs), 9)
+        self.assertTrue(cmds.getAttr(f"{cube}.sz", lock=True))
+        cmds.select(clear=True)
+        self.assertEqual(RigUtils.lock_transforms(None), ([], []))
+
+    def test_lock_transforms_refuses_an_unknown_scope(self):
+        with self.assertRaises(ValueError):
+            RigUtils.lock_transforms(self.create_test_cube("scope_cube"), scope="xyz")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

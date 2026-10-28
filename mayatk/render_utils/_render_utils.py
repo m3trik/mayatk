@@ -213,6 +213,28 @@ class RenderUtils(ptk.HelpMixin):
         builtin = os.path.join(os.path.dirname(__file__), "presets")
         return ptk.PresetStore("render", package="mayatk", builtin_dir=builtin)
 
+    # --------------------------------------------------------------- cameras
+    @staticmethod
+    def render_cameras() -> List[str]:
+        """The cameras a render can look through, the default first: the
+        perspective camera (``persp``, or a namespaced ``ns:persp``), then the
+        rest sorted. Each a transform as ``cmds.ls`` names it (the Render View's
+        procs take a transform); a camera rig's aim helper ("...Target") is
+        left out. Twin of blendertk's ``RenderUtils.render_cameras`` (the scene
+        camera first there).
+
+        Returns:
+            list: Camera transforms; ``[]`` in a scene without one.
+        """
+        cameras = set()
+        for shape in cmds.ls(type="camera") or []:
+            parents = cmds.listRelatives(shape, parent=True, fullPath=True) or []
+            if parents:
+                cameras.update(cmds.ls(parents[0]) or [])
+        names = sorted(c for c in cameras if "Target" not in c)
+        default = next((c for c in names if c == "persp" or c.endswith(":persp")), None)
+        return [default] + [c for c in names if c != default] if default else names
+
     # ----------------------------------------------------------- render view
     @staticmethod
     def render_camera(camera: str, render_mode: str = "render") -> None:
@@ -224,8 +246,13 @@ class RenderUtils(ptk.HelpMixin):
         editor slot is left empty so Maya auto-resolves it via
         ``showRenderView``. Valid ``render_mode`` values: "render",
         "renderRegion", "snapshot", "redoPreviousRender", "iprRender",
-        "redoPreviousIprRender".
+        "redoPreviousIprRender". A camera shape stands for its transform
+        (the Render View's procs take a transform).
         """
+        if cmds.objExists(camera) and cmds.objectType(camera) == "camera":
+            parents = cmds.listRelatives(camera, parent=True, fullPath=True) or []
+            if parents:
+                camera = (cmds.ls(parents[0]) or parents)[0]
         mel.eval(f'renderWindowRenderCamera "{render_mode}" "" "{camera}";')
 
     @staticmethod

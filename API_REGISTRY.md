@@ -1355,6 +1355,8 @@ Maya's lengths and angles, converted by the kind of query that read them.
   - `DisplayUtils.toggle_template(cls, objects=None)` *(class)* — Template *objects* (drawn dimmed, not selectable in the viewport), or
   - `DisplayUtils.toggle_uv_checker(cls) -> Optional[bool]` *(class)* — Toggle the UV Editor's checker display.
   - `DisplayUtils.toggle_uv_distortion(cls) -> Optional[str]` *(class)* — Toggle the UV Editor's distortion shading.
+  - `DisplayUtils.toggle_local_axes(objects=None, joints: bool = False) -> Optional[bool]` *(static)* — Toggle the local rotation axes display (``displayLocalAxis``), the lead
+  - `DisplayUtils.joint_display_scale(cls, kind: str = 'joint', value: Optional[float] = None) -> float` *(class)* — Maya's global display scale of joints ("joint"), IK handles
   - `DisplayUtils.reset_viewport(max_res=4096)` *(static)* — Resets Viewport 2.0 to fix graphical glitches (e.g.
 
 <a id="display_utils--color_id"></a>
@@ -3710,6 +3712,7 @@ Render-control helpers.
   - `RenderUtils.render_settings(cls) -> Dict[str, Any]` *(class)* — The scene's current value of every :attr:`RENDER_SETTINGS` key.
   - `RenderUtils.set_render_settings(cls, values: Dict[str, Any]) -> int` *(class)* — Write render settings to the scene.
   - `RenderUtils.render_preset_store() -> 'ptk.PresetStore'` *(static)* — Named render-setting presets: shipped Arnold tiers + user presets.
+  - `RenderUtils.render_cameras() -> List[str]` *(static)* — The cameras a render can look through, the default first: the
   - `RenderUtils.render_camera(camera: str, render_mode: str = 'render') -> None` *(static)* — Render *camera* into the Render View, opening it if needed.
   - `RenderUtils.redo_previous_render(render_mode: str = 'render') -> None` *(static)* — Re-render the last render with its previous settings (fast path).
   - `RenderUtils.supports_ipr(cls, renderer: Optional[str] = None) -> bool` *(class)* — True if *renderer* can start an interactive (IPR) session.
@@ -3724,8 +3727,9 @@ Render-control helpers.
   - `RigUtils.create_helper(name: str, helper_type: str = 'locator', parent: Optional[str] = None, position: Tuple[float, float, float] = (0.0, 0.0, 0.0), cleanup: bool = False) -> Optional[str]` *(static)* — Create a hidden helper object (e.g., locator, joint) with a consistent naming convention.
   - `RigUtils.create_group(objects=[], name='', zero_translation=False, zero_rotation=False, zero_scale=False)` *(static)* — Create a group containing any given objects.
   - `RigUtils.create_locator(*, scale: float = 1, size: float = 1, parent: Optional[str] = None, **kwargs) -> str` *(static)* — Create a locator with the given scale.
-  - `RigUtils.create_locator_at_object(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, grp_affix_mode: str = 'auto', loc_suffix: Optional[str] = None, loc_affix_mode: str = 'auto', obj_suffix: Optional[str] = None, obj_affix_mode: str = 'auto', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True, rotate_order: str = 'xyz') -> List[str]` *(class)* — Rig object under a zeroed locator aligned to its manip pivot.
-  - `RigUtils.remove_locator(cls, objects)` *(class)* — Remove a parented locator from the child object.
+  - `RigUtils.add_locator(cls, size: float = 1.0, rotate_order: str = 'xyz') -> str` *(class)* — Add a lone locator the way Maya's Create > Locator does: at the
+  - `RigUtils.create_locator_at_object(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, grp_affix_mode: str = 'auto', loc_suffix: Optional[str] = None, loc_affix_mode: str = 'auto', obj_suffix: Optional[str] = None, obj_affix_mode: str = 'auto', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True, rotate_order: str = 'xyz', group_display: Optional[str] = None) -> List[str]` *(class)* — Rig object under a zeroed locator aligned to its manip pivot.
+  - `RigUtils.remove_locator(cls, objects=None)` *(class)* — Dissolve locator rigs: the inverse of :meth:`create_locator_at_object`.
   - `RigUtils.freeze_and_reanchor(cls, objects=None, reanchor: bool = True, **freeze_options) -> list` *(class)* — Freeze Transforms, then -- *reanchor* -- restore the world anchor of each
   - `RigUtils.restore_rig_anchors(cls, objects, traverse: bool = True, skip_animated: bool = True, pivot_source: str = 'bbox') -> List[str]` *(class)* — Restore the world-space anchor on a GRP > LOC > GEO rig after a freeze.
   - `RigUtils.connect_switch_to_constraint(cls, constraint_node: str, constraint_targets: Optional[List[str]] = None, attr_name: str = 'parent_switch', overwrite_existing: bool = False, node: Optional[str] = None, weighted: bool = False, anchor: Optional[str] = None) -> dict` *(class)* — Create a space switch attribute to drive a constraint node.
@@ -3736,6 +3740,9 @@ Render-control helpers.
   - `RigUtils.joint_in_ik_chain(joint: str, start_joint: str, end_joint: str) -> bool` *(static)* — Check if a joint is part of an IK chain between start and end.
   - `RigUtils.get_joint_chain_from_root(root_joint: Union[str, List[str]], reverse: bool = False) -> List[str]` *(static)* — Get the joint chain from the root joint or the first joint in the list if more than one joint is gi…
   - `RigUtils.invert_joint_chain(root_joint, keep_original=False)` *(static)* — Create a new joint chain with the same positions as the original, but with reversed hierarchy.
+  - `RigUtils.create_utility_node(cls, node_type: str)` *(class)* — Create a rigging utility node Maya's way: "Joints" and "IK Handle"
+  - `RigUtils.auto_rig(cls, rig_type: str) -> str` *(class)* — Open one of Maya's character auto-riggers: "Quick Rig" (the one-click
+  - `RigUtils.lock_transforms(cls, objects=None, lock: bool = True, scope: str = 'all') -> Tuple[List[str], List[str]]` *(class)* — Lock or unlock transforms' attributes.
   - `RigUtils.rebind_skin_clusters(cls, meshes: Optional[List[str]] = None, temp_dir: Optional[str] = None, inherits_transform: Optional[bool] = None) -> Dict[str, list]` *(class)* — Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.
 
 <a id="rig_utils--articulated_rig--_articulated_rig"></a>
@@ -4460,6 +4467,7 @@ Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
   - `XformUtils.get_object_matrix(node, world: bool = False)` *(static)* — Local or world matrix as ``om.MMatrix``.
   - `XformUtils.set_object_matrix(node, value, world: bool = False) -> None` *(static)* — Apply *value* to *node*'s local or world transformation matrix.
   - `XformUtils.set_rotate_order(cls, objects, order, preserve: bool = True) -> List[str]` *(class)* — Change the rotate order of transforms, keeping their pose and animation.
+  - `XformUtils.get_rotate_order(cls, objects=None) -> dict` *(class)* — Each transform's rotate order, by long name: ``{node: "xyz"}``.
 
 <a id="xform_utils--matrices"></a>
 ### `xform_utils/matrices.py`

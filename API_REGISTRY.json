@@ -7643,12 +7643,30 @@
               "deprecated": false
             },
             {
+              "name": "toggle_local_axes",
+              "qualname": "DisplayUtils.toggle_local_axes",
+              "kind": "staticmethod",
+              "signature": "(objects=None, joints: bool = False) -> Optional[bool]",
+              "summary": "Toggle the local rotation axes display (``displayLocalAxis``), the lead",
+              "line": 1066,
+              "deprecated": false
+            },
+            {
+              "name": "joint_display_scale",
+              "qualname": "DisplayUtils.joint_display_scale",
+              "kind": "classmethod",
+              "signature": "(cls, kind: str = 'joint', value: Optional[float] = None) -> float",
+              "summary": "Maya's global display scale of joints (\"joint\"), IK handles",
+              "line": 1107,
+              "deprecated": false
+            },
+            {
               "name": "reset_viewport",
               "qualname": "DisplayUtils.reset_viewport",
               "kind": "staticmethod",
               "signature": "(max_res=4096)",
               "summary": "Resets Viewport 2.0 to fix graphical glitches (e.g.",
-              "line": 1065,
+              "line": 1133,
               "deprecated": false
             }
           ]
@@ -24232,12 +24250,21 @@
               "deprecated": false
             },
             {
+              "name": "render_cameras",
+              "qualname": "RenderUtils.render_cameras",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "The cameras a render can look through, the default first: the",
+              "line": 218,
+              "deprecated": false
+            },
+            {
               "name": "render_camera",
               "qualname": "RenderUtils.render_camera",
               "kind": "staticmethod",
               "signature": "(camera: str, render_mode: str = 'render') -> None",
               "summary": "Render *camera* into the Render View, opening it if needed.",
-              "line": 218,
+              "line": 240,
               "deprecated": false
             },
             {
@@ -24246,7 +24273,7 @@
               "kind": "staticmethod",
               "signature": "(render_mode: str = 'render') -> None",
               "summary": "Re-render the last render with its previous settings (fast path).",
-              "line": 232,
+              "line": 259,
               "deprecated": false
             },
             {
@@ -24255,7 +24282,7 @@
               "kind": "classmethod",
               "signature": "(cls, renderer: Optional[str] = None) -> bool",
               "summary": "True if *renderer* can start an interactive (IPR) session.",
-              "line": 252,
+              "line": 279,
               "deprecated": false
             },
             {
@@ -24264,7 +24291,7 @@
               "kind": "classmethod",
               "signature": "(cls, camera: str, renderer: Optional[str] = None) -> bool",
               "summary": "Launch interactive (IPR) realtime rendering for *renderer*.",
-              "line": 268,
+              "line": 295,
               "deprecated": false
             },
             {
@@ -24273,7 +24300,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, List[str]]",
               "summary": "Give Arnold what it needs to render what the viewport shows.",
-              "line": 311,
+              "line": 338,
               "deprecated": false
             },
             {
@@ -24282,7 +24309,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Make Arnold camera rays cull the backfaces Viewport 2.0 culls.",
-              "line": 337,
+              "line": 364,
               "deprecated": false
             }
           ]
@@ -24331,21 +24358,30 @@
               "deprecated": false
             },
             {
+              "name": "add_locator",
+              "qualname": "RigUtils.add_locator",
+              "kind": "classmethod",
+              "signature": "(cls, size: float = 1.0, rotate_order: str = 'xyz') -> str",
+              "summary": "Add a lone locator the way Maya's Create > Locator does: at the",
+              "line": 177,
+              "deprecated": false
+            },
+            {
               "name": "create_locator_at_object",
               "qualname": "RigUtils.create_locator_at_object",
               "kind": "classmethod",
-              "signature": "(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, grp_affix_mode: str = 'auto', loc_suffix: Optional[str] = None, loc_affix_mode: str = 'auto', obj_suffix: Optional[str] = None, obj_affix_mode: str = 'auto', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True, rotate_order: str = 'xyz') -> List[str]",
+              "signature": "(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, grp_affix_mode: str = 'auto', loc_suffix: Optional[str] = None, loc_affix_mode: str = 'auto', obj_suffix: Optional[str] = None, obj_affix_mode: str = 'auto', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True, rotate_order: str = 'xyz', group_display: Optional[str] = None) -> List[str]",
               "summary": "Rig object under a zeroed locator aligned to its manip pivot.",
-              "line": 177,
+              "line": 202,
               "deprecated": false
             },
             {
               "name": "remove_locator",
               "qualname": "RigUtils.remove_locator",
               "kind": "classmethod",
-              "signature": "(cls, objects)",
-              "summary": "Remove a parented locator from the child object.",
-              "line": 548,
+              "signature": "(cls, objects=None)",
+              "summary": "Dissolve locator rigs: the inverse of :meth:`create_locator_at_object`.",
+              "line": 577,
               "deprecated": false
             },
             {
@@ -24354,7 +24390,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, reanchor: bool = True, **freeze_options) -> list",
               "summary": "Freeze Transforms, then -- *reanchor* -- restore the world anchor of each",
-              "line": 758,
+              "line": 803,
               "deprecated": false
             },
             {
@@ -24363,7 +24399,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, traverse: bool = True, skip_animated: bool = True, pivot_source: str = 'bbox') -> List[str]",
               "summary": "Restore the world-space anchor on a GRP > LOC > GEO rig after a freeze.",
-              "line": 783,
+              "line": 828,
               "deprecated": false
             },
             {
@@ -24372,7 +24408,7 @@
               "kind": "classmethod",
               "signature": "(cls, constraint_node: str, constraint_targets: Optional[List[str]] = None, attr_name: str = 'parent_switch', overwrite_existing: bool = False, node: Optional[str] = None, weighted: bool = False, anchor: Optional[str] = None) -> dict",
               "summary": "Create a space switch attribute to drive a constraint node.",
-              "line": 1159,
+              "line": 1204,
               "deprecated": false
             },
             {
@@ -24381,7 +24417,7 @@
               "kind": "staticmethod",
               "signature": "(start_joint: str, end_joint: str, solver: str = 'ikRPsolver', name: str = 'ikHandle', parent: Optional[str] = None, **kwargs) -> str",
               "summary": "Create an IK handle.",
-              "line": 1370,
+              "line": 1415,
               "deprecated": false
             },
             {
@@ -24390,7 +24426,7 @@
               "kind": "staticmethod",
               "signature": "(ik_handle: str, mid_joint: str, distance: float = 5.0, name: str = 'poleVector_LOC', parent: Optional[str] = None) -> str",
               "summary": "Create a pole vector locator based on the mid joint's position.",
-              "line": 1407,
+              "line": 1452,
               "deprecated": false
             },
             {
@@ -24399,7 +24435,7 @@
               "kind": "staticmethod",
               "signature": "(joint: str) -> List[str]",
               "summary": "Find IK handles that control a given joint.",
-              "line": 1475,
+              "line": 1520,
               "deprecated": false
             },
             {
@@ -24408,7 +24444,7 @@
               "kind": "staticmethod",
               "signature": "(handles: Optional[Iterable[str]] = None) -> Dict[str, List[str]]",
               "summary": "``{joint (long path): [ikHandle, ...]}`` for every joint an IK chain spans.",
-              "line": 1507,
+              "line": 1552,
               "deprecated": false
             },
             {
@@ -24417,7 +24453,7 @@
               "kind": "staticmethod",
               "signature": "(joint: str, start_joint: str, end_joint: str) -> bool",
               "summary": "Check if a joint is part of an IK chain between start and end.",
-              "line": 1556,
+              "line": 1601,
               "deprecated": false
             },
             {
@@ -24426,7 +24462,7 @@
               "kind": "staticmethod",
               "signature": "(root_joint: Union[str, List[str]], reverse: bool = False) -> List[str]",
               "summary": "Get the joint chain from the root joint or the first joint in the list if more than one joint is gi…",
-              "line": 1593,
+              "line": 1638,
               "deprecated": false
             },
             {
@@ -24435,7 +24471,34 @@
               "kind": "staticmethod",
               "signature": "(root_joint, keep_original=False)",
               "summary": "Create a new joint chain with the same positions as the original, but with reversed hierarchy.",
-              "line": 1630,
+              "line": 1675,
+              "deprecated": false
+            },
+            {
+              "name": "create_utility_node",
+              "qualname": "RigUtils.create_utility_node",
+              "kind": "classmethod",
+              "signature": "(cls, node_type: str)",
+              "summary": "Create a rigging utility node Maya's way: \"Joints\" and \"IK Handle\"",
+              "line": 1764,
+              "deprecated": false
+            },
+            {
+              "name": "auto_rig",
+              "qualname": "RigUtils.auto_rig",
+              "kind": "classmethod",
+              "signature": "(cls, rig_type: str) -> str",
+              "summary": "Open one of Maya's character auto-riggers: \"Quick Rig\" (the one-click",
+              "line": 1820,
+              "deprecated": false
+            },
+            {
+              "name": "lock_transforms",
+              "qualname": "RigUtils.lock_transforms",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, lock: bool = True, scope: str = 'all') -> Tuple[List[str], List[str]]",
+              "summary": "Lock or unlock transforms' attributes.",
+              "line": 1879,
               "deprecated": false
             },
             {
@@ -24444,7 +24507,7 @@
               "kind": "classmethod",
               "signature": "(cls, meshes: Optional[List[str]] = None, temp_dir: Optional[str] = None, inherits_transform: Optional[bool] = None) -> Dict[str, list]",
               "summary": "Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.",
-              "line": 1703,
+              "line": 1930,
               "deprecated": false
             }
           ]
@@ -29669,6 +29732,15 @@
               "signature": "(cls, objects, order, preserve: bool = True) -> List[str]",
               "summary": "Change the rotate order of transforms, keeping their pose and animation.",
               "line": 1201,
+              "deprecated": false
+            },
+            {
+              "name": "get_rotate_order",
+              "qualname": "XformUtils.get_rotate_order",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None) -> dict",
+              "summary": "Each transform's rotate order, by long name: ``{node: \"xyz\"}``.",
+              "line": 1249,
               "deprecated": false
             }
           ]

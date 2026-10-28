@@ -957,6 +957,19 @@ class _PlacementInternal:
         cmds.xform(str(node), matrix=flat, **flag)
 
     @staticmethod
+    def _get_rotate_order(objects):
+        """Body of :meth:`XformUtils.get_rotate_order`."""
+        names = (
+            CoreUtils.selected_objects()
+            if objects is None
+            else CoreUtils.as_strings(objects)
+        )
+        nodes = (cmds.ls(names, type="transform", long=True) or []) if names else []
+        return {
+            node: cmds.getAttr(f"{node}.rotateOrder", asString=True) for node in nodes
+        }
+
+    @staticmethod
     def _rotate_order_index(order) -> int:
         """The ``rotateOrder`` enum index of *order* (a name or an index)."""
         orders = Matrices.ROTATE_ORDERS
