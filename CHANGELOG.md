@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-29 -- The README describes mayatk as the Maya host library and each tool's API half (docs/README.md, test/).** The tool panels are tentacle's. The editor snippet is `mtk.MayaUiHandler.instance().editors.show("ui_browser")` with the real editor keys (`"browser"` raised KeyError). The note about the removed `RenderOpacity` alias is gone. `test_tentacle_editors.py` is deleted: it imported the retired `tentacle.slots.maya.editors`, and its cases live in `test_ui_utils.py` and tentacle's `test_editors.py`.
+  - Test(s): none (docs; a dead test removed).
 - **2026-10-29 -- `Channels` keeps its per-instance state in parts it holds: `_Targets` (the pin and single-object mode) and `_ChannelBoxLink` (`node_utils/attributes/channels/_channels.py`).** No public change.
   - Test(s): `test_channels.py` `TestTargets`.
 - **2026-10-28 -- `mtk.ShotStore` is pythontk's one store; Maya's half is `MayaShotsHost` (`anim_utils/shots/_shots.py`).** The subclass is gone. `ShotStore.undo_queue_top` moved to `MayaShotsHost.undo_queue_top` (`MOVED_NAMES`); the QSettings migration is `MayaShotsHost.legacy_prefs`, applied by the store. The saved record and the `ShotStore/<pref>` keys are unchanged.

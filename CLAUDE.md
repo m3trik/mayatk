@@ -37,7 +37,7 @@ Tests need the Maya runtime — not plain `pytest` / the workspace `.venv`. Set 
 
 ```powershell
 $MAYAPY = "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe"
-$env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
+$env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk"
 ```
 
 - **Pre-flight (no Maya)** — `ruff check . --select E9,F82` (syntax + undefined names, tests included) is green — keep it so. Bare `ruff check .` is ~276 legacy errors — fix only what you introduce. **Command-name check (mayapy)** — `& $MAYAPY mayatk/test/check_cmds_syntax.py` validates every `cmds.*` / `mel.eval` name against the live registry (`--report` writes a file; append paths to scope).
@@ -54,6 +54,8 @@ Runner notes: the console shows non-passing modules + SUMMARY + `SLOWEST MODULES
 ## Tool panels — tentacle's
 
 Every tool's panel is tentacle's (`ui/tools/<tool>.ui` + one shared Slots class in `slots/tools/<tool>.py`; [CODE_STANDARD](../m3trik/docs/CODE_STANDARD.md) §3, §14). mayatk holds each tool's API half (its operations and record rows) and no UI: no `.ui`, no `*Slots` class. A scene call the panel makes is a method on the tool's class or its host facade (`SequencerHost`, `ManifestHost`, `BridgeHost`), named as blendertk names it. `MayaUiHandler` registers no UI source of its own; it wraps Maya's native menus and names `sb.tk`.
+
+**Host bindings**: a mayatk class keeping its own name for a shared pythontk class (`SceneDataSidecar`, `WorkspaceMap`, `CurtainMesh`, `ProbePlacement`) configures it (its host adapter, class attributes) and adds Maya-only methods; it never overrides a shared method (CODE_STANDARD §0; `check_dcc_twins.py` `HOST_BINDINGS`).
 
 ## Style
 

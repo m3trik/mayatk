@@ -59,9 +59,7 @@ DEFAULT_INCLUDE = {
     # over ``ptk.KeyStash``); its panel is tentacle's shared Key Stash tool.
     "anim_utils.key_stash._key_stash": "KeyStash",
     "anim_utils.blendshape_animator._blendshape_animator": "BlendshapeAnimator",
-    # Playblast exporter engine + its result records. Class-only (no "*"): the
-    # co-located ``PlayblastExporterSlots`` panel is name-discovered by
-    # MayaUiHandler, like the other tool panels.
+    # Playblast exporter engine + its result records (its panel is tentacle's).
     "anim_utils.playblast_exporter": [
         "PlayblastExporter",
         "ExportTarget",

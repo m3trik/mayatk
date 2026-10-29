@@ -8,10 +8,10 @@
 # mayatk
 
 <!-- short_description_start -->
-*Maya 2025+ tech-art toolkit built on `maya.cmds` + `maya.api.OpenMaya` (no PyMEL) — modeling, animation, materials, rigging, and scene-pipeline automation, plus tool panels and one-click bridges into Marmoset, Substance Painter, RizomUV, Blender, and Unity.*
+*Maya 2025+ tech-art toolkit built on `maya.cmds` + `maya.api.OpenMaya` (no PyMEL) — modeling, animation, materials, rigging, and scene-pipeline automation, plus one-click bridges into Marmoset, Substance Painter, RizomUV, Blender, and Unity. The tool panels over it are [tentacle](https://github.com/m3trik/tentacle)'s.*
 <!-- short_description_end -->
 
-mayatk is the Maya layer of the `pythontk → uitk → mayatk → tentacle` ecosystem: a library of composable helpers first, with a fleet of [uitk](https://github.com/m3trik/uitk)-based tool panels (Shot Sequencer, Channels, Scene Exporter, …) built on top of it.
+mayatk is the Maya layer of the `pythontk → uitk → {mayatk, blendertk} → tentacle` ecosystem: a library of composable helpers and each tool's Maya API half (Shot Sequencer, Channels, Scene Exporter, …). It holds no UI: the tool panels are [tentacle](https://github.com/m3trik/tentacle)'s, one per tool for Maya and Blender, calling this API, so a script gets everything a panel does.
 
 ## Installation
 
@@ -37,7 +37,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `edit_utils` | `Selection`, naming, primitives, snap, bevel, bridge, mirror, duplicate (linear/radial/grid), mesh graph |
 | `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX/USD, scene exporter, Blender + Unity bridges, WebXR preview |
 | `light_utils` | [Lightmap baker](lightmap_baker.md), [Light rigs](light_rig.md), HDR manager, lights-from-geometry |
-| `mat_utils` | `GameShader`, `RenderEffects` (per-object `opacity` / `highlight` channels; `RenderOpacity` is its deprecated alias, warning until 0.20.0), `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
+| `mat_utils` | `GameShader`, `RenderEffects` (per-object `opacity` / `highlight` channels), `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
 | `node_utils` | `NodeUtils`, `Attributes`, the Channels engine, [shared scene data nodes](data_nodes.md) |
 | `nurbs_utils` | NURBS surfaces, `ImageTracer`, curve-to-tube |
 | `render_utils` | Renderer switching and render-settings helpers (composed by `hdr_manager`) |
@@ -120,7 +120,7 @@ The report behind tentacle's Get Scene Info. Sections render through pythontk's 
 
 ### DCC bridges
 
-One-click hand-offs that export the selection and drive the target app with a templated script: **Marmoset Toolbag** (including a bundled JSON-RPC plugin for live Toolbag scene ops), **Substance 3D Painter**, **RizomUV**, **Blender**, and **Unity**. Built on pythontk's `HandoffBridge` engine (RizomUV uses its own script-driven flow); each ships as a tool panel.
+One-click hand-offs that export the selection and drive the target app with a templated script: **Marmoset Toolbag** (including a bundled JSON-RPC plugin for live Toolbag scene ops), **Substance 3D Painter**, **RizomUV**, **Blender**, and **Unity**. Built on pythontk's `HandoffBridge` engine (RizomUV uses its own script-driven flow); each has a tentacle tool panel.
 
 `WebXrPreview` is the same engine aimed at a browser instead of an application: `mtk.WebXrPreview().push()` converts the selection to glTF and publishes it to a loopback server, so a tab left open — including one open in a PC-tethered headset — swaps to the new version on its next poll. Baked lightmaps and the scene's records (the `data_export` carrier: lightmaps, materials, the handoff) ride along automatically. See **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk owns the shared pipeline).
 
@@ -146,15 +146,17 @@ One-click hand-offs that export the selection and drive the target app with a te
 button or script:
 
 ```python
-from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-MayaUiHandler.instance().editors.show("browser")
+import mayatk as mtk
+mtk.MayaUiHandler.instance().editors.show("ui_browser")
 ```
 
 | Editor key | Description |
 |---|---|
-| `browser` | Searchable launcher for every UI registered with the switchboard — tags, filtering, hide lists, launch options, JSON-portable presets. |
-| `style` | Theme + QSS variable editor for live restyling of the dark/light themes. |
-| `shortcut` | Keyboard-shortcut editor for slots and commands; a focused `global_shortcuts` view also exists. Hosts can wire in Maya-aware collision checking via `mtk.HotkeyCollisions.maya_collision_checker`. |
+| `ui_browser` | Searchable launcher for every UI registered with the switchboard — tags, filtering, hide lists, launch options, JSON-portable presets. |
+| `style_editor` | Pick a theme and tune its colors and metrics, saved as presets. |
+| `shortcut_editor` | Keyboard-shortcut editor for slots and commands, with presets and import/export. Hosts can wire in Maya-aware collision checking via `mtk.HotkeyCollisions.maya_collision_checker`. |
+| `global_shortcuts` | The marking-menu key and the navigation commands' shortcuts. |
+| `preset_editor` | Browse, lock, hide and share every tool's presets in one tree. |
 
 `MayaUiHandler.instance()` is reentrant: if `tentacle` (or any other tool)
 already created the handler, the call returns the existing singleton; otherwise
