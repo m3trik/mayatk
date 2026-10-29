@@ -925,8 +925,10 @@ print(json.dumps(report))
             mayatk=str(mono / "mayatk"),
             driver=str(TEST_DIR / "_suite_driver.py"),
         )
+        from base_test import child_python
+
         proc = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
+            [child_python(), "-c", code], capture_output=True, text=True, timeout=300
         )
         self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
         report = json.loads(proc.stdout.splitlines()[-1])

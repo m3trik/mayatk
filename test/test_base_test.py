@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tests for ``base_test.TestAssets``: where machine-local fixtures resolve.
+"""Tests for ``base_test``: where machine-local fixtures resolve, and the child interpreter.
 
 The fixtures carry neutral names. A folder still staged under the old ones
 resolves through its own ``legacy_aliases.json``, which sits beside the private
@@ -12,6 +12,8 @@ root under ``temp_tests`` with stand-in names.
 import json
 import os
 import shutil
+import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -105,3 +107,29 @@ class TestTheRunsProjectIsASandbox(base_test.MayaTkTestCase):
         active = os.path.normcase(os.path.realpath(cmds.workspace(q=True, rd=True)))
         root = os.path.normcase(os.path.realpath(ptk.TempArtifacts.root()))
         self.assertTrue(active.startswith(root), f"the run writes into {active}")
+
+
+class TestChildInterpreter(unittest.TestCase):
+    """Regression: inside a GUI Maya ``sys.executable`` is ``maya.exe``, so
+    ``base_test.import_without_maya`` spawned ``maya.exe -c <script>``: another
+    GUI Maya that never exits, and with no timeout the GUI pass of
+    test_playblast_exporter hung on its import-guard test. Fixed: 2026-10-29."""
+
+    def test_a_gui_maya_spawns_the_mayapy_beside_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            suffix = ".exe" if os.name == "nt" else ""
+            maya, mayapy = (
+                os.path.join(tmp, name + suffix) for name in ("maya", "mayapy")
+            )
+            for path in (maya, mayapy):
+                open(path, "w").close()
+            with mock.patch.object(sys, "executable", maya):
+                self.assertEqual(
+                    os.path.normcase(base_test.child_python()),
+                    os.path.normcase(mayapy),
+                )
+
+    def test_the_child_is_a_python_wherever_the_suite_runs(self):
+        import pythontk as ptk
+
+        self.assertTrue(ptk.AppLauncher.looks_like_python(base_test.child_python()))
