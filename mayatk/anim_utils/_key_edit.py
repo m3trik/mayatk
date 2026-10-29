@@ -336,17 +336,21 @@ class _KeyEditInternal:
                 if frames:
                     attr_key_data.setdefault((obj, attr), []).extend(frames)
 
-        # Collect values, then set keys — both phases scrub the playhead,
-        # so restore it afterward regardless of failures.
+        # Collect every value before any key goes in (a new key reshapes its
+        # neighbours), one scene evaluation per frame for all plugs; then set
+        # keys. Both phases scrub the playhead, so restore it regardless.
+        plugs_at = {}
+        for (obj, attr), frames in attr_key_data.items():
+            for frame in frames:
+                plugs_at.setdefault(frame, []).append((obj, attr))
         original_time = cmds.currentTime(query=True)
         try:
             frame_values = {}
-            for (obj, attr), frames in attr_key_data.items():
-                plug = f"{obj}.{attr}"
-                for frame in frames:
-                    cmds.currentTime(frame, edit=True)
+            for frame in sorted(plugs_at):
+                cmds.currentTime(frame, edit=True)
+                for obj, attr in plugs_at[frame]:
                     frame_values.setdefault(frame, {}).setdefault(obj, {})[attr] = (
-                        cmds.getAttr(plug)
+                        cmds.getAttr(f"{obj}.{attr}")
                     )
 
             for frame, obj_data in frame_values.items():

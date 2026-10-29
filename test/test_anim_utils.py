@@ -7304,5 +7304,52 @@ class TestAnimationPanelOps(MayaTkTestCase):
         self.assertGreater(stats.get("curves_before", 0), 0)
         self.assertFalse(cmds.listConnections(f"{node}.translateY", type="animCurve"))
 
+
+class TestAddIntermediateKeysPass(MayaTkTestCase):
+    """``add_intermediate_keys`` reads every plug's values in one scene evaluation per
+    frame, not one per plug per frame (Assessment finding 3, 2026-10-26), and keys the
+    value each curve had before any key went in."""
+
+    def setUp(self):
+        super().setUp()
+        self.nodes = []
+        for name, (start, end) in (("pass_a", (1, 9)), ("pass_b", (3, 12))):
+            node = cmds.polyCube(name=name)[0]
+            for attr, scale in (("translateX", 1.0), ("translateY", 2.0), ("rotateZ", 5.0)):
+                cmds.setKeyframe(node, attribute=attr, time=start, value=0.0)
+                cmds.setKeyframe(node, attribute=attr, time=end, value=scale * 10)
+            self.nodes.append((node, start, end))
+
+    def _scrubs(self, **kwargs):
+        """Run the op and return how many times it moved the playhead."""
+        original = cmds.currentTime
+        with patch.object(cmds, "currentTime", wraps=original) as spy:
+            AnimUtils.add_intermediate_keys([n for n, _, _ in self.nodes], **kwargs)
+        return sum(1 for call in spy.call_args_list if call.kwargs.get("edit"))
+
+    def test_values_are_read_once_per_frame_for_every_plug(self):
+        frames = set()
+        for _, start, end in self.nodes:
+            frames.update(range(start + 1, end))
+        scrubs = self._scrubs(include_flat=True)
+        # one read pass + one write pass over the frames, and the restore
+        self.assertLessEqual(scrubs, 2 * len(frames) + 1)
+
+    def test_each_new_key_holds_the_curve_value_before_the_pass(self):
+        expected = {}
+        for node, start, end in self.nodes:
+            for attr in ("translateX", "translateY", "rotateZ"):
+                for frame in range(start + 1, end):
+                    expected[(node, attr, frame)] = cmds.getAttr(
+                        f"{node}.{attr}", time=frame
+                    )
+        self._scrubs(include_flat=True)
+        for (node, attr, frame), value in expected.items():
+            keyed = cmds.keyframe(
+                f"{node}.{attr}", query=True, time=(frame, frame), valueChange=True
+            )
+            self.assertTrue(keyed, f"no key on {node}.{attr} at {frame}")
+            self.assertAlmostEqual(keyed[0], value, places=5)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

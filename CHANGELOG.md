@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-28 -- `add_intermediate_keys` reads values in one scene evaluation per frame (`anim_utils/_key_edit.py`).** The read pass moved the playhead once per plug per frame; it now moves it once per frame and reads every plug there (two cubes x three channels: 56 scrubs -> 15). Same keys, same values.
+  - Test(s): `test_anim_utils.py` (`TestAddIntermediateKeysPass`), red first.
 - **2026-10-28 -- What tentacle's animation page did with `cmds` becomes library API (`anim_utils/_anim_utils.py`, `anim_utils/scale_keys.py`).** `AnimUtils.set_key_interpolation(objects=None, interpolation, keys, tangent)`, `repair_fractional_keys`, `copied_key_counts`, `get_current_frame`; `ScaleKeys(keys="auto")`; `optimize_keys(None)` and `transfer_keyframes(None)` take the selection (fewer than two objects raises `ValueError`); `set_visibility_keys(when="current")`. Changed returns: `fit_playback_range` returns `(start, end)` or `None` (was `True` / `False`); `tie_keyframes` returns how many bookend keys it inserted (was `None`).
   - Test(s): `test_anim_utils.py`, `test_scale_keys.py`.
 - **2026-10-28 -- What tentacle's uv page did with `cmds` becomes library API (`uv_utils/_uv_utils.py`, `core_utils/diagnostics/`).** `UvUtils.auto_project`, `unfold_uvs` (returns an `UnfoldResult`; the non-manifold components it hit come back selected), `cut_uvs` / `sew_uvs`, `cut_hard_edges`, `pin_uvs`, `get_uv_coords` / `set_uv_coords`, `stack_uv_shells`, `uv_scope_key`, `export_uv_image`, `PACK_ENGINES`; `pack_uvs(engine="standard", skip_instances=)` is one undo chunk with refresh suspended, `PackUvsResult.objects`; `unwrap_cylinder(camera=True)`; `Diagnostics.cleanup_uv_sets` one undo chunk.
