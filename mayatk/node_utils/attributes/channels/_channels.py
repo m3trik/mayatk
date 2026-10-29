@@ -20,12 +20,110 @@ from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
 
+class _Targets:
+    """The nodes a :class:`Channels` acts on: the selection, or a pinned list;
+    every one of them, or only the last selected.
+
+    A private part of :class:`Channels`; call it through the facade.
+    """
+
+    def __init__(self, channels: "Channels") -> None:
+        self._channels = channels  # the facade: its public names are read through it
+        self._pinned_targets = None
+        self._single_object_mode = False
+
+    @property
+    def is_pinned(self):
+        return self._pinned_targets is not None
+
+    @property
+    def single_object_mode(self):
+        return self._single_object_mode
+
+    @single_object_mode.setter
+    def single_object_mode(self, value):
+        self._single_object_mode = bool(value)
+
+    def pin_targets(self, nodes):
+        if not nodes:
+            self._pinned_targets = None
+            return
+        self._pinned_targets = cmds.ls(list(nodes), long=True) or list(nodes)
+
+    def get_selected_nodes(self):
+        if self._pinned_targets is not None:
+            nodes = [n for n in self._pinned_targets if cmds.objExists(n)]
+        else:
+            nodes = cmds.ls(sl=True, long=True) or []
+        nodes = self._channels.resolve_component_targets(nodes)
+        if self._single_object_mode and len(nodes) > 1:
+            return [nodes[-1]]
+        return nodes
+
+
+class _ChannelBoxLink:
+    """A panel's channel selection and Maya's channel box, kept in step.
+
+    A private part of :class:`Channels`; call it through the facade.
+    """
+
+    def __init__(self, channels: "Channels") -> None:
+        self._channels = channels  # the facade: its public names are read through it
+        # (selection-changed slot, stand-in source) while linked.
+        self._link = None
+
+    def link_channel_box(self, on_selection_changed, selected_rows):
+        from mayatk.ui_utils.channel_box import ChannelBox
+
+        self._channels.unlink_channel_box()
+
+        def changed(*_args):
+            on_selection_changed(self._channels.channel_box_selection())
+
+        def stand_in():
+            nodes = self._channels.get_selected_nodes()
+            if not nodes:
+                return []
+            return self._channels._attr_names(
+                nodes[0], selected_rows() or [], long=False
+            )
+
+        self._link = (changed, stand_in)
+        ChannelBox.add_stand_in(stand_in)
+        try:
+            return bool(ChannelBox.connect_selection_changed(changed))
+        except Exception:
+            return False
+
+    def unlink_channel_box(self):
+        link, self._link = self._link, None
+        if link is None:
+            return
+        from mayatk.ui_utils.channel_box import ChannelBox
+
+        changed, stand_in = link
+        try:
+            ChannelBox.disconnect_selection_changed(changed)
+        except Exception:
+            pass
+        ChannelBox.remove_stand_in(stand_in)
+
+    def channel_box_selection(self):
+        raw = self._channels.get_channel_box_selection()
+        nodes = self._channels.get_selected_nodes()
+        if not nodes:
+            return set(raw)
+        return set(self._channels._attr_names(nodes[0], raw, long=True))
+
+
 class Channels:
     """Maya attribute query / mutation logic.
 
     Encapsulates attribute querying, filtering, connection
     classification, and mutation so that ``ChannelsSlots`` only handles
-    UI wiring.
+    UI wiring. An instance's own state lives in the parts it holds: the
+    nodes it acts on (:class:`_Targets`) and its link to Maya's channel
+    box (:class:`_ChannelBoxLink`).
     """
 
     # Maps ComboBox items → kwargs for ``cmds.listAttr``.
@@ -84,23 +182,20 @@ class Channels:
     }
 
     def __init__(self):
-        self._pinned_targets = None
-        self._single_object_mode = False
-        # (selection-changed slot, stand-in source) while linked to the
-        # channel box (link_channel_box).
-        self._channel_box_link = None
+        self._targets = _Targets(self)
+        self._channel_box = _ChannelBoxLink(self)
 
     @property
     def is_pinned(self):
-        return self._pinned_targets is not None
+        return self._targets.is_pinned
 
     @property
     def single_object_mode(self):
-        return self._single_object_mode
+        return self._targets.single_object_mode
 
     @single_object_mode.setter
     def single_object_mode(self, value):
-        self._single_object_mode = bool(value)
+        self._targets.single_object_mode = value
 
     def pin_targets(self, nodes):
         """Pin the manager to a fixed node list; ``None`` clears the pin.
@@ -108,10 +203,7 @@ class Channels:
         Names are normalized to long (DAG) paths where possible so
         downstream ``cmds`` calls match regardless of the input form.
         """
-        if not nodes:
-            self._pinned_targets = None
-            return
-        self._pinned_targets = cmds.ls(list(nodes), long=True) or list(nodes)
+        return self._targets.pin_targets(nodes)
 
     # ------------------------------------------------------------------
     # Querying
@@ -126,14 +218,7 @@ class Channels:
         :meth:`resolve_component_targets`).  When ``single_object_mode``
         is enabled, only the most recently selected node is returned.
         """
-        if self._pinned_targets is not None:
-            nodes = [n for n in self._pinned_targets if cmds.objExists(n)]
-        else:
-            nodes = cmds.ls(sl=True, long=True) or []
-        nodes = self.resolve_component_targets(nodes)
-        if self._single_object_mode and len(nodes) > 1:
-            return [nodes[-1]]
-        return nodes
+        return self._targets.get_selected_nodes()
 
     @staticmethod
     def resolve_component_targets(nodes):
@@ -1694,39 +1779,11 @@ class Channels:
             may not be built yet; link again after a scene change, which can
             replace it).
         """
-        from mayatk.ui_utils.channel_box import ChannelBox
-
-        self.unlink_channel_box()
-
-        def changed(*_args):
-            on_selection_changed(self.channel_box_selection())
-
-        def stand_in():
-            nodes = self.get_selected_nodes()
-            if not nodes:
-                return []
-            return self._attr_names(nodes[0], selected_rows() or [], long=False)
-
-        self._channel_box_link = (changed, stand_in)
-        ChannelBox.add_stand_in(stand_in)
-        try:
-            return bool(ChannelBox.connect_selection_changed(changed))
-        except Exception:
-            return False
+        return self._channel_box.link_channel_box(on_selection_changed, selected_rows)
 
     def unlink_channel_box(self):
         """Undo :meth:`link_channel_box` (a no-op when not linked)."""
-        link, self._channel_box_link = self._channel_box_link, None
-        if link is None:
-            return
-        from mayatk.ui_utils.channel_box import ChannelBox
-
-        changed, stand_in = link
-        try:
-            ChannelBox.disconnect_selection_changed(changed)
-        except Exception:
-            pass
-        ChannelBox.remove_stand_in(stand_in)
+        return self._channel_box.unlink_channel_box()
 
     def channel_box_selection(self):
         """The long names of the attributes selected in the channel box.
@@ -1738,11 +1795,7 @@ class Channels:
         Returns:
             set[str]
         """
-        raw = self.get_channel_box_selection()
-        nodes = self.get_selected_nodes()
-        if not nodes:
-            return set(raw)
-        return set(self._attr_names(nodes[0], raw, long=True))
+        return self._channel_box.channel_box_selection()
 
     @staticmethod
     def select_in_channel_box(attr_names):

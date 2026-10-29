@@ -1159,6 +1159,74 @@ class TestPanelSurface(MayaTkTestCase):
         self.assertEqual([index for _label, index in pairs], [2, 5])
 
 
+class TestTargets(MayaTkTestCase):
+    """The nodes a Channels acts on: the selection, or a pinned list; all of
+    them, or the last selected only. Each instance keeps its own."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = cmds.polyCube(name="tgt_a")[0]
+        self.b = cmds.polyCube(name="tgt_b")[0]
+        self.a_long, self.b_long = cmds.ls([self.a, self.b], long=True)
+        self.channels = Channels()
+
+    def test_unpinned_reads_the_selection_in_order(self):
+        cmds.select([self.b, self.a], replace=True)
+        self.assertFalse(self.channels.is_pinned)
+        self.assertEqual(self.channels.get_selected_nodes(), [self.b_long, self.a_long])
+
+    def test_a_pin_holds_long_names_whatever_is_selected(self):
+        self.channels.pin_targets([self.a])
+        cmds.select(self.b, replace=True)
+        self.assertTrue(self.channels.is_pinned)
+        self.assertEqual(self.channels.get_selected_nodes(), [self.a_long])
+
+    def test_a_deleted_pinned_node_drops_out(self):
+        self.channels.pin_targets([self.a, self.b])
+        cmds.delete(self.a)
+        self.assertEqual(self.channels.get_selected_nodes(), [self.b_long])
+
+    def test_an_empty_pin_clears_it(self):
+        self.channels.pin_targets([self.a])
+        self.channels.pin_targets(None)
+        self.assertFalse(self.channels.is_pinned)
+        self.channels.pin_targets([self.a])
+        self.channels.pin_targets([])
+        self.assertFalse(self.channels.is_pinned)
+
+    def test_single_object_mode_keeps_the_last_selected(self):
+        cmds.select([self.a, self.b], replace=True)
+        self.channels.single_object_mode = 1
+        self.assertIs(self.channels.single_object_mode, True)
+        self.assertEqual(self.channels.get_selected_nodes(), [self.b_long])
+        self.channels.single_object_mode = 0
+        self.assertIs(self.channels.single_object_mode, False)
+
+    def test_instances_keep_their_own_targets(self):
+        other = Channels()
+        self.channels.pin_targets([self.a])
+        self.channels.single_object_mode = True
+        self.assertFalse(other.is_pinned)
+        self.assertFalse(other.single_object_mode)
+
+    def test_channel_box_selection_reads_the_targets_through_the_instance(self):
+        """An override of the target list reaches the channel-box reader."""
+        with mock.patch.object(
+            self.channels, "get_selected_nodes", return_value=[self.a_long]
+        ), mock.patch.object(
+            self.channels, "get_channel_box_selection", return_value=["tx", "rz"]
+        ):
+            self.assertEqual(
+                self.channels.channel_box_selection(), {"translateX", "rotateZ"}
+            )
+        with mock.patch.object(
+            self.channels, "get_selected_nodes", return_value=[]
+        ), mock.patch.object(
+            self.channels, "get_channel_box_selection", return_value=["tx"]
+        ):
+            self.assertEqual(self.channels.channel_box_selection(), {"tx"})
+
+
 class TestChannelBoxLink(MayaTkTestCase):
     """While Maya's channel box is emptied (tabbed away), the panel's selected
     rows stand in for it, as short names: Set Selected Keys reads them."""

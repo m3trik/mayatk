@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-29 -- `Channels` keeps its per-instance state in parts it holds: `_Targets` (the pin and single-object mode) and `_ChannelBoxLink` (`node_utils/attributes/channels/_channels.py`).** No public change.
+  - Test(s): `test_channels.py` `TestTargets`.
 - **2026-10-28 -- `mtk.ShotStore` is pythontk's one store; Maya's half is `MayaShotsHost` (`anim_utils/shots/_shots.py`).** The subclass is gone. `ShotStore.undo_queue_top` moved to `MayaShotsHost.undo_queue_top` (`MOVED_NAMES`); the QSettings migration is `MayaShotsHost.legacy_prefs`, applied by the store. The saved record and the `ShotStore/<pref>` keys are unchanged.
   - Test(s): `test_shot_export_view.py` (byte pins of the saved record and the legacy keys, host checks), `test_sequencer.py`, `test_shot_manifest.py`.
 - **2026-10-28 -- Host adapters replace host overrides (`core_utils/auto_instancer/`, `env_utils/hierarchy_sync/`, `env_utils/scene_exporter/_scene_exporter.py`, `light_utils/lightmap_baker/_probe_placement.py`).** `instancing_strategy.InstancingStrategy` is pythontk's class, re-exported: constructing it directly from that module now reads 0 triangles for a mesh node unless given `count_triangles=` (`AutoInstancer` injects its own `polyEvaluate` counter, so its decisions are unchanged). `SceneDataSidecar` binds `MayaSidecarHost`; `HierarchyBaseline` is configuration only; `SceneExporter` sets `STORE = DataNodes`; `ProbePlacement` binds `MayaProbeHost` (`HOST_CLASS`), which holds `SKY_LIGHTS` and `PLACELESS_LIGHTS`. Export baselines unchanged.
