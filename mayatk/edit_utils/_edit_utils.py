@@ -28,17 +28,20 @@ class _EditUtilsInternal(object):
     """Internal helpers for EditUtils."""
 
     @staticmethod
-    def _mesh_command(objects, command: str) -> List[str]:
+    def _mesh_command(objects, command: str, whole_as_faces: bool = False) -> List[str]:
         """Run the MEL menu command *command* (it acts on the selection) on the
         meshes and poly faces of *objects*, selected first: what the panel ops
-        that keep Maya's own option-box settings share. Returns the mesh
-        transforms; ``[]`` (nothing runs) when *objects* holds none."""
+        that keep Maya's own option-box settings share. *whole_as_faces* selects
+        a whole mesh as its faces, for a command that refuses a transform.
+        Returns the mesh transforms; ``[]`` (nothing runs) when *objects* holds
+        none."""
         targets = _EditUtilsInternal._mesh_targets(objects, "f")
         if not targets:
             return []
         members = []
         for obj, faces in targets.items():
-            members.extend(faces or [obj])
+            whole = [f"{obj}.f[*]"] if whole_as_faces else [obj]
+            members.extend(faces or whole)
         cmds.select(members, replace=True)
         mel.eval(command)
         return list(targets)
@@ -1600,7 +1603,11 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         Returns:
             (list): The mesh transforms; ``[]`` (nothing runs) with no mesh.
         """
-        return _EditUtilsInternal._mesh_command(objects, "SubdividePolygon")
+        # performPolySubdivide errors on a selected transform (its MEL IF test)
+        # and changes nothing, so a whole mesh goes as its faces.
+        return _EditUtilsInternal._mesh_command(
+            objects, "SubdividePolygon", whole_as_faces=True
+        )
 
     @staticmethod
     @CoreUtils.selected

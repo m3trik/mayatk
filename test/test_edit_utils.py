@@ -17,7 +17,7 @@ import unittest
 import mayatk as mtk
 from mayatk.edit_utils._edit_utils import EditUtils
 
-from base_test import MayaTkTestCase, skipIfBatch
+from base_test import MayaTkTestCase
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 
@@ -1837,8 +1837,9 @@ class TestSubdivisionOps(MayaTkTestCase):
         EditUtils.quadrangulate(cube)
         self.assertEqual(self._faces(cube), 6)
 
-    @skipIfBatch("Add Divisions (SubdividePolygon) changes nothing under mayapy")
     def test_subdivide_adds_faces(self):
+        # Maya's performPolySubdivide errors on a selected transform (its MEL
+        # IF test, line 403) and changes nothing; a whole mesh goes as its faces.
         cube = cmds.polyCube(name="sub_ops_div", ch=False)[0]
         before = self._faces(cube)
         EditUtils.subdivide_mesh(cube)

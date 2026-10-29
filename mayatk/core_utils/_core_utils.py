@@ -481,8 +481,17 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                 continue
         if not objects:
             return None
-        cmds.hilite(objects)
+        # Entering component mode hilites every selected object; only the
+        # type's stay, as in Blender's Edit Mode.
         cmds.selectMode(component=True)
+        others = [
+            node
+            for node in cmds.ls(hilite=True) or []
+            if CoreUtils._transform_of(node) not in objects
+        ]
+        if others:
+            cmds.hilite(others, unHilite=True)
+        cmds.hilite(objects)
         if component:
             flag = {"vertex": "vertex", "vert": "vertex", "face": "facet"}.get(
                 component.lower(), component.lower()
