@@ -12,6 +12,7 @@ from base_test import MayaTkTestCase, QuickTestCase
 import maya.cmds as cmds
 from maya import mel
 
+from pythontk.core_utils.engines.shots.shot_conformance import ShotStoreConformance
 from mayatk.anim_utils.shots._shots import ShotStore, ShotBlock, resolve_clip_specs
 from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.env_utils.fbx_utils import FbxUtils
@@ -602,6 +603,148 @@ class TestExportRoundTrip(MayaTkTestCase):
         stale = [line for line in logged.output if "2 stale shot(s)" in line]
         self.assertTrue(stale, logged.output)
         self.assertIn("action://show?ui=shots", stale[0])
+
+
+class TestShotStorePersistedPayload(MayaTkTestCase):
+    """Characterization pin: the record the Maya store saves on
+    ``data_internal`` -- through the scene persistence, as a session does --
+    is a contract older scenes hold, so its spelling and bytes never move."""
+
+    def setUp(self):
+        super().setUp()
+        ShotStore.clear_active()
+        ShotStore._auto_export_disabled = False
+
+    def tearDown(self):
+        ShotStore.disable_auto_export()
+        ShotStore._auto_export_disabled = False
+        ShotStore.clear_active()
+        super().tearDown()
+
+    def _expected(self):
+        return ShotStoreConformance.payload(
+            {"pin_cube": cmds.ls("pin_cube", uuid=True)[0]}
+        )
+
+    def test_the_saved_record_is_pinned_byte_for_byte(self):
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
+
+        self.create_test_cube("pin_cube")
+        ShotStore.set_persistence(MayaScenePersistence())
+        store = ShotStoreConformance.fill(ShotStore())
+        ShotStore.set_active(store)
+        store.mark_dirty()
+        ShotStore.flush_pending()
+        self.assertEqual(
+            DataNodes.read(ptk.Scope.PRIVATE, "shot_store"), self._expected()
+        )
+
+    def test_a_reloaded_store_saves_the_same_bytes(self):
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
+
+        self.create_test_cube("pin_cube")
+        ShotStore.set_persistence(MayaScenePersistence())
+        store = ShotStoreConformance.fill(ShotStore())
+        ShotStore.set_active(store)
+        store.mark_dirty()
+        ShotStore.flush_pending()
+        ShotStore.invalidate()  # the scene-open path: reload from the record
+        reloaded = ShotStore.active()
+        self.assertIsNot(reloaded, store)
+        self.assertEqual(
+            ptk.SceneRecords.SHOT_STORE.encode(reloaded.to_dict()), self._expected()
+        )
+
+
+class TestTheMayaShotsHost(MayaTkTestCase):
+    """``mtk.ShotStore`` is pythontk's one store, running on the Maya host it
+    resolves on first ask -- the scene, the persistence, the undo pairing."""
+
+    def setUp(self):
+        super().setUp()
+        ShotStore.clear_active()
+        cmds.undoInfo(state=True, infinity=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+        super().tearDown()
+
+    def test_the_store_is_pythontks_on_the_maya_host(self):
+        import mayatk as mtk
+        from mayatk.anim_utils.shots._shots import MayaShotsHost
+
+        self.assertIs(mtk.ShotStore, ptk.ShotStore)
+        self.assertIs(mtk.MayaShotsHost, MayaShotsHost)
+        self.assertIsInstance(ShotStore.running_host(), MayaShotsHost)
+        self.assertIsInstance(ShotStore().host, ptk.ShotsHost)
+
+    def test_active_installs_the_maya_persistence(self):
+        from mayatk.anim_utils.shots._shots import MayaScenePersistence
+
+        ShotStore.active()
+        self.assertIsInstance(ShotStore._persistence, MayaScenePersistence)
+
+    def test_a_scene_edit_is_one_named_step_its_point_is_paired_with(self):
+        store = ShotStore()
+        store.define_shot("A", 0, 10)
+        with store.scene_edit("Grow Shot"):
+            store.update_shot(0, end=20)
+        paired, marker = store.peek_boundary_tag()
+        self.assertTrue(paired, "an edit of the records puts a step on the queue")
+        self.assertTrue(marker.startswith("shotSeq_GrowShot_"), marker)
+        self.assertEqual(store.host.undo_queue_top(), marker)
+        cmds.undo()
+        # The undone chunk now names the redo queue's top: that is the step.
+        self.assertTrue(store._native_step_crossed())
+
+    def test_an_edit_that_changed_nothing_leaves_no_restore_point(self):
+        store = ShotStore()
+        store.define_shot("A", 0, 10)
+        with store.scene_edit("Nothing"):
+            pass
+        self.assertFalse(store.has_boundary_snapshot())
+
+
+class TestShotStoreLegacyPrefKeys(QuickTestCase):
+    """Characterization pin: the pre-JSON QSettings keys the Maya store reads
+    its detection prefs from once (``uitk`` / ``shots``, ``ShotStore/<pref>``)
+    are a user's saved settings; their spelling never moves."""
+
+    def test_the_legacy_keys_are_read_as_saved(self):
+        from unittest import mock
+        from mayatk.anim_utils.shots import _shots
+
+        asked = []
+
+        class _Settings:
+            def __init__(self, org, app):
+                asked.append((org, app))
+
+            def value(self, key):
+                asked.append(key)
+                return None
+
+        store = ShotStore()
+        with (
+            mock.patch.object(_shots, "QSettings", _Settings),
+            mock.patch.object(ShotStore, "_prefs_path") as prefs_path,
+            mock.patch.object(ShotStore, "_save_user_prefs"),
+        ):
+            prefs_path.return_value.exists.return_value = False
+            store._restore_user_prefs()
+        self.assertEqual(
+            asked,
+            [
+                ("uitk", "shots"),
+                "ShotStore/detection_mode",
+                "ShotStore/use_selected_keys",
+                "ShotStore/select_on_load",
+                "ShotStore/detection_threshold",
+                "ShotStore/fit_mode",
+                "ShotStore/initial_shot_length",
+                "ShotStore/snap_whole_frames",
+            ],
+        )
 
 
 class TestCsvToFbxPipeline(MayaTkTestCase):

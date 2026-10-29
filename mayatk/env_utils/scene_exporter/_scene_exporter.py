@@ -21,14 +21,19 @@ from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.usd import UsdUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+from mayatk.node_utils.data_nodes import DataNodes
 
 
 class SceneExporter(ptk.SceneExporterBase):
     """Maya's Scene Exporter: the export write, its scope and its FBX /
     USD options over ``ptk.SceneExporterBase`` (progress, consent, run
-    config and the log file, shared with blendertk)."""
+    config and the log file, shared with blendertk). It configures the shell
+    and adds to it; it overrides none of it."""
 
     TASK_MANAGER_CLASS = TaskManager
+    #: The scene store the shell reads the saved scene's path from
+    #: (``DataNodes.scene_path``: ``EnvUtils.saved_scene_path``).
+    STORE = DataNodes
     KEPT_EDITS_ADVICE = (
         "An export records none for undo — revert to the saved file if "
         "that is not what you want."
@@ -41,10 +46,6 @@ class SceneExporter(ptk.SceneExporterBase):
     #: geometry is surface shapes, never a skydome, so the panel hides the row
     #: there; blendertk's is True (its exclusion also strips a visible mesh dome).
     EXCLUDE_HDR_IN_VISIBLE_SCOPE = False
-
-    def _saved_scene_path(self) -> str:
-        """The open scene's saved path (``EnvUtils.saved_scene_path``)."""
-        return EnvUtils.saved_scene_path()
 
     def _initialize_objects(
         self, objects: Optional[Union[List[str], Callable]]

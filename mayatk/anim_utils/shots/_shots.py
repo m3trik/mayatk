@@ -1,24 +1,25 @@
 # coding=utf-8
-"""Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
+"""Maya shots host — the DCC layer under ``pythontk``'s one shot store.
 
 All of the shot *model* (:class:`ShotBlock`, :class:`ShotStore` CRUD/observer/
-serialisation, typed store events, clip-spec resolution) lives once in
-``pythontk.core_utils.engines.shots`` (the DCC-agnostic engine shared with
-blendertk); this module is the thin Maya **acquisition + persistence** layer:
+serialisation, typed store events, clip-spec resolution, the hand-off transfer)
+lives once in ``pythontk.core_utils.engines.shots`` (the DCC-agnostic engine
+shared with blendertk); ``mtk.ShotStore`` IS ``ptk.ShotStore``.  This module is
+the thin Maya **acquisition + persistence** layer it is injected with:
 
 - :class:`MayaScenePersistence` stores the serialized store on the shared
   ``data_internal`` carrier node (undo-safe writes, legacy-node migration,
   scene-lifecycle subscriptions via :class:`ScriptJobManager`).
-- :class:`ShotStore` subclasses :class:`pythontk.ShotStore` and overrides the
-  scene-reaching hooks (:meth:`_scene_fps`, :meth:`has_animation`,
-  :meth:`detect_regions`, :meth:`assess`, :meth:`publish_export_view`,
-  :meth:`_schedule_flush`, the export-preparer registration) with their
-  original Maya implementations.
+- :class:`MayaShotsHost` is the store's :class:`pythontk.ShotsHost`: the
+  scene reads, the named undo chunks and their pairing with Maya's queue, the
+  deferred flush, the export carrier and the transfer's curve naming.  It is
+  registered as this module is imported, so ``mtk.ShotStore.active()`` binds
+  Maya with no entry point having run.
 
 Cross-scene detection prefs live in the engine's JSON store
 (``user_config_root()/shots/prefs.json`` — shared with Blender); legacy
 QSettings values are migrated on first access (see
-:meth:`ShotStore._restore_user_prefs`).
+:meth:`MayaShotsHost.legacy_prefs`).
 """
 
 import contextlib
@@ -43,6 +44,10 @@ except ImportError:
     QSettings = None  # type: ignore[misc,assignment]
 
 import pythontk as ptk
+
+# The one store, re-exported: ``mtk.ShotStore`` (and this module's
+# ``ShotStore``, which ``DataNodes.OWNERS`` and ``FbxUtils.PRODUCERS`` name).
+from pythontk import ShotStore
 from pythontk.core_utils.engines.shots.shot_model import (  # noqa: F401 — re-exports
     SHOT_PALETTE,
     ShotBlock,
@@ -89,6 +94,7 @@ __all__ = [
     "StoreInvalidated",
     "ScenePersistence",
     "MayaScenePersistence",
+    "MayaShotsHost",
     "STANDARD_TRANSFORM_ATTRS",
     "CONTENT_ATTRS",
     "Detection",
@@ -129,7 +135,7 @@ class MayaScenePersistence:
             attr_name: String channel on ``data_internal`` (default ``shot_store``).
             store_cls: The active-store class this backend serves — the one
                 whose ``_active`` is invalidated on scene change, flushed before
-                save and rescaled on a frame-rate change.  Defaults to the Maya
+                save and rescaled on a frame-rate change.  Defaults to
                 :class:`ShotStore`; the key stash passes its own class so the two
                 stores ride the same carrier node on separate channels without
                 either reacting to the other's scene events.
@@ -145,8 +151,8 @@ class MayaScenePersistence:
 
     @property
     def store_cls(self):
-        """The store class this backend serves (resolved lazily: ``ShotStore``
-        is defined below this class in the module)."""
+        """The store class this backend serves (``ShotStore`` unless the key
+        stash passed its own)."""
         return self._store_cls if self._store_cls is not None else ShotStore
 
     def save(self, data: Dict[str, Any], undoable: bool = False) -> None:
@@ -317,7 +323,7 @@ class MayaScenePersistence:
         store = self.store_cls._active
         if store is None or store.is_empty():
             return
-        new_fps = _ShotStoreInternal._get_scene_fps()
+        new_fps = _MayaShotsHostInternal._get_scene_fps()
         old_fps = store.scene_fps
         if old_fps and abs(new_fps - old_fps) > 0.01:
             store.rescale_to_fps(new_fps)
@@ -330,12 +336,12 @@ class MayaScenePersistence:
 
 
 # ---------------------------------------------------------------------------
-# Maya shot store
+# Maya shots host
 # ---------------------------------------------------------------------------
 
 
-class _ShotStoreInternal(object):
-    """Internal helpers for ShotStore."""
+class _MayaShotsHostInternal(object):
+    """Internal helpers for MayaShotsHost."""
 
     @staticmethod
     def _get_scene_fps() -> float:
@@ -366,7 +372,7 @@ class _ShotStoreInternal(object):
     @staticmethod
     def _member_nodes(name) -> List[str]:
         """Long names of every transform answering to a doc object name --
-        see :meth:`ShotStore.member_nodes`."""
+        see :meth:`MayaShotsHost.member_nodes`."""
         try:
             import maya.cmds as cmds
         except ImportError:
@@ -377,118 +383,6 @@ class _ShotStoreInternal(object):
             # A referenced asset lives in a namespace the doc does not write.
             hits = cmds.ls(name, long=True, type="transform", recursive=True) or []
         return hits
-
-
-class ShotStore(ptk.ShotStore, _ShotStoreInternal):
-    """:class:`pythontk.ShotStore` with the scene hooks bound to Maya.
-
-    Only the DCC-reaching hooks are overridden; every CRUD / observer /
-    serialisation behaviour is inherited unchanged from the pure engine.
-    :meth:`active` auto-installs :class:`MayaScenePersistence` when Maya is
-    available, so ``ShotStore.active()`` transparently loads any store saved
-    in the current scene.
-    """
-
-    _QSETTINGS_PREFIX = "ShotStore"  # legacy QSettings namespace (pre-JSON prefs)
-
-    # ---- singleton / persistence -----------------------------------------
-
-    @classmethod
-    def active(cls) -> "ShotStore":
-        """Return the active store, auto-installing the Maya backend once."""
-        if cls._active is None and cls._persistence is None and cmds is not None:
-            cls.set_persistence(MayaScenePersistence())
-        return super().active()  # type: ignore[return-value]
-
-    # ---- undo pairing ------------------------------------------------------
-
-    #: Monotonic source for unique chunk names — the marker that lets
-    #: :meth:`scene_edit` recognise its own entry on Maya's queue.
-    _chunk_seq = itertools.count(1)
-
-    @staticmethod
-    def undo_queue_top(redo: bool = False) -> str:
-        """Name of the entry Maya's undo (or redo) would consume next.
-
-        ``""`` when that queue is empty, or when Maya is unavailable.
-        """
-        if cmds is None:
-            return ""
-        try:
-            if redo:
-                return cmds.undoInfo(q=True, redoName=True) or ""
-            return cmds.undoInfo(q=True, undoName=True) or ""
-        except Exception:
-            return ""
-
-    @contextlib.contextmanager
-    def scene_edit(self, label: str = "edit", snapshot: bool = True):
-        """Run a boundary-mutating edit as ONE named, undo-paired step.
-
-        Pushes a boundary restore point, runs the body inside a uniquely
-        NAMED undo chunk, and tags the restore point with ``(paired,
-        marker)`` describing what Maya recorded:
-
-        * ``paired`` — whether the chunk actually landed on the queue.  An edit
-          that changed the shot records puts a step there even when it touched
-          no scene data (:meth:`_record_undo_step`), so it is ``False`` only
-          for an edit that changed nothing, one that raised before changing
-          anything, or one made with undo off; a consumer that fires
-          ``cmds.undo()`` for an unpaired point would pop the user's PREVIOUS,
-          unrelated operation.  (Verified: an empty chunk leaves ``undoName``
-          reporting the entry before it.)
-        * ``marker`` — the queue's top right after the edit.  If it has
-          changed by the time undo runs, something else happened since, so
-          the native undo belongs to THAT and this restore point stays put.
-
-        An edit that changed NOTHING -- no step reached the queue, the store
-        holds what it held -- leaves no restore point either (a no-op Snap, a
-        Simplify that removed nothing).  Left, the unpaired point sat on top of
-        the ledger, and the native undo of the edit before it found it in the
-        way and restored nothing (BACKLOG 2026-10-05).  A body that raises
-        takes the same rule: a refused drag that already rippled keeps the
-        point that undoes it.
-
-        Yields the store's :class:`~pythontk.ShotStore.EditHandle`:
-        ``cancel()`` declares the body a no-op, and its restore point goes
-        (``discard_boundary_snapshot``, at most once per push) -- the Shot
-        Sequencer panel's one idiom for both hosts (blendertk's handle also
-        skips its undo step; Maya drops an empty chunk itself).
-
-        Pass ``snapshot=False`` for an edit that must not record a restore
-        point (it then only supplies the named chunk).  An edit that changed
-        the shot records ends by saying so (:class:`ShotsEdited`), as every
-        store's ``scene_edit`` does.  The chunk is named after *label* without
-        its spaces (``shotSeq_MoveShot_12``).
-        """
-        edit = self.EditHandle()
-        if cmds is None:
-            yield edit
-            return
-        if snapshot:
-            self.push_boundary_snapshot()
-        name = f"shotSeq_{''.join(label.split())}_{next(ShotStore._chunk_seq)}"
-        cmds.undoInfo(openChunk=True, chunkName=name)
-        changed = False
-        try:
-            yield edit
-            changed = snapshot and not edit.cancelled and self.changed_since_snapshot()
-            # Only for an edit that changed what the store alone holds: one
-            # that changed nothing must not cost the user a dead Ctrl+Z.
-            if changed:
-                self._record_undo_step()
-        finally:
-            cmds.undoInfo(closeChunk=True)
-            if snapshot:
-                top = self.undo_queue_top()
-                if edit.cancelled or (
-                    top != name and not self.changed_since_snapshot()
-                ):
-                    self.discard_boundary_snapshot()
-                else:
-                    self.tag_boundary_snapshot((top == name, top))
-        if changed:
-            self._notify(ShotsEdited(label=label))
 
     @staticmethod
     def _record_undo_step() -> None:
@@ -502,7 +396,7 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         shot of a scene, every time).  With a step on the queue, Maya's own
         undo and redo reach the edit wherever the focus is, and the store's
         Undo/Redo listener applies its restore point
-        (:meth:`_native_step_crossed`).
+        (:meth:`MayaShotsHost.step_crossed`).
 
         The step re-sets the lock of the private data node's ``caching`` plug
         to what it already is: no value changes, nothing re-evaluates, and the
@@ -516,100 +410,145 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         plug = f"{DataNodes.ensure_internal()}.caching"
         cmds.setAttr(plug, lock=cmds.getAttr(plug, lock=True))
 
-    # ---- following Maya's own undo (``ptk.ShotStore.follow_native_step``) ----
-
-    def _native_step_crossed(self, redo: bool = False, first: bool = True) -> bool:
-        """Whether the undo (or redo) Maya JUST performed is the edit of the
-        restore point next in that direction.
-
-        Maya fires its Undo/Redo events for every undo in the session, so the
-        event alone says nothing about whose edit it was.  The entry Maya just
-        moved is named by the OPPOSITE queue (verified: after ``cmds.undo()``,
-        ``undoInfo -q -redoName`` returns the chunk that was undone), and the
-        restore point records the marker its edit landed under
-        (:meth:`scene_edit`) -- so the two match only when the step is that
-        edit.  Without the test, undoing an unrelated scene edit consumed a
-        restore point and reverted shot bounds whose keys Maya had left
-        exactly where they were.
-
-        An UNPAIRED restore point never matches: its edit put nothing on the
-        queue, so whatever Maya just undid was somebody else's.  An untagged
-        one (a legacy push) counts for the *first* point of a step.
-        """
-        if not self.has_boundary_snapshot(redo=redo):
-            return False
-        tag = self.peek_boundary_tag(redo=redo)
-        if not isinstance(tag, tuple):
-            return first
-        paired, marker = tag
-        return bool(paired) and marker == self.undo_queue_top(redo=not redo)
-
-    @classmethod
-    def _install_native_undo_sync(cls) -> None:
-        """Subscribe this class to Maya's Undo / Redo events: each runs
-        :meth:`_on_native_step` (``MEventMessage``, through
-        :class:`ScriptJobManager`, which tears them down with its own reset).
-        Once per class and manager -- a manager reset re-arms it."""
-        if cmds is None:
-            return
+    @staticmethod
+    def _read_legacy_prefs() -> Optional[Dict[str, Any]]:
+        """The pre-engine QSettings detection prefs under the prefs file's keys
+        (``ShotStore._apply_prefs`` takes them as it takes the file's), or
+        ``None`` when they cannot be read."""
+        prefix = MayaShotsHost._QSETTINGS_PREFIX
+        truthy = (True, "true", 1, "1")
+        prefs: Dict[str, Any] = {}
         try:
-            import maya.api.OpenMaya as om
-            from mayatk.core_utils.script_job_manager import ScriptJobManager
+            s = QSettings("uitk", "shots")
+            dm = s.value(f"{prefix}/detection_mode")
+            if dm is not None and str(dm) in ptk.ShotStore.DETECTION_MODES:
+                prefs["detection_mode"] = str(dm)
+            else:
+                val = s.value(f"{prefix}/use_selected_keys")
+                if val is not None and val in truthy:
+                    kf = s.value(f"{prefix}/key_filter_mode")
+                    prefs["detection_mode"] = (
+                        str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
+                    )
+                # else leave at default "auto"
+            sol = s.value(f"{prefix}/select_on_load")
+            if sol is not None and sol in truthy:
+                prefs["select_on_load"] = True
+            dt = s.value(f"{prefix}/detection_threshold")
+            if dt is not None:
+                prefs["detection_threshold"] = dt
+            fm = s.value(f"{prefix}/fit_mode")
+            if fm is not None:
+                prefs["fit_mode"] = str(fm)
+            isl = s.value(f"{prefix}/initial_shot_length")
+            if isl is not None:
+                prefs["initial_shot_length"] = isl
+            snap = s.value(f"{prefix}/snap_whole_frames")
+            if snap is not None:
+                prefs["snap_whole_frames"] = snap in truthy
         except Exception:
-            return
-        mgr = ScriptJobManager.instance()
-        held = cls.__dict__.get("_native_undo_subs")
-        if held is not None and held[0] is mgr:
-            return
-        tokens = []
-        for event, handler in (
-            ("Undo", cls._on_maya_undo),
-            ("Redo", cls._on_maya_redo),
-        ):
-            token = mgr.add_om_callback(
-                om.MEventMessage.addEventCallback, event, handler, owner=cls
-            )
-            if token is not None:
-                tokens.append(token)
-        cls._native_undo_subs = (mgr, tokens)
+            return None
+        return prefs
+
+
+class MayaShotsHost(_MayaShotsHostInternal):
+    """Maya's half of the shot store: the :class:`pythontk.ShotsHost` the one
+    :class:`pythontk.ShotStore` asks about the scene.
+
+    Registered as this module is imported (:meth:`resolve`), so
+    ``mtk.ShotStore.active()`` binds Maya's scene, persistence, undo queue and
+    export hooks with no entry point having run.  Each member answers the pure
+    default outside Maya (``maya.cmds`` absent).  blendertk's
+    ``BlenderShotsHost`` is its twin.
+    """
+
+    #: Maya keys keep real time when the scene's rate changes, so the shots
+    #: rescale to follow them (``ShotStore.rescale_to_fps``).
+    keys_keep_time = True
+
+    #: The legacy QSettings namespace (pre-JSON prefs): a user's saved
+    #: settings, read once by :meth:`legacy_prefs`.
+    _QSETTINGS_PREFIX = "ShotStore"
+
+    #: Monotonic source for unique chunk names — the marker that lets
+    #: :meth:`undo_step` recognise its own entry on Maya's queue.
+    _chunk_seq = itertools.count(1)
+
+    #: ``{on_step: (ScriptJobManager, tokens)}``: the Undo / Redo
+    #: subscriptions :meth:`install_undo_sync` made, one per store class.
+    _native_undo_subs: Dict[Any, tuple] = {}
+
+    #: The one adapter :meth:`resolve` hands out.
+    _instance: Optional["MayaShotsHost"] = None
 
     @classmethod
-    def _remove_native_undo_sync(cls) -> None:
-        """Drop the Undo / Redo subscriptions :meth:`_install_native_undo_sync`
-        made."""
-        held = cls.__dict__.get("_native_undo_subs")
-        if held is None:
-            return
-        mgr, tokens = held
-        for token in tokens:
-            mgr.unsubscribe(token)
-        cls._native_undo_subs = None
+    def resolve(cls) -> Optional["MayaShotsHost"]:
+        """The adapter when this process runs Maya (``maya.cmds`` imports),
+        else ``None`` -- the resolver :meth:`ShotStore.register_host` holds."""
+        if cmds is None:
+            return None
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
 
-    @classmethod
-    def _on_maya_undo(cls, *_args) -> None:
-        """Maya's Undo event: the active store follows it."""
-        cls._on_native_step(redo=False)
+    # ---- the scene and the store's lifecycle -----------------------------
 
-    @classmethod
-    def _on_maya_redo(cls, *_args) -> None:
-        """Maya's Redo event: the active store follows it."""
-        cls._on_native_step(redo=True)
+    @staticmethod
+    def available() -> bool:
+        """Whether the scene can be reached (``maya.cmds`` imports)."""
+        return cmds is not None
 
-    # ---- scene hooks -------------------------------------------------------
+    @staticmethod
+    def persistence() -> Optional[MayaScenePersistence]:
+        """A new :class:`MayaScenePersistence` (``ShotStore.active`` installs
+        it once), or ``None`` outside Maya."""
+        return MayaScenePersistence() if cmds is not None else None
 
-    def _scene_fps(self) -> float:
+    @staticmethod
+    def store_state() -> None:
+        """Nothing kept per store: Maya's lookups ask the scene each time."""
+        return None
+
+    @staticmethod
+    def scene_fps() -> float:
         """Current Maya scene framerate (24.0 outside Maya)."""
-        return _ShotStoreInternal._get_scene_fps()
+        return _MayaShotsHostInternal._get_scene_fps()
 
-    def _schedule_flush(self) -> None:
+    @staticmethod
+    def schedule_flush(store) -> None:
         """Coalesce rapid mutations into a single deferred write."""
         try:
             import maya.cmds as cmds
 
-            cmds.evalDeferred(self._flush_dirty, lowestPriority=True)
+            cmds.evalDeferred(store._flush_dirty, lowestPriority=True)
         except ImportError:
             # Outside Maya (tests, standalone) — flush immediately.
-            self._flush_dirty()
+            store._flush_dirty()
+
+    @classmethod
+    def legacy_prefs(cls) -> Optional[Dict[str, Any]]:
+        """The detection prefs ``QSettings("uitk", "shots")`` held before the
+        engine's cross-DCC JSON store (``user_config_root()/shots/prefs.json``,
+        shared with Blender), including the even-older ``use_selected_keys`` +
+        ``key_filter_mode`` pair, under the file's keys; ``None`` without Qt.
+        The store asks once, while the file is absent, and writes them through
+        (``ShotStore._restore_user_prefs``)."""
+        if QSettings is None:
+            return None
+        return cls._read_legacy_prefs()
+
+    @staticmethod
+    def migrate_ledger(store) -> None:
+        """Nothing to migrate: Maya claims by anim-curve node in every format."""
+        return None
+
+    @staticmethod
+    def follow_renames(store) -> bool:
+        """Nothing to follow: a Maya member is re-resolved where it is read
+        (the sequencer's stale-path reconcile, the saved node UUIDs)."""
+        return False
+
+    # ---- scene reads -----------------------------------------------------
 
     @staticmethod
     def has_animation() -> bool:
@@ -637,25 +576,13 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         node_cache: dict = {}
         return any(Detection.resolve_to_transform(n, cache=node_cache) for n in conns)
 
-    def detect_regions(self) -> List[Dict[str, Any]]:
-        """Detect shot candidates using the store's detection settings.
+    @staticmethod
+    def detection():
+        """Maya's region detection (:class:`Detection`)."""
+        return Detection
 
-        Dispatches to :func:`detect_shot_regions` (auto mode) or
-        :func:`regions_from_selected_keys` (selected-keys modes)
-        based on :attr:`detection_mode` and :attr:`detection_threshold`.
-
-        Returns:
-            List of candidate dicts with ``"name"``, ``"start"``,
-            ``"end"``, and ``"objects"`` keys.
-        """
-        if self.detection_mode != "auto":
-            return Detection.regions_from_selected_keys(
-                gap_threshold=self.detection_threshold,
-                key_filter=self.detection_mode,
-            )
-        return Detection.detect_shot_regions(gap_threshold=self.detection_threshold)
-
-    def assess(self) -> Dict[int, str]:
+    @staticmethod
+    def assess(store) -> Dict[int, str]:
         """Lightweight assessment: check if shot objects exist in the scene.
 
         Returns:
@@ -665,12 +592,12 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         try:
             import maya.cmds as cmds
         except ImportError:
-            return {s.shot_id: "valid" for s in self.shots}
+            return {s.shot_id: "valid" for s in store.shots}
         # Resolve the union of all shot objects in one ls call instead
         # of one per shot.  Objects are stored as long names (the
         # _resolve_long_names SSoT), so exact membership is the
         # contract — no second-guessing via objExists.
-        all_objs = {obj for shot in self.shots for obj in shot.objects}
+        all_objs = {obj for shot in store.shots for obj in shot.objects}
         existing = set(cmds.ls(list(all_objs), long=True) or []) if all_objs else set()
         return {
             shot.shot_id: (
@@ -678,10 +605,22 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
                 if all(obj in existing for obj in shot.objects)
                 else "missing_object"
             )
-            for shot in self.shots
+            for shot in store.shots
         }
 
-    def _existing_objects(self, names) -> set:
+    @staticmethod
+    def member_nodes(name: str) -> List[str]:
+        """Long names of every transform answering to a doc object *name*.
+
+        Exact first; a name the scene holds only inside a namespace (a
+        referenced asset, ``AC:door_geo`` for ``door_geo``) is looked up
+        next.  :meth:`~pythontk.ShotStore.resolve_member` reads one hit as
+        found, several as ambiguous.
+        """
+        return _MayaShotsHostInternal._member_nodes(name)
+
+    @staticmethod
+    def existing_objects(store, names) -> set:
         """Which of *names* the scene still holds (``ptk.ShotStore.stale_shots``).
 
         A member is stored as its long DAG path, and one whose parent was
@@ -691,9 +630,9 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         not it), before it counts as gone.  Two batched ``ls`` calls, whatever
         the member count, and a lookup per member neither finds.  A member
         whose leaf was renamed too is found by its saved node UUID
-        (:meth:`_current_names`): a HOLD shot keys
-        nothing in its frames, so without it the rename made the shot stale
-        and its take left the export.
+        (:meth:`_current_names`): a HOLD shot keys nothing in its frames, so
+        without it the rename made the shot stale and its take left the
+        export.
         """
         names = [str(n) for n in names]
         if cmds is None or not names:
@@ -702,13 +641,20 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         present = {n for n in names if n in found}
         rest = [n for n in names if n not in present]
         if rest:
-            leaves = sorted({self.leaf_name(n) for n in rest})
-            held = {self.leaf_name(h) for h in cmds.ls(leaves, type="transform") or []}
-            present.update(n for n in rest if self.leaf_name(n) in held)
-            present.update(self._current_names(n for n in rest if n not in present))
+            leaves = sorted({store.leaf_name(n) for n in rest})
+            held = {
+                store.leaf_name(h) for h in cmds.ls(leaves, type="transform") or []
+            }
+            present.update(n for n in rest if store.leaf_name(n) in held)
+            present.update(
+                MayaShotsHost._current_names(
+                    store, (n for n in rest if n not in present)
+                )
+            )
         return present
 
-    def _member_ids(self, names) -> Dict[str, str]:
+    @staticmethod
+    def member_ids(names) -> Dict[str, str]:
         """``{name: node UUID}`` for each of *names* that answers to ONE node
         (``ptk.ShotStore._capture_member_ids``): saved with the store, so a
         member renamed behind its back is found again (:meth:`_current_names`)."""
@@ -724,13 +670,14 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
                 out[str(name)] = found[0]
         return out
 
-    def _current_names(self, names) -> Dict[str, str]:
+    @staticmethod
+    def _current_names(store, names) -> Dict[str, str]:
         """``{name: long name now}`` for each of *names* no node answers to --
         by its path or by its leaf -- whose saved UUID (``member_ids``) names
         exactly one node: a member renamed with the store not told (a rename
         in the Outliner, panel closed).  Read-only.  A UUID that names no
         node -- deleted, or another scene's -- leaves the name as it was."""
-        ids = self.member_ids
+        ids = store.member_ids
         if cmds is None or not ids:
             return {}
         out = {}
@@ -740,7 +687,7 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             if not uid:
                 continue
             try:
-                if cmds.ls(name) or cmds.ls(self.leaf_name(name), type="transform"):
+                if cmds.ls(name) or cmds.ls(store.leaf_name(name), type="transform"):
                     continue  # it answers by name: nothing to follow
                 found = cmds.ls(uid, long=True) or []
             except Exception:  # an unparseable name or id: today's behaviour
@@ -749,7 +696,8 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
                 out[name] = found[0]
         return out
 
-    def _keyed_windows(self, windows) -> List[bool]:
+    @staticmethod
+    def keyed_windows(store, windows) -> List[bool]:
         """Per ``(start, end)`` window, whether any animation curve in the
         scene keys a frame inside it -- whatever the curve drives, layers
         included (``ptk.ShotStore.stale_shots``).  A curve that drives nothing
@@ -763,11 +711,11 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         curve's own key index (``AnimUtils.curve_key_spans``): no key is listed
         or walked, but on the few curves the ledger samples -- a key the shot
         system holds as a bound sample (``edit_ledger``) is its bookkeeping,
-        not content, as :meth:`_members_keyed_windows` reads it.
+        not content, as :meth:`members_keyed_windows` reads it.
         """
         windows = list(windows)
         if cmds is None:
-            return super()._keyed_windows(windows)
+            return [True] * len(windows)  # the pure default: never stale on a guess
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         curves = cmds.ls(type="animCurve") or []
@@ -787,7 +735,7 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         )
         if not wired:
             return [False] * len(windows)
-        ledger = self.edit_ledger
+        ledger = store.edit_ledger
         sampled = set(ledger.keyed_curves())
         plain = [c for c in wired if c not in sampled]
         claimed = [c for c in wired if c in sampled]
@@ -808,17 +756,8 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
                 )
         return keyed
 
-    def _audio_windows(self, windows) -> List[bool]:
-        """Per ``(start, end)`` window, whether an audio event plays in it
-        (``ptk.ShotStore.empty_shots``) -- every track's on/off spans."""
-        if cmds is None:
-            return super()._audio_windows(windows)
-        from mayatk.audio_utils._audio_utils import AudioUtils
-
-        spans = (s for events in AudioUtils.read_all_events().values() for s in events)
-        return self._spans_overlap(spans, list(windows))
-
-    def _members_keyed_windows(self, entries) -> List[Optional[bool]]:
+    @staticmethod
+    def members_keyed_windows(store, entries) -> List[Optional[bool]]:
         """Per ``(names, (start, end))``, whether a curve of the named objects
         keys a frame inside the window -- ``None`` when none of the names
         resolves (``ptk.ShotStore.empty_shots``).  Every curve driving a member,
@@ -826,14 +765,14 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         (``edit_ledger``) is its bookkeeping, not the shot's content.
         """
         if cmds is None:
-            return super()._members_keyed_windows(entries)
+            return [True] * len(entries)  # the pure default: never empty on a guess
         from mayatk.anim_utils._anim_utils import AnimUtils
 
-        ledger = self.edit_ledger
+        ledger = store.edit_ledger
         sampled = set(ledger.keyed_curves())
         out: List[Optional[bool]] = []
         for names, (start, end) in entries:
-            nodes = self._resolve_long_names(names)
+            nodes = _MayaShotsHostInternal._resolve_long_names(names)
             if not nodes:
                 out.append(None)
                 continue
@@ -856,45 +795,160 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             )
         return out
 
-    def member_nodes(self, name: str) -> List[str]:
-        """Long names of every transform answering to a doc object *name*.
+    @staticmethod
+    def audio_spans() -> List[tuple]:
+        """Every audio track's on/off spans (``ptk.ShotStore.empty_shots``)."""
+        if cmds is None:
+            return []
+        from mayatk.audio_utils._audio_utils import AudioUtils
 
-        Exact first; a name the scene holds only inside a namespace (a
-        referenced asset, ``AC:door_geo`` for ``door_geo``) is looked up
-        next.  :meth:`~pythontk.ShotStore.resolve_member` reads one hit as
-        found, several as ambiguous.
-        """
-        return _ShotStoreInternal._member_nodes(name)
+        return [s for events in AudioUtils.read_all_events().values() for s in events]
 
-    def _resolve_long_names(self, names):
-        """Resolve object names to long DAG paths (drops missing objects)."""
-        return _ShotStoreInternal._resolve_long_names(names)
+    @staticmethod
+    def curve_ledger_keys(store, objects=None):
+        """``keys_of(curve)``: a Maya curve is claimed under its own anim-curve
+        node name."""
+        return lambda curve: (str(curve),)
 
-    # ---- export-view projection (Maya carriers) ----------------------------
+    # ---- Maya's undo -----------------------------------------------------
 
-    def publish_export_view(self, strategy: Optional[str] = None) -> Optional[str]:
-        """Publish this store's shot records onto the shared ``data_export`` node.
+    @staticmethod
+    def undo_queue_top(redo: bool = False) -> str:
+        """Name of the entry Maya's undo (or redo) would consume next.
 
-        The authoring-time publish: the shot record :meth:`export_records`
-        builds (each clip with its range) committed through
-        ``FbxUtils.publish_authored``, handoff block included.  Idempotent;
-        regenerated from the live store so it can't go stale.  An empty store
-        **clears** the record (never creating the carrier just to hold it) --
-        deleting the last shot must not leave the previous takes riding into
-        the next export.  Returns the export node
-        name, or ``None`` outside Maya / when a clear had nothing to do.
-
-        An export pipeline does not call this: ``FbxUtils.PRODUCERS`` names
-        :meth:`produce_export_records`, and the pipeline's own context (the
-        Animation Clips mode) reaches the record there.
+        ``""`` when that queue is empty, or when Maya is unavailable.
         """
         if cmds is None:
-            return None
+            return ""
+        try:
+            if redo:
+                return cmds.undoInfo(q=True, redoName=True) or ""
+            return cmds.undoInfo(q=True, undoName=True) or ""
+        except Exception:
+            return ""
+
+    @classmethod
+    @contextlib.contextmanager
+    def undo_step(cls, store, label: str = "edit", snapshot: bool = True):
+        """Run a shot edit as ONE uniquely NAMED undo chunk
+        (``ptk.ShotStore.scene_edit``, which keeps the restore point's books).
+
+        Tags the handle with ``(paired, marker)`` describing what Maya
+        recorded:
+
+        * ``paired`` — whether the chunk actually landed on the queue.  An edit
+          that changed the shot records (the handle's ``changed``) puts a step
+          there even when it touched no scene data (:meth:`_record_undo_step`),
+          so it is ``False`` only for an edit that changed nothing, one that
+          raised before changing anything, or one made with undo off; a
+          consumer that fires ``cmds.undo()`` for an unpaired point would pop
+          the user's PREVIOUS, unrelated operation.  (Verified: an empty chunk
+          leaves ``undoName`` reporting the entry before it.)
+        * ``marker`` — the queue's top right after the edit.  If it has
+          changed by the time undo runs, something else happened since, so
+          the native undo belongs to THAT and the restore point stays put.
+
+        ``cancel()`` needs nothing here: Maya drops an empty chunk itself.  The
+        chunk is named after *label* without its spaces
+        (``shotSeq_MoveShot_12``).
+        """
+        edit = store.EditHandle()
+        if cmds is None:
+            yield edit
+            return
+        name = f"shotSeq_{''.join(label.split())}_{next(cls._chunk_seq)}"
+        cmds.undoInfo(openChunk=True, chunkName=name)
+        try:
+            yield edit
+            # Only for an edit that changed what the store alone holds: one
+            # that changed nothing must not cost the user a dead Ctrl+Z.
+            if edit.changed:
+                cls._record_undo_step()
+        finally:
+            cmds.undoInfo(closeChunk=True)
+            top = cls.undo_queue_top()
+            edit.tag = (top == name, top)
+
+    @classmethod
+    def step_crossed(cls, marker, redo: bool = False) -> bool:
+        """Whether the undo (or redo) Maya JUST performed is the chunk named
+        *marker* (``ptk.ShotStore._native_step_crossed``).
+
+        Maya fires its Undo/Redo events for every undo in the session, so the
+        event alone says nothing about whose edit it was.  The entry Maya just
+        moved is named by the OPPOSITE queue (verified: after ``cmds.undo()``,
+        ``undoInfo -q -redoName`` returns the chunk that was undone), and the
+        restore point records the marker its edit landed under
+        (:meth:`undo_step`) -- so the two match only when the step is that
+        edit.  Without the test, undoing an unrelated scene edit consumed a
+        restore point and reverted shot bounds whose keys Maya had left
+        exactly where they were.  An untagged point (*marker* ``None``, a
+        legacy push) reads as crossed.
+        """
+        if marker is None:
+            return True
+        return marker == cls.undo_queue_top(redo=not redo)
+
+    @classmethod
+    def install_undo_sync(cls, on_step) -> None:
+        """Subscribe *on_step* (the store's ``_on_native_step``) to Maya's Undo /
+        Redo events (``MEventMessage``, through :class:`ScriptJobManager`, which
+        tears them down with its own reset).  Once per store class and
+        manager -- a manager reset re-arms it."""
+        if cmds is None:
+            return
+        try:
+            import maya.api.OpenMaya as om
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
+        except Exception:
+            return
+        mgr = ScriptJobManager.instance()
+        held = cls._native_undo_subs.get(on_step)
+        if held is not None and held[0] is mgr:
+            return
+        owner = getattr(on_step, "__self__", cls)  # the store class, as before
+        tokens = []
+        for event, redo in (("Undo", False), ("Redo", True)):
+            token = mgr.add_om_callback(
+                om.MEventMessage.addEventCallback,
+                event,
+                cls._step_handler(on_step, redo),
+                owner=owner,
+            )
+            if token is not None:
+                tokens.append(token)
+        cls._native_undo_subs[on_step] = (mgr, tokens)
+
+    @staticmethod
+    def _step_handler(on_step, redo: bool):
+        """Maya's Undo (or Redo) event handler: the active store follows it."""
+
+        def handler(*_args) -> None:
+            on_step(redo=redo)
+
+        return handler
+
+    @classmethod
+    def remove_undo_sync(cls, on_step) -> None:
+        """Drop the Undo / Redo subscriptions :meth:`install_undo_sync` made
+        for *on_step*."""
+        held = cls._native_undo_subs.pop(on_step, None)
+        if held is None:
+            return
+        mgr, tokens = held
+        for token in tokens:
+            mgr.unsubscribe(token)
+
+    # ---- export ----------------------------------------------------------
+
+    @staticmethod
+    def publish_records(records) -> Optional[str]:
+        """Commit the shot records onto the shared ``data_export`` node
+        (``FbxUtils.publish_authored``); returns the export node name, or
+        ``None`` when a clear had nothing to do."""
         from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.node_utils.data_nodes import DataNodes
 
-        records = {r.spec: r for r in self.export_records(strategy=strategy) or []}
-        records.setdefault(ptk.SceneRecords.SHOTS, None)  # none = clear
         FbxUtils.publish_authored(records)
         node = DataNodes.get_export_node(create=False)
         if node is None:
@@ -903,18 +957,47 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         key = ptk.SceneRecords.SHOTS.key
         return node if cmds.attributeQuery(key, node=node, exists=True) else None
 
+    @staticmethod
+    def export_producer(enabled: bool) -> None:
+        """Opt the shot record into (or out of) the any-export session hook
+        (``FbxUtils.enable_export_producer``)."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        if enabled:
+            FbxUtils.enable_export_producer(ptk.SceneRecords.SHOTS)
+        else:
+            FbxUtils.disable_export_producer(ptk.SceneRecords.SHOTS)
+
     # ---- hand-off transfer (the manifest's ``shots`` section) ---------------
-    #
-    # Neither FBX nor USD carries a shot, so the Blender bridge's ``.manifest.json``
-    # sidecar does: ``export_transfer`` writes the section every producer ships
-    # (the in-process send and the pull conversion's mayapy) and ``apply_transfer``
-    # rebuilds the store from it on every door in (the pull, the receiving
-    # templates, the reference bake). The codec is ``pythontk.ShotTransfer``; this
-    # class only says how Maya names a curve and finds a key.
+
+    @staticmethod
+    def transfer() -> "_MayaShotTransfer":
+        """How a Maya scene meets the hand-off codec (:class:`_MayaShotTransfer`)."""
+        return _MayaShotTransfer()
+
+
+class _MayaShotTransfer(object):
+    """Maya's :class:`pythontk.ShotTransferHost`: how the hand-off codec
+    (``pythontk.ShotTransfer``) names a Maya curve and finds a key.
+
+    Neither FBX nor USD carries a shot, so the Blender bridge's
+    ``.manifest.json`` sidecar does (``ptk.ShotStore.export_transfer`` /
+    ``apply_transfer``); these only say how Maya spells it.
+    """
 
     #: Hops followed from an animCurve toward the plug it drives (a
     #: unitConversion, an anim-layer blend node) before giving up.
     _TRANSFER_CURVE_HOPS = 3
+
+    @staticmethod
+    def spell(name: str) -> str:
+        """FBX's spelling of a Maya name: the leaf, its namespace kept."""
+        return ptk.ShotStore.leaf_name(name)
+
+    @classmethod
+    def curve_refs(cls):
+        """``curve_ref(curve) -> (driven node, attribute) | None``."""
+        return cls._curve_ref
 
     @classmethod
     def _curve_ref(cls, curve: str) -> Optional[tuple]:
@@ -941,7 +1024,7 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         return None
 
     @staticmethod
-    def _curve_key(node: str, label: str) -> Optional[str]:
+    def curve_key(node: str, label: str) -> Optional[str]:
         """The animCurve driving ``node.label``, through a unitConversion; else ``None``."""
         if cmds is None:
             return None
@@ -964,7 +1047,7 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         return None
 
     @staticmethod
-    def _key_exists(curve: str, time: float) -> bool:
+    def key_exists(curve: str, time: float) -> bool:
         """Whether *curve* holds a key at *time* (the ledger's own tolerance)."""
         if cmds is None or not cmds.objExists(curve):
             return False
@@ -972,7 +1055,7 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         return bool(cmds.keyframe(curve, q=True, time=(time - eps, time + eps)))
 
     @staticmethod
-    def _resolve_transfer_name(leaf: str) -> Optional[str]:
+    def resolve(leaf: str) -> Optional[str]:
         """The one scene node spelled *leaf*, long-named; ``None`` when absent or
         ambiguous (a consumer scoped to an import passes its own resolver)."""
         if cmds is None:
@@ -980,35 +1063,24 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         hits = cmds.ls(leaf, long=True) or []
         return hits[0] if len(hits) == 1 else None
 
-    @classmethod
-    def export_transfer(
-        cls, spell=None, objects: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]:
-        """The active store as a hand-off ``shots`` section (``None`` when empty).
-
-        Parameters:
-            spell: How the carrier spells a Maya name -- the short name with its
-                namespace for FBX (the default), the sanitized prim for USD
-                (``BlenderBridge._manifest_spelling``); it must be the spelling
-                the manifest's other sections use so one resolver serves all.
-            objects: The exported transforms; scopes memberships and ledger
-                claims to what actually ships (``None`` = the whole scene).
-        """
-        if cmds is None:
-            return None
+    @staticmethod
+    def channels(names):
+        """The render-effect channels *names* carry
+        (``RenderEffects.channel_records``)."""
         from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
 
-        return ptk.ShotTransfer.encode(
-            cls.active().to_dict(),
-            spell=spell or ptk.ShotStore.leaf_name,
-            curve_ref=cls._curve_ref,
-            objects=objects,
-            channels=RenderEffects.channel_records(objects),
-            audio=cls._audio_records(),
-        )
+        return RenderEffects.channel_records(names)
 
     @staticmethod
-    def _audio_records() -> List[Dict[str, Any]]:
+    def write_channels(node: str, records: Dict[str, Any]) -> int:
+        """Land received render-effect *records* on *node*
+        (``RenderEffects.apply_channel_records``)."""
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        return RenderEffects.apply_channel_records(node, records)
+
+    @staticmethod
+    def audio() -> List[Dict[str, Any]]:
         """The scene's audio clips as the transfer's ``audio`` payload (the
         sequencer's own segments: track, file, placed span)."""
         from mayatk.audio_utils.segments import AudioSegment
@@ -1024,8 +1096,8 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             for seg in AudioSegment.collect_all_segments(include_waveform=False)
         ]
 
-    @classmethod
-    def _write_audio(cls, clips: List[Dict[str, Any]]) -> int:
+    @staticmethod
+    def write_audio(clips: List[Dict[str, Any]]) -> int:
         """Land transfer ``audio`` clips as tracks (``AudioUtils.add_clip``),
         composited once at the end; a track already here is left alone, so a
         re-apply and the scene's own clips are never doubled."""
@@ -1055,189 +1127,7 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             AudioUtils.sync()
         return added
 
-    @classmethod
-    def apply_transfer(
-        cls,
-        section: Dict[str, Any],
-        *,
-        resolve=None,
-        frame_offset: float = 0.0,
-        replace: bool = False,
-        converted=None,
-        ctx: Optional["ptk.TransferContext"] = None,
-    ) -> Optional["ShotStore"]:
-        """Rebuild the scene's shots from a hand-off ``shots`` section.
 
-        Decodes against this scene (names through *resolve*, claims onto the
-        animCurves now driving the imported nodes, times onto the scene's
-        clock), folds the result into the scene's own store
-        (:meth:`pythontk.ShotTransfer.merge_record`: a shot-less scene adopts
-        it whole, one with shots gains the incoming shots after its own, and
-        a shot that arrives renamed is noted in *ctx*), persists the record
-        and reloads the active store from it -- the path a scene open takes,
-        so every panel rebinds as it does then.
-
-        Parameters:
-            section: The manifest's ``shots`` section.
-            resolve: Carrier spelling -> imported node; default: the one scene
-                node of that name.
-            frame_offset: The importer's frame shift (none for Maya's importers).
-            replace: Discard the scene's own shots instead of merging.
-            converted: ``converted(node) -> bool``: the importer put *node*
-                through the Y-up / Z-up crossing, so its claims' Y and Z
-                channels are exchanged (``ptk.ShotTransfer.swap_up_axis``);
-                the consumers pass "is a root". Default: none was.
-            ctx: The crossing's ``ptk.TransferContext``: gains a note per shot
-                that arrives renamed and the ``shot_id`` renumbering.
-
-        Returns:
-            The active store after the apply, or ``None`` outside Maya.
-        """
-        if cmds is None or not section:
-            return None
-        store = cls.active()
-        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
-
-        decoded = ptk.ShotTransfer.decode(
-            section,
-            resolve=resolve or cls._resolve_transfer_name,
-            curve_key=cls._curve_key,
-            key_exists=cls._key_exists,
-            scene_fps=store._scene_fps(),
-            frame_offset=frame_offset,
-            converted=converted,
-            write_channels=RenderEffects.apply_channel_records,
-            write_audio=cls._write_audio,
-        )
-        merged = (
-            decoded
-            if replace
-            else ptk.ShotTransfer.merge_record(store.to_dict(), decoded, ctx)
-        )
-        if cls._persistence is None:
-            cls.set_active(cls.from_dict(merged))
-        else:
-            cls._persistence.save(merged)
-            cls.invalidate()
-        return cls.active()
-
-    # ---- scene-record crossings (``DataNodes.OWNERS``) --------------------
-
-    @classmethod
-    def transfer_out(cls, ctx: "ptk.TransferContext") -> Optional[Dict[str, Any]]:
-        """The ``shot_store`` record's hand-off payload: :meth:`export_transfer`
-        in the carrier's spelling (``ctx.rename``), scoped to what ships."""
-        return cls.export_transfer(spell=ctx.rename, objects=ctx.objects)
-
-    @classmethod
-    def transfer_in(cls, payload: Dict[str, Any], ctx: "ptk.TransferContext") -> None:
-        """Land a received ``shots`` section: :meth:`apply_transfer`, names
-        resolved through ``ctx.rename``, with the importer's ``converted`` /
-        ``frame_offset`` adapters."""
-        cls.apply_transfer(
-            payload,
-            resolve=ctx.rename,
-            frame_offset=float(ctx.adapter("frame_offset", 0.0) or 0.0),
-            converted=ctx.adapter("converted"),
-            ctx=ctx,
-        )
-
-    @classmethod
-    def merge_carrier(cls, carriers, other, ctx) -> None:
-        """Another scene's shots merged into the record: reload the active
-        store from what the record holds now, as a scene open does."""
-        if ptk.SceneRecords.SHOT_STORE in other:
-            cls.invalidate()
-
-    @classmethod
-    def discard_carrier(cls, carriers, other, ctx) -> None:
-        """Another scene's shots were dropped with their carrier: the same
-        reload (:meth:`merge_carrier`) -- the active store may hold them, as
-        a carrier the import adopted was this scene's own until then."""
-        cls.merge_carrier(carriers, other, ctx)
-
-    @classmethod
-    def _register_export_preparer(cls) -> None:
-        """Opt the shot record into the any-export session hook unless the
-        user explicitly opted out: ``FbxUtils.PRODUCERS`` already names
-        :meth:`produce_export_records`, so enabling the record is all a File >
-        Export needs to carry fresh shots."""
-        if cls._auto_export_disabled:
-            return
-        try:
-            from mayatk.env_utils.fbx_utils import FbxUtils
-
-            FbxUtils.enable_export_producer(ptk.SceneRecords.SHOTS)
-        except Exception:  # outside Maya / hooks unavailable — never block a save
-            pass
-
-    @classmethod
-    def _unregister_export_preparer(cls) -> None:
-        """Opt the shot record out of the session hook."""
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
-        FbxUtils.disable_export_producer(ptk.SceneRecords.SHOTS)
-
-    # ---- cross-scene user preferences ------------------------------------
-
-    def _restore_user_prefs(self) -> None:
-        """Apply detection prefs, migrating legacy QSettings on first run.
-
-        Prefs moved from ``QSettings("uitk", "shots")`` to the engine's
-        cross-DCC JSON store (``user_config_root()/shots/prefs.json``) so Maya
-        and Blender share one detection-prefs source.  When the JSON file
-        already exists the engine restore runs as-is; otherwise any legacy
-        QSettings values (including the even-older ``use_selected_keys`` +
-        ``key_filter_mode`` pair) are read once, applied, and written through
-        to the JSON store so the migration never re-runs.
-        """
-        try:
-            prefs_exist = self._prefs_path().exists()
-        except Exception:
-            prefs_exist = True  # can't probe — fall through to the engine
-        if prefs_exist or QSettings is None:
-            super()._restore_user_prefs()
-            return
-        self._migrate_legacy_qsettings_prefs()
-
-    def _migrate_legacy_qsettings_prefs(self) -> None:
-        """One-time QSettings → JSON prefs migration (pre-engine stores)."""
-        try:
-            s = QSettings("uitk", "shots")
-            dm = s.value(f"{self._QSETTINGS_PREFIX}/detection_mode")
-            if dm is not None and str(dm) in self.DETECTION_MODES:
-                self.detection_mode = str(dm)
-            else:
-                val = s.value(f"{self._QSETTINGS_PREFIX}/use_selected_keys")
-                if val is not None and val in (True, "true", 1, "1"):
-                    kf = s.value(f"{self._QSETTINGS_PREFIX}/key_filter_mode")
-                    self.detection_mode = (
-                        str(kf) if kf in ("all", "skip_zero", "zero_as_end") else "all"
-                    )
-                # else leave at default "auto"
-            sol = s.value(f"{self._QSETTINGS_PREFIX}/select_on_load")
-            if sol is not None and sol in (True, "true", 1, "1"):
-                self.select_on_load = True
-            dt = s.value(f"{self._QSETTINGS_PREFIX}/detection_threshold")
-            if dt is not None:
-                try:
-                    self.detection_threshold = float(dt)
-                except (TypeError, ValueError):
-                    pass
-            fm = s.value(f"{self._QSETTINGS_PREFIX}/fit_mode")
-            if fm is not None and str(fm) in self.FIT_MODES:
-                self.fit_mode = str(fm)
-            isl = s.value(f"{self._QSETTINGS_PREFIX}/initial_shot_length")
-            if isl is not None:
-                try:
-                    self.initial_shot_length = float(isl)
-                except (TypeError, ValueError):
-                    pass
-            snap = s.value(f"{self._QSETTINGS_PREFIX}/snap_whole_frames")
-            if snap is not None:
-                self.snap_whole_frames = snap in (True, "true", 1, "1")
-        except Exception:
-            return
-        # Persist immediately so the JSON store exists and the legacy
-        # read never runs again.
-        self._save_user_prefs()
+# A registration that must run at import: ``ptk.ShotStore`` resolves the running
+# host on first ask, so a script reaching ``mtk.ShotStore`` binds Maya's half.
+ShotStore.register_host("maya", MayaShotsHost.resolve)

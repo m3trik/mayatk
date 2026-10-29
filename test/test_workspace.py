@@ -582,7 +582,7 @@ class TestWorkspaceManagerWithFakeFs(MayaTkTestCase):
 
 
 class TestWorkspaceMap(MayaTkTestCase):
-    """WorkspaceMap — extends WorkspaceManager with analysis + tree shaping."""
+    """WorkspaceMap — pythontk's ``WorkspaceMapBase`` bound to Maya (MayaWorkspaceMapHost)."""
 
     def setUp(self):
         super().setUp()

@@ -492,6 +492,8 @@ class SequencerHost:
         its own redraw hooks for the walk (``step_undo``'s panel holds
         ``_syncing``).
         """
+        from mayatk.anim_utils.shots._shots import MayaShotsHost
+
         if store is None or not store.has_boundary_snapshot(redo=redo):
             return False
         tag = store.peek_boundary_tag(redo=redo)
@@ -505,12 +507,12 @@ class SequencerHost:
         taken = 0
         try:
             while taken < limit:
-                top = store.undo_queue_top(redo=redo)
+                top = MayaShotsHost.undo_queue_top(redo=redo)
                 if top == marker or top not in cls._QUEUE_NOISE:
                     break
                 step()
                 taken += 1
-            if taken and store.undo_queue_top(redo=redo) != marker:
+            if taken and MayaShotsHost.undo_queue_top(redo=redo) != marker:
                 for _ in range(taken):
                     back()
                 taken = 0
@@ -550,13 +552,15 @@ class SequencerHost:
         against the redo queue always mismatches, which silently dropped the
         bounds restore AND redid an unrelated operation.
         """
+        from mayatk.anim_utils.shots._shots import MayaShotsHost
+
         if store is None or not store.has_boundary_snapshot(redo=redo):
             return False, True
         tag = store.peek_boundary_tag(redo=redo)
         if not isinstance(tag, tuple):
             return True, True  # untagged (legacy push) — pre-pairing behaviour
         paired, marker = tag
-        if marker != store.undo_queue_top(redo=redo and bool(paired)):
+        if marker != MayaShotsHost.undo_queue_top(redo=redo and bool(paired)):
             return False, True
         return True, bool(paired)
 

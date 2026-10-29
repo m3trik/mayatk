@@ -20,7 +20,12 @@ except ImportError:
 from pythontk import ShotSequencer as _ShotSequencerCore
 
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.anim_utils.shots._shots import Detection, ShotBlock, ShotStore
+from mayatk.anim_utils.shots._shots import (
+    Detection,
+    MayaShotsHost,
+    ShotBlock,
+    ShotStore,
+)
 from mayatk.anim_utils.shots._shot_plan import _INF as _PLAN_INF
 from mayatk.anim_utils._tangents import _NEIGHBOUR_DERIVED_TANGENTS
 
@@ -359,10 +364,10 @@ class ShotSequencer(_ShotSequencerCore):
             return None
         # A doc name the scene holds only inside a namespace (a referenced
         # asset, ``AC:door_geo`` for ``door_geo``): the store's own lookup
-        # (``ShotStore.member_nodes``), so a build and a reconcile agree.
-        # Unkeyed it had no curve to follow and was never re-pointed
-        # (BACKLOG 2026-10-10).
-        matches = ShotStore._member_nodes(name)
+        # (``ShotStore.member_nodes``, answered by its host), so a build and a
+        # reconcile agree.  Unkeyed it had no curve to follow and was never
+        # re-pointed (BACKLOG 2026-10-10).
+        matches = MayaShotsHost.member_nodes(name)
         if len(matches) == 1:
             return matches[0]
         if matches:

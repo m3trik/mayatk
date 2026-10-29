@@ -380,15 +380,15 @@ class TestCrossScenePrefs(unittest.TestCase):
         ShotStore._active = None
         ShotStore._persistence = None
         self._tmpdir = tempfile.TemporaryDirectory()
+        # ``ShotStore`` is pythontk's one store: put back the suite-level
+        # override (or the engine default) it held, never delete it.
+        self._prefs_dir_before = ShotStore._prefs_dir_override
         ShotStore._prefs_dir_override = self._tmpdir.name
 
     def tearDown(self):
         ShotStore._active = None
         ShotStore._persistence = None
-        # Remove the subclass shadow so any suite-level override (or the
-        # engine default) is restored.
-        if "_prefs_dir_override" in ShotStore.__dict__:
-            del ShotStore._prefs_dir_override
+        ShotStore._prefs_dir_override = self._prefs_dir_before
         self._tmpdir.cleanup()
 
     def _prefs_file(self):

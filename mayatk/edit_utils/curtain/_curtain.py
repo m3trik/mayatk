@@ -45,7 +45,6 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.edit_utils._edit_utils import EditUtils
-from mayatk.edit_utils.curtain._curtain_drape import CurtainDrape
 from mayatk.edit_utils.naming._naming import Naming
 
 
@@ -53,10 +52,9 @@ from mayatk.edit_utils.naming._naming import Naming
 # Math + drape engine. The reusable primitives live in ``ptk.MathUtils``, the
 # generic polyline geometry in ``ptk.Polyline`` (``ptk.geo_utils.polyline``), and
 # the rail→grid machinery in ``ptk.RailSurface`` (``ptk.geo_utils.rail_surface``).
-# The curtain-specific drape is the vendored ``_curtain_drape.CurtainDrape``
-# (code-identical with blendertk's copy — drift fails extapps'
-# test_vendor_sync.py). This module keeps only the Maya halves: resolving a
-# rail from a selection, building the mesh, and the wire rig.
+# The curtain-specific drape is ``ptk.CurtainDrape`` (``ptk.geo_utils.curtain_drape``,
+# the one blendertk builds from too). This module keeps only the Maya halves:
+# resolving a rail from a selection, building the mesh, and the wire rig.
 # ----------------------------------------------------------------------------
 
 Vec = Tuple[float, float, float]
@@ -152,15 +150,15 @@ class Rail(ptk.Polyline):
 
 
 # ----------------------------------------------------------------------------
-# Curtain generator — the vendored CurtainDrape engine (_curtain_drape) + the Maya mesh build
+# Curtain generator — the ptk.CurtainDrape engine + the Maya mesh build
 # ----------------------------------------------------------------------------
 
 
-class CurtainMesh(CurtainDrape):
+class CurtainMesh(ptk.CurtainDrape):
     """Generate a pleated, gravity-draped curtain mesh from a rail polyline.
 
-    The drape math lives in :class:`CurtainDrape` (the vendored
-    ``_curtain_drape`` twin — code-identical with blendertk's copy);
+    The drape math lives in :class:`ptk.CurtainDrape` (the one blendertk's
+    ``CurtainMesh`` builds from too);
     this subclass adds the Maya *mesh build* (``polyPlane`` + ``MFnMesh`` +
     the shell/decimate/normal post-ops). It consumes plain rail points (see
     :class:`Rail`) and emits a mesh — it does not resolve the rail from a
@@ -233,71 +231,9 @@ class CurtainMesh(CurtainDrape):
         soften: Soften mesh normals on build.
         closed: Treat the rail as a closed loop.
         name: Base name for the created transform.
-    """
 
-    def __init__(
-        self,
-        rail: Sequence[Vec],
-        height: float = 3.0,
-        hanging_points: int = 8,
-        hang_jitter: float = 0.0,
-        hang_seed: int = 0,
-        gravity: float = 0.3,
-        tension: float = 1.5,
-        round_points: float = 0.0,
-        round_gather: float = 0.0,
-        fullness: float = 2.5,
-        taper: float = 0.5,
-        mid_folds: float = 0.0,
-        mid_fold_seed: int = 0,
-        creases: float = 0.0,
-        crease_seed: int = 0,
-        sway: float = 0.0,
-        sway_seed: int = 0,
-        end_bend_left: float = 0.0,
-        end_bend_right: float = 0.0,
-        end_bend_falloff: float = 0.25,
-        irregularity: float = 0.15,
-        density: float = 8.0,
-        reduce: float = 0.0,
-        thickness: float = 0.0,
-        invert: bool = False,
-        soften: bool = True,
-        closed: bool = False,
-        name: str = "curtain",
-    ):
-        if cmds is None:
-            raise RuntimeError("CurtainMesh requires maya.cmds.")
-        super().__init__(
-            rail,
-            height=height,
-            hanging_points=hanging_points,
-            hang_jitter=hang_jitter,
-            hang_seed=hang_seed,
-            gravity=gravity,
-            tension=tension,
-            round_points=round_points,
-            round_gather=round_gather,
-            fullness=fullness,
-            taper=taper,
-            mid_folds=mid_folds,
-            mid_fold_seed=mid_fold_seed,
-            creases=creases,
-            crease_seed=crease_seed,
-            sway=sway,
-            sway_seed=sway_seed,
-            end_bend_left=end_bend_left,
-            end_bend_right=end_bend_right,
-            end_bend_falloff=end_bend_falloff,
-            irregularity=irregularity,
-            density=density,
-            reduce=reduce,
-            thickness=thickness,
-            invert=invert,
-            soften=soften,
-            closed=closed,
-            name=name,
-        )
+    The constructor (and its defaults) is :class:`ptk.CurtainDrape`'s.
+    """
 
     # Alias so callers can `CurtainMesh.create(rail, **opts)` in one line.
     @classmethod
@@ -306,6 +242,8 @@ class CurtainMesh(CurtainDrape):
 
     def build(self) -> str:
         """Create the curtain mesh and return its transform name."""
+        if cmds is None:
+            raise RuntimeError("CurtainMesh requires maya.cmds.")
         # Total length / resolution / rail frames / seeded feature sets — the
         # whole pure precompute lives in CurtainDrape.prepare().
         u_segs, v_segs, frames = self.prepare()

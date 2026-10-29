@@ -6,17 +6,21 @@ The placement itself -- open air near the bake's middle, the room around it
 face by face, over what matters, at eye level, clear of every surface -- is
 host-free and lives once in pythontk (:class:`pythontk.ProbePlacement`, whose
 module docstring holds the rules and the scenes that forced each), shared with
-blendertk's twin. This module hands it Maya's scene:
+blendertk's twin. This module hands it Maya's scene, as its host adapter
+(:class:`MayaProbeHost`, a :class:`pythontk.ProbeHost` and the
+:class:`pythontk.ProbeMesh` its rays intersect through):
 
-* **The rays** (:class:`_Rays`): ``MFnMesh.closestIntersection`` with each
-  mesh's own acceleration grid, against the shapes under each node.
+* **The rays**: ``MFnMesh.closestIntersection`` with each mesh's own
+  acceleration grid, against the shapes under each node.
 * **The bounds**: ``exactWorldBoundingBox``.
 * **The lights**: :meth:`LightUtils.contributing_lights` -- a sky
-  (:attr:`ProbePlacement.SKY_LIGHTS`) as the sky, a placeless one
-  (:attr:`ProbePlacement.PLACELESS_LIGHTS`) as nothing, an ``aiMeshLight`` by
+  (:attr:`MayaProbeHost.SKY_LIGHTS`) as the sky, a placeless one
+  (:attr:`MayaProbeHost.PLACELESS_LIGHTS`) as nothing, an ``aiMeshLight`` by
   its own mesh, the rest by their world position.
 * **The units**: everything inside is in Maya's internal unit (centimetres)
   whatever the scene's; positions cross the boundary in scene units. Y is up.
+
+:class:`ProbePlacement` is the shared class bound to it: configuration only.
 """
 
 from typing import List, Optional, Sequence, Tuple
@@ -39,17 +43,34 @@ Box = List[List[float]]
 ProbeSite = ptk.ProbeSite
 
 
-class _Rays(ptk.ProbeRays):
-    """:class:`pythontk.ProbeRays` over Maya meshes: the shapes under each node,
-    intersected through ``MFnMesh.closestIntersection`` with their own
-    acceleration grid."""
+class MayaProbeHost:
+    """What the probe placement asks of the Maya scene
+    (:class:`pythontk.ProbeHost`), and how its rays intersect Maya meshes
+    (:class:`pythontk.ProbeMesh`): the shapes under each node, through
+    ``MFnMesh.closestIntersection`` with their own acceleration grid."""
 
-    def __init__(self, meshes: Sequence[str]):
-        super().__init__()
+    #: Maya's internal linear unit, centimetres, in metres -- whatever the
+    #: scene's UI unit.
+    internal_m: float = Units.INTERNAL_M
+    #: The up axis, as an index: Y. A probe's deliverables read it in Y-up
+    #: axes, so :meth:`LightmapBaker.bake_probe` captures none in a Z-up scene.
+    up: int = 1
+    #: Light types that stand for the sky rather than a fixture with a place.
+    SKY_LIGHTS: Tuple[str, ...] = ("directionalLight", "aiSkyDomeLight")
+    #: Light types that light nothing a ray can reach.
+    PLACELESS_LIGHTS: Tuple[str, ...] = ("ambientLight", "aiLightPortal")
+
+    @staticmethod
+    def nodes(objects: Sequence[str]) -> List[str]:
+        """The transforms as given: the placement names nodes by DAG path."""
+        return list(objects or ())
+
+    def rays(self, nodes: Sequence[str]) -> ptk.ProbeRays:
+        """A :class:`pythontk.ProbeRays` over the mesh shapes under *nodes*."""
         import maya.api.OpenMaya as om
 
-        self._om = om
-        for mesh in meshes:
+        rays = ptk.ProbeRays(self)
+        for mesh in nodes:
             for shape in (
                 cmds.listRelatives(
                     mesh, shapes=True, noIntermediate=True, fullPath=True
@@ -64,15 +85,18 @@ class _Rays(ptk.ProbeRays):
                 fn = om.MFnMesh(path)
                 box = om.MFnDagNode(path).boundingBox
                 box.transformUsing(path.inclusiveMatrix())
-                self.add(
+                rays.add(
                     mesh,
                     (box.min.x, box.min.y, box.min.z),
                     (box.max.x, box.max.y, box.max.z),
                     (fn, fn.autoUniformGridParams()),
                 )
+        return rays
 
-    def _intersect(self, payload, origin, direction, far):
-        om = self._om
+    @staticmethod
+    def intersect(payload, origin, direction, far):
+        import maya.api.OpenMaya as om
+
         fn, accel = payload
         hit = fn.closestIntersection(
             om.MFloatPoint(*origin),
@@ -87,39 +111,14 @@ class _Rays(ptk.ProbeRays):
         point = hit[0]
         return hit[1], (point.x, point.y, point.z), hit[2]
 
-    def _normal(self, payload, face) -> Vec:
-        normal = payload[0].getPolygonNormal(face, self._om.MSpace.kWorld)
+    @staticmethod
+    def normal(payload, face) -> Vec:
+        import maya.api.OpenMaya as om
+
+        normal = payload[0].getPolygonNormal(face, om.MSpace.kWorld)
         return (normal.x, normal.y, normal.z)
 
-
-class ProbePlacement(ptk.ProbePlacement):
-    """Place a lightmap bake's reflection probe in the Maya scene
-    (:class:`pythontk.ProbePlacement`, with Maya's rays, bounds, lights and
-    units -- see the module docstring).
-
-    Parameters:
-        baked: The visible baked mesh transforms -- the room.
-        unbaked: The visible mesh transforms no bake marks. Those whose
-            footprint covers the bake's (a sky dome, a ground or terrain
-            nobody baked) are the room's surroundings: seen, and walls. The
-            rest move: the capture sees through them.
-    """
-
-    #: Maya's internal linear unit, centimetres, in metres -- whatever the
-    #: scene's UI unit.
-    INTERNAL_M: float = Units.INTERNAL_M
-    #: The up axis, as an index: Y. A probe's deliverables read it in Y-up
-    #: axes, so :meth:`LightmapBaker.bake_probe` captures none in a Z-up scene.
-    UP: int = 1
-    #: Light types that stand for the sky rather than a fixture with a place.
-    SKY_LIGHTS: Tuple[str, ...] = ("directionalLight", "aiSkyDomeLight")
-    #: Light types that light nothing a ray can reach.
-    PLACELESS_LIGHTS: Tuple[str, ...] = ("ambientLight", "aiLightPortal")
-
-    def _make_rays(self, nodes: Sequence[str]) -> _Rays:
-        return _Rays(nodes)
-
-    def _read_lights(self) -> Tuple[List[Tuple[Vec, Optional[str]]], bool]:
+    def lights(self) -> Tuple[List[Tuple[Vec, Optional[str]]], bool]:
         """The placed lights, ``[(world point, own mesh or None)]`` -- a mesh
         light is in view when its own mesh is -- and whether a sky lights the
         scene."""
@@ -142,10 +141,10 @@ class ProbePlacement(ptk.ProbePlacement):
                 own = (
                     cmds.listRelatives(meshes[0], parent=True, fullPath=True) or [None]
                 )[0]
-                centre = self._centre(self._extent(own)) if own else None
-                if centre is None:
+                if not own:
                     continue
-                points.append((tuple(centre), own))
+                lo, hi = self.bounds([own])
+                points.append((tuple((a + b) / 2.0 for a, b in zip(lo, hi)), own))
                 continue
             sel = om.MSelectionList()
             sel.add(shape)
@@ -155,7 +154,7 @@ class ProbePlacement(ptk.ProbePlacement):
         return points, sky
 
     @staticmethod
-    def _bounds(nodes: Sequence[str]) -> Box:
+    def bounds(nodes: Sequence[str]) -> Box:
         """``[[min], [max]]`` of *nodes* in world space, internal units."""
         import maya.api.OpenMaya as om
 
@@ -164,13 +163,29 @@ class ProbePlacement(ptk.ProbePlacement):
         return [internal[:3], internal[3:]]
 
     @staticmethod
-    def _ui(value: float) -> float:
+    def to_scene(value: float) -> float:
         import maya.api.OpenMaya as om
 
         return om.MDistance.internalToUI(value)
 
     @staticmethod
-    def _to_internal(point: Sequence[float]) -> List[float]:
+    def to_internal(point: Sequence[float]) -> List[float]:
         import maya.api.OpenMaya as om
 
         return [om.MDistance.uiToInternal(float(c)) for c in point]
+
+
+class ProbePlacement(ptk.ProbePlacement):
+    """Place a lightmap bake's reflection probe in the Maya scene:
+    :class:`pythontk.ProbePlacement` bound to :class:`MayaProbeHost` (Maya's
+    rays, bounds, lights and units -- see the module docstring).
+
+    Parameters:
+        baked: The visible baked mesh transforms -- the room.
+        unbaked: The visible mesh transforms no bake marks. Those whose
+            footprint covers the bake's (a sky dome, a ground or terrain
+            nobody baked) are the room's surroundings: seen, and walls. The
+            rest move: the capture sees through them.
+    """
+
+    HOST_CLASS = MayaProbeHost

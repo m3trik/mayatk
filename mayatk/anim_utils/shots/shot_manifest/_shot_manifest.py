@@ -476,9 +476,8 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
     ) -> Tuple["ShotManifest", List[BuilderStep]]:
         """Convenience: parse a CSV and return a ready-to-build engine.
 
-        Overrides the engine version so the default store is the **Maya**
-        :meth:`ShotStore.active` (auto-installing scene persistence), not the
-        pure engine base's.
+        The default store is the active one (:meth:`ShotStore.active`, which
+        installs Maya's scene persistence through the store's host).
 
         Parameters:
             filepath: Path to the CSV file.

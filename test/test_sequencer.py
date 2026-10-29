@@ -1089,7 +1089,7 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
         with (
             mock.patch.object(persistence.store_cls, "_active", store),
             mock.patch.object(
-                _shots._ShotStoreInternal, "_get_scene_fps", return_value=30.0
+                _shots._MayaShotsHostInternal, "_get_scene_fps", return_value=30.0
             ),
             mock.patch.object(sjm, "MFileIO") as file_io,
         ):
@@ -8816,7 +8816,7 @@ class TestUndoPairing(unittest.TestCase):
             store.update_shot(0, end=40)
         paired, marker = store.peek_boundary_tag()
         self.assertTrue(paired, "its own step reached Maya's queue")
-        self.assertEqual(marker, store.undo_queue_top())
+        self.assertEqual(marker, store.host.undo_queue_top())
 
     def test_an_edit_that_changes_nothing_lands_no_step(self):
         """The no-op step is for an edit that changed the shot records; one
@@ -8829,7 +8829,7 @@ class TestUndoPairing(unittest.TestCase):
             cmds.setAttr(loc + ".translateY", 5)
         with store.scene_edit("noop"):
             pass
-        self.assertEqual(store.undo_queue_top(), "before_edit")
+        self.assertEqual(store.host.undo_queue_top(), "before_edit")
         self.assertFalse(store.has_boundary_snapshot())
 
     def test_a_no_op_edit_keeps_the_point_of_the_edit_before_it(self):
@@ -8859,7 +8859,7 @@ class TestUndoPairing(unittest.TestCase):
         _unpaired_bounds_edit(store)
         paired, marker = store.peek_boundary_tag()
         self.assertFalse(paired, "nothing reached Maya's queue")
-        self.assertEqual(marker, store.undo_queue_top())
+        self.assertEqual(marker, store.host.undo_queue_top())
 
     def test_a_scene_edit_is_tagged_paired_with_its_chunk(self):
         store = self._store()
@@ -9134,12 +9134,14 @@ class TestTheStoreFollowsMayasUndo(unittest.TestCase):
         self.assertEqual(self.store.shot_by_id(0).end, 40.0, "one point, not two")
 
     def test_clear_active_unsubscribes_and_active_subscribes_once(self):
-        mgr, tokens = ShotStore.__dict__["_native_undo_subs"]
+        # The subscriptions are the Maya host's, one set per store class.
+        subs = type(ShotStore.running_host())._native_undo_subs
+        mgr, tokens = subs[ShotStore._on_native_step]
         self.assertEqual(len(tokens), 2, "Undo + Redo")
         ShotStore.active()
-        self.assertIs(ShotStore.__dict__["_native_undo_subs"][1], tokens)
+        self.assertIs(subs[ShotStore._on_native_step][1], tokens)
         ShotStore.clear_active()
-        self.assertIsNone(ShotStore.__dict__.get("_native_undo_subs"))
+        self.assertIsNone(subs.get(ShotStore._on_native_step))
         self.assertFalse(set(tokens) & set(mgr._om_subs))
 
 
@@ -11651,7 +11653,7 @@ class TestViewMirrorsStayOffTheUndoQueue(unittest.TestCase):
         tag = self.store.peek_boundary_tag()
         self._follow(shot)
         self.assertIsInstance(tag, tuple)
-        self.assertEqual(tag[1], self.store.undo_queue_top())
+        self.assertEqual(tag[1], self.store.host.undo_queue_top())
 
 
 class TestSelectionMirrorsStayOffTheUndoQueue(unittest.TestCase):
@@ -11784,9 +11786,9 @@ class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
         loc = self._edit(store)
         marker = store.peek_boundary_tag()[1]
         self._noise(loc)
-        self.assertNotEqual(store.undo_queue_top(), marker)
+        self.assertNotEqual(store.host.undo_queue_top(), marker)
         self.assertTrue(SequencerHost._step_past_queue_noise(store))
-        self.assertEqual(store.undo_queue_top(), marker)
+        self.assertEqual(store.host.undo_queue_top(), marker)
         self.assertEqual(SequencerHost._undo_plan(store), (True, True))
 
     def test_it_steps_past_several(self):
@@ -11796,16 +11798,16 @@ class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
         for _ in range(3):
             self._noise(loc)
         self.assertTrue(SequencerHost._step_past_queue_noise(store))
-        self.assertEqual(store.undo_queue_top(), marker)
+        self.assertEqual(store.host.undo_queue_top(), marker)
 
     def test_a_real_edit_on_top_is_left_alone(self):
         store = self._store()
         loc = self._edit(store)
         with CoreUtils.undo_chunk("unrelated_edit"):
             cmds.setAttr(loc + ".translateY", 5)
-        top = store.undo_queue_top()
+        top = store.host.undo_queue_top()
         self.assertFalse(SequencerHost._step_past_queue_noise(store))
-        self.assertEqual(store.undo_queue_top(), top)
+        self.assertEqual(store.host.undo_queue_top(), top)
         self.assertEqual(SequencerHost._undo_plan(store), (False, True))
 
     def test_noise_above_a_real_edit_is_put_back(self):
@@ -11817,7 +11819,7 @@ class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
         self._noise(loc)
         before = cmds.getAttr(loc + ".translateY")
         self.assertFalse(SequencerHost._step_past_queue_noise(store))
-        self.assertEqual(store.undo_queue_top(), "selectionMaskResetAll")
+        self.assertEqual(store.host.undo_queue_top(), "selectionMaskResetAll")
         self.assertEqual(cmds.getAttr(loc + ".translateY"), before)
 
     def test_our_own_chunk_on_top_moves_nothing(self):
@@ -11834,7 +11836,7 @@ class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
         _unpaired_bounds_edit(store)
         self._noise(loc)
         self.assertFalse(SequencerHost._step_past_queue_noise(store))
-        self.assertEqual(store.undo_queue_top(), "selectionMaskResetAll")
+        self.assertEqual(store.host.undo_queue_top(), "selectionMaskResetAll")
 
     def test_one_undo_reverses_the_edit_under_the_noise(self):
         """The whole point, end to end: one panel undo, edit reversed."""

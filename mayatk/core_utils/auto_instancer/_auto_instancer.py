@@ -106,6 +106,13 @@ class _AutoInstancerInternal(object):
         return None
 
     @staticmethod
+    def _triangle_count(mesh: str) -> int:
+        """*mesh*'s triangle count (``polyEvaluate``): the read the group pass
+        totals, and the ``count_triangles`` adapter the strategy is injected
+        with. Raises for a node with no mesh; the callers count that as 0."""
+        return int(cmds.polyEvaluate(mesh, triangle=True))
+
+    @staticmethod
     def _is_instanced(transform_path: str) -> bool:
         """True if the transform's shape has more than one parent transform."""
         shape = NodeUtils.get_shape(transform_path)
@@ -193,7 +200,9 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
             will_be_lightmapped=will_be_lightmapped,
             can_gpu_instance=can_gpu_instance,
         )
-        self.strategy_analyzer = InstancingStrategy(self.strategy_config)
+        self.strategy_analyzer = InstancingStrategy(
+            self.strategy_config, count_triangles=self._triangle_count
+        )
 
         # Initialize components
         self.matcher = GeometryMatcher(
@@ -917,7 +926,7 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
         for m in meshes:
             if not NodeUtils.is_intermediate(m):
                 try:
-                    tri_count += int(cmds.polyEvaluate(m, triangle=True))
+                    tri_count += self._triangle_count(m)
                 except Exception:
                     pass
         return (

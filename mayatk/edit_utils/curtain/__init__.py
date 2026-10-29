@@ -3,9 +3,9 @@
 """Curtain tool — procedural draped cloth.
 
 ``_curtain.py`` is the engine (:class:`Rail`, :class:`CurtainMesh`,
-:class:`CurtainRig`) over the vendored drape math in ``_curtain_drape.py``
-(code-identical with blendertk's copy), and :class:`Curtain`, the tool's API
-that tentacle's Curtain panel calls; ``presets/`` holds the shipped presets.
+:class:`CurtainRig`) over the drape math in ``ptk.CurtainDrape`` (the one
+blendertk builds from too), and :class:`Curtain`, the tool's API that
+tentacle's Curtain panel calls; ``presets/`` holds the shipped presets.
 """
 
 from pythontk.core_utils.module_resolver import lazy_exports

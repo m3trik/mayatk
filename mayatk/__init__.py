@@ -50,7 +50,9 @@ DEFAULT_INCLUDE = {
     "anim_utils.smart_bake.bake_session": "RestoreResult",
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots.shot_sequencer.sequencer_host": "SequencerHost",
-    "anim_utils.shots._shots": "ShotStore",
+    # The one store (``ptk.ShotStore``, re-exported) and the Maya half it is
+    # injected with.
+    "anim_utils.shots._shots": ["ShotStore", "MayaShotsHost"],
     "anim_utils.shots._detection": "Detection",
     "anim_utils.shots.shot_manifest.manifest_host": "ManifestHost",
     # Key stash — key clips parked out of the working animation (Maya adapter
@@ -171,7 +173,7 @@ DEFAULT_INCLUDE = {
     # btk.UsdUtils). Zero-dep USDZ packaging composes pythontk's UsdzPackager.
     "env_utils.usd": "UsdUtils",
     # Blender bridge engine — one-way send of the selection to a fresh Blender (its panel
-    # is tentacle's Maya-only Blender Bridge tool).
+    # is tentacle's DCC Bridge, the Blender Bridge in Maya).
     # Counterpart of blendertk's ``MayaBridge``.
     "env_utils.blender_bridge._blender_bridge": "BlenderBridge",
     # Pull direction — import a .blend into the CURRENT Maya scene via a headless
@@ -267,6 +269,8 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
+    # The curtain drape, written once for both hosts (CurtainMesh subclasses it).
+    "CurtainDrape": ("pythontk.CurtainDrape", "0.30.0"),
     "DuplicateRadialSlots": (
         "tentacle.slots.tools.duplicate_radial.DuplicateRadialSlots",
         "0.30.0",
@@ -602,14 +606,30 @@ MOVED_NAMES = {
         "0.30.0",
     ),
     "WorkspaceMapSlots": (
-        "tentacle.slots.tools.workspace_map.WorkspaceMapSlots",
+        "tentacle.slots.tools.workspaces.WorkspacesSlots",
         "0.30.0",
     ),
     # The Workspace Map's tree controller folded into the shared panel.
     "WorkspaceMapController": (
-        "tentacle.slots.tools.workspace_map.WorkspaceMapSlots",
+        "tentacle.slots.tools.workspaces.WorkspacesSlots",
         "0.30.0",
     ),
+    # WorkspaceMap became pythontk's WorkspaceMapBase bound to Maya: the
+    # Reference Manager's file cache it inherited stays WorkspaceManager's.
+    "WorkspaceMap.workspace_files": ("mayatk.WorkspaceManager.workspace_files", "0.30.0"),
+    "WorkspaceMap.invalidate_workspace_files": (
+        "mayatk.WorkspaceManager.invalidate_workspace_files",
+        "0.30.0",
+    ),
+    "WorkspaceMap.ignore_empty_workspaces": (
+        "mayatk.WorkspaceManager.ignore_empty_workspaces",
+        "0.30.0",
+    ),
+    "WorkspaceMap.resolve_file_path": (
+        "mayatk.WorkspaceManager.resolve_file_path",
+        "0.30.0",
+    ),
+    "WorkspaceMap.SCENE_FILE_TYPES": ("mayatk.WorkspaceManager.SCENE_FILE_TYPES", "0.30.0"),
     "MarmosetBridgeSlots": (
         "tentacle.slots.tools.marmoset_bridge.MarmosetBridgeSlots",
         "0.30.0",
@@ -623,7 +643,7 @@ MOVED_NAMES = {
         "0.30.0",
     ),
     "BlenderBridgeSlots": (
-        "tentacle.slots.tools.blender_bridge.BlenderBridgeSlots",
+        "tentacle.slots.tools.dcc_bridge.DccBridgeSlots",
         "0.30.0",
     ),
     "curves_for_attr": ("mayatk.SequencerHost.curves_for_attr", "0.30.0"),
@@ -700,6 +720,9 @@ MOVED_NAMES = {
         "tentacle.slots.tools._app_bridge.host_bridge.HostBridge",
         "0.30.0",
     ),
+    # ``ShotStore`` is pythontk's one store; its Maya-only member went to the
+    # host adapter the store is injected with.
+    "ShotStore.undo_queue_top": ("mayatk.MayaShotsHost.undo_queue_top", "0.30.0"),
 }
 
 bootstrap_package(

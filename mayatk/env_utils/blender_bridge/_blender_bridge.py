@@ -35,8 +35,8 @@ no platform: FBX -> Unity and GLB -> web (``ptk.MeshConvert.apply_glb_lightmaps`
 committed state on their own, with no knowledge of the bake; the Maya viewport deliberately shows
 nothing (the commit builds no file node). Instances are first-class -- each copy is baked
 separately and its atlas rect rides per TRANSFORM as the engine's ``lightmapScaleOffset`` binding,
-so the scene's instancing survives untouched. Its panel is tentacle's Blender Bridge (a Maya
-tool, ``slots/tools/blender_bridge.py``), which reads :meth:`BlenderBridge.params_registry` and
+so the scene's instancing survives untouched. Its panel is tentacle's DCC Bridge (the Blender
+Bridge in Maya, ``slots/tools/dcc_bridge.py``), which reads :meth:`BlenderBridge.params_registry` and
 :attr:`BlenderBridge.TEMPLATE_DIR` off this engine. ``import maya.cmds`` is deferred so resolving
 the package surface never needs a running Maya.
 """

@@ -39,8 +39,6 @@ exporting asset B never reports asset A as missing, and recording B never
 forgets A.
 """
 
-from typing import Set
-
 import pythontk as ptk
 
 from mayatk.node_utils.data_nodes import DataNodes
@@ -53,19 +51,10 @@ class HierarchyBaseline(ptk.HierarchyBaselineStore):
     The storage (``read`` / ``inherited_from`` / ``is_unreadable`` /
     ``compare`` / ``write`` / ``adopt_sidecar``) is
     :class:`pythontk.HierarchyBaselineStore`'s, shared with blendertk; this
-    class supplies Maya's scene store and sidecar, and closes a recorded set
-    under ancestors on the way out (:meth:`_close`).
+    class is configuration: Maya's scene store and sidecar.  A recorded set is
+    closed under ancestors on the way out because the sidecar's host says the
+    export ships every node's parent chain (``MayaSidecarHost``).
     """
 
     STORE = DataNodes
     SIDECAR = SceneDataSidecar
-
-    @classmethod
-    def _close(cls, paths: Set[str]) -> Set[str]:
-        """*paths* closed under ancestors, matching the set the check builds
-        from the scene (``SceneDataSidecar.with_ancestors``): Maya's
-        ``exportSelected`` ships a node's parent chain, so a leaves-only record
-        -- every v1 sidecar, and anything adopted from one -- describes the same
-        hierarchy as a group-selected one and must not read as a different one.
-        """
-        return SceneDataSidecar.with_ancestors(paths)
