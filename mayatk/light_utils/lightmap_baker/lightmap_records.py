@@ -2040,6 +2040,7 @@ class LightmapRecords(ptk.LoggingMixin):
             "path": dep["path"],
             "found_by": dep["found_by"],
             "note": dep["note"],
+            "candidates": list(dep.get("candidates") or []),
         }
 
     @classmethod
@@ -2055,17 +2056,19 @@ class LightmapRecords(ptk.LoggingMixin):
 
             {"map": basename, "dir": recorded folder, "objects": [transforms],
              "path": absolute path or None, "found_by": "hint" | "search" | None,
-             "note": "" | why an unresolved map stayed unresolved}
+             "note": "" | why an unresolved map stayed unresolved,
+             "candidates": [] | the different same-named files it could mean}
 
-        Resolution order is the GLB applier's (``ptk.MeshConvert.apply_glb_lightmaps``)
-        so the two can never disagree about a map: the map's recorded folder
-        (:meth:`_folder_hint`), then *search_dirs* (default :meth:`EnvUtils.texture_search_dirs`
-        -- the workspace's texture folder and the scene's own folder), each a
-        plain join. With *walk* a map still missing is looked for under the
-        whole sourceimages tree; a UNIQUE hit resolves it (``found_by`` =
-        ``"search"``), several same-named files leave it unresolved with the
-        count in ``note`` rather than guessed at -- the exporter's own rule for
-        rebinding a texture by name (:meth:`ptk.FileDependencies.resolve`).
+        The map's recorded folder (:meth:`_folder_hint`) first. A map it does
+        not hold is searched: every same-named file in *search_dirs* (default
+        :meth:`EnvUtils.texture_search_dirs` -- the workspace's texture folder
+        and the scene's own folder) and, with *walk*, under the whole
+        sourceimages tree is a candidate, and ONE file (or identical copies)
+        resolves it (``found_by`` = ``"search"``); several different files
+        leave it unresolved with its ``candidates`` -- never the first search
+        folder's, which is how a stale same-named map got healed in. The rule
+        every texture tool rebinds a file by name with
+        (:meth:`ptk.FileDependencies.resolve`).
 
         Parameters:
             objects: Transforms (roots) to scope to, descendants included;
@@ -2106,8 +2109,9 @@ class LightmapRecords(ptk.LoggingMixin):
         found by search has a hint that resolves nowhere, so the scene's own
         answer to where its maps live (:meth:`search_dirs`, which every GLB
         build is handed) rests on a guess. The map's recorded folder becomes
-        the one it was found in, in the portable spelling. Files are never
-        touched.
+        the one it was found in, in the portable spelling -- only when the
+        search found ONE file of its name: an ambiguous map stays as it is,
+        named in ``missing`` with its candidates. Files are never touched.
 
         Returns:
             ``{"healed": [(map, old_dir, new_dir)], "missing": [records]}``.
@@ -2162,24 +2166,30 @@ class LightmapRecords(ptk.LoggingMixin):
     ) -> Dict[str, Any]:
         """Gather the scene's lightmaps into *dest_dir* and repoint the markers.
 
-        The lightmap half of the Texture Path Editor's *Find & Copy*: a map
-        that resolves is its own source; one that does not is searched for
-        under *source_dir* (recursively; the newest same-named file wins --
-        the panel's rule for textures). A source already sitting in
-        *dest_dir* needs no file operation and still gets its hint rewritten.
-        *mode* is ``"copy"`` or ``"move"``, through the panel's own copier.
-        With *dry_run* nothing is created, copied or written -- the plan comes
-        back as it would run (:meth:`ptk.FileDependencies.relocate`). *maps*
-        narrows it to those file names -- the reflection probe's too, which
-        no object reads -- where *objects* narrows it to their readers.
+        The lightmap half of the Texture Path Editor's *Find & Copy*, a
+        Collect (:meth:`ptk.FileDependencies.relocate`): a map that resolves is
+        its own source; one that does not is searched for under *source_dir*,
+        and several different same-named files leave it in ``ambiguous`` --
+        never the newest. A map lands flat in *dest_dir* unless a different
+        file of its name is already there, then under its own parent folder;
+        a source already in *dest_dir* needs no file operation and still gets
+        its hint rewritten. *mode* is ``"copy"`` or ``"move"``; a move copies a
+        map another scene reads instead (:meth:`keep_sources`). With *dry_run*
+        nothing is created, copied or written -- the plan comes back as it
+        would run. *maps* narrows it to those file names -- the reflection
+        probe's too, which no object reads -- where *objects* narrows it to
+        their readers.
 
         Returns::
 
             {"relocate": [(src, dst)], "in_place": [src], "missing": [records],
-             "copied": [(src, dst)], "updated": markers rewritten}
+             "ambiguous": [records], "copied": [(src, dst)], "plan": [rows],
+             "updated": markers rewritten}
         """
+        deps = cls._resolve(objects, maps=maps)
+        cls.keep_sources(deps, mode)
         plan = ptk.FileDependencies.relocate(
-            cls._resolve(objects, maps=maps),
+            deps,
             dest_dir,
             source_dir=source_dir,
             mode=mode,
@@ -2188,18 +2198,44 @@ class LightmapRecords(ptk.LoggingMixin):
             copy=cls._copy_files,
         )
         result: Dict[str, Any] = dict(
-            plan, missing=[cls._as_lightmap(d) for d in plan["missing"]], updated=0
+            plan,
+            missing=[cls._as_lightmap(d) for d in plan["missing"]],
+            ambiguous=[cls._as_lightmap(d) for d in plan["ambiguous"]],
+            updated=0,
         )
         if dry_run:
             return result
-        landed = {os.path.basename(dst).lower() for _src, dst in plan["copied"]}
-        landed.update(os.path.basename(p).lower() for p in plan["in_place"])
+        landed = [dst for _src, dst in plan["copied"]] + list(plan["in_place"])
         if landed:
-            folder = dest_dir.replace("\\", "/")
-            result["updated"] = cls.repath_lightmaps(
-                {key: folder for key in landed}, objects
-            )
+            result["updated"] = cls.repath_lightmaps(cls.landed_dirs(landed), objects)
         return result
+
+    @classmethod
+    def keep_sources(cls, deps: List[Dict[str, Any]], mode: str) -> List[str]:
+        """Mark the records a MOVE must copy instead (``keep_source``), and say so.
+
+        A map another scene reads (:attr:`FOREIGN` in :meth:`claims`: a Save
+        As source's, a referenced module's): only this scene's records follow
+        a file, so moving it would leave that scene unlit. Returns their names.
+        """
+        if mode != "move":
+            return []
+        kept = ptk.FileDependencies.keep_read_elsewhere(deps, cls.claims(), cls.FOREIGN)
+        if kept:
+            cls.logger.info(
+                "Copied, not moved -- another scene reads them: %s", ", ".join(kept)
+            )
+        return kept
+
+    @staticmethod
+    def landed_dirs(paths: Iterable[str]) -> Dict[str, str]:
+        """``{lower-case map name: its folder}`` for maps now at *paths* --
+        what :meth:`repath_lightmaps` takes after a Collect, each map at its
+        OWN folder (one kept apart from a namesake sits a level down)."""
+        return {
+            os.path.basename(p).lower(): os.path.dirname(p).replace("\\", "/")
+            for p in paths
+        }
 
     @staticmethod
     def _portable_dir(path: str) -> str:
@@ -2253,41 +2289,25 @@ class LightmapRecords(ptk.LoggingMixin):
             filenames=list(names), source_dir=root, recursive=True, quiet=True
         )
 
-    @classmethod
+    @staticmethod
     def _copy_files(
-        cls, sources: List[str], dest_dir: str, mode: str
+        sources: List[str], dest_dir: str, mode: str, progress=None
     ) -> List[Tuple[str, str]]:
-        """Copy or move *sources* the way the Texture Path Editor moves textures.
-
-        A move copies a map another scene reads (:attr:`FOREIGN` in
-        :meth:`claims`: a Save As source's, a referenced module's) instead:
-        only this scene's records follow a file, and that scene opened unlit.
-        """
-        shared: List[str] = []
-        if mode == "move":
-            claims = cls.claims()
-            shared = [
-                s
-                for s in sources
-                if cls.FOREIGN in claims.get(os.path.basename(s).lower(), ())
-            ]
-            if shared:
-                cls.logger.info(
-                    "Copied, not moved -- another scene reads them: %s",
-                    ", ".join(os.path.basename(s) for s in shared),
-                )
-        out: List[Tuple[str, str]] = []
-        for group, delete in (
-            ([s for s in sources if s not in shared], mode == "move"),
-            (shared, False),
-        ):
-            if group:
-                out.extend(
-                    MatUtils.move_texture_files(
-                        found_files=group, new_dir=dest_dir, delete_old=delete
-                    )
-                )
-        return out
+        """Copy (``mode="move"``: move) *sources* the way the Texture Path Editor
+        moves textures (``MatUtils.move_texture_files``). A Collect hands it
+        ``"copy"`` and takes a moved source away itself, once it landed
+        (``ptk.FileCollect.apply``; :meth:`keep_sources` marks what a move keeps)."""
+        if not sources:
+            return []
+        tick = None
+        if progress is not None:
+            tick = lambda done, total, _name=None: progress(done, total) is not False  # noqa: E731
+        return MatUtils.move_texture_files(
+            found_files=list(sources),
+            new_dir=dest_dir,
+            delete_old=mode == "move",
+            progress_callback=tick,
+        )
 
     @classmethod
     def repath_lightmaps(

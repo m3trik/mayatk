@@ -6603,9 +6603,10 @@ class TestLightmapDependencies(MayaTkTestCase):
     def test_several_same_named_files_are_not_guessed_at(self):
         cube = self._cube("ambiguous")
         self._commit(cube, os.path.join(self.tmp, "gone", "amb_LightMap.exr"))
-        for sub in ("a", "b"):
+        for sub in ("a", "b"):  # two different files: identical copies are one
             os.makedirs(os.path.join(self.si, sub), exist_ok=True)
-            open(os.path.join(self.si, sub, "amb_LightMap.exr"), "wb").close()
+            with open(os.path.join(self.si, sub, "amb_LightMap.exr"), "wb") as fh:
+                fh.write(sub.encode())
 
         (dep,) = self.baker.lightmap_dependencies()
 
@@ -6672,6 +6673,29 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertEqual(report["healed"], [])
         self.assertEqual([d["map"] for d in report["missing"]], ["unhealed.exr"])
         self.assertFalse(os.listdir(self.si))
+
+    def test_heal_refuses_a_name_two_different_files_carry(self):
+        """BACKLOG 2026-10-21: the map's folder renamed while an older
+        same-named map stayed in sourceimages -- the plain search folders were
+        tried before the walk, so the stale map was "found" and healed in for
+        good. The search folders and the walk are one candidate set now."""
+        cube = self._cube("stale")
+        path = self._file("old", "stale_LightMap.exr")
+        self._commit(cube, path)
+        moved = os.path.join(self.si, "lightmaps_v2", "stale_LightMap.exr")
+        os.makedirs(os.path.dirname(moved), exist_ok=True)
+        shutil.move(path, moved)
+        with open(os.path.join(self.si, "stale_LightMap.exr"), "wb") as fh:
+            fh.write(b"an older bake")
+        before = self._map_dir(cube)
+
+        report = self.baker.heal_lightmap_paths()
+
+        self.assertEqual(report["healed"], [], "a stale namesake was healed in")
+        (dep,) = report["missing"]
+        self.assertEqual(len(dep["candidates"]), 2, dep)
+        self.assertIn("ambiguous", dep["note"])
+        self.assertEqual(self._map_dir(cube), before, "the record was left as it was")
 
     # -- relocate_lightmaps ------------------------------------------------
 

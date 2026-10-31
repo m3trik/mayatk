@@ -1249,6 +1249,16 @@ class TestFindAndCopy(MayaTkTestCase):
     def _path_of(self, node):
         return (cmds.getAttr(f"{node}.fileTextureName") or "").replace("\\", "/")
 
+    def _sub(self, *parts):
+        path = os.path.join(self.tmp_root, *parts)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _read(*parts):
+        with open(os.path.join(*parts)) as fh:
+            return fh.read()
+
     def _answer(self, source_dir="", dest_dir=None, mode="Copy"):
         self.answers = {
             "source_dir": source_dir,
@@ -1264,39 +1274,107 @@ class TestFindAndCopy(MayaTkTestCase):
 
     # -- the sources -----------------------------------------------------------
 
-    def test_partition_splits_resolving_paths_from_the_rest(self):
+    def _rows(self, nodes, **answers):
+        """``{node: plan row}`` of ``plan_find_and_copy`` over *nodes*."""
+        self._answer(**answers)
+        return {
+            r["owner"]: r
+            for r in self.editor.plan_find_and_copy([str(n) for n in nodes], self.answers)
+        }
+
+    def test_the_unresolved_are_the_nodes_whose_path_resolves_nowhere(self):
         good = self._make_file_node("tex_good", self._write(self.ext_dir, "good.png"))
         gone = self._make_file_node(
             "tex_gone", os.path.join(self.ext_dir, "gone.png").replace("\\", "/")
         )
-        resolved, unresolved = self.editor._partition_resolved_sources([good, gone])
-
-        self.assertEqual(list(resolved), ["good.png"])
-        self.assertTrue(os.path.isfile(resolved["good.png"]))
-        self.assertEqual(unresolved, [gone])
         self.assertEqual(self.editor.unresolved_file_nodes([good, gone]), [gone])
+        rows = self._rows([good, gone])
+        self.assertTrue(os.path.isfile(rows[good]["source"]))
+        self.assertEqual(rows[gone]["status"], ptk.FileCollect.MISSING)
 
-    def test_partition_resolves_a_relative_path_against_the_workspace(self):
+    def test_a_relative_path_resolves_against_the_workspace(self):
         self._write(self.si_dir, "rel.png")
         node = self._make_file_node("tex_rel", "sourceimages/rel.png")
-        resolved, unresolved = self.editor._partition_resolved_sources([node])
-
-        self.assertEqual(unresolved, [])
         self.assertEqual(
-            os.path.normcase(resolved["rel.png"]),
+            os.path.normcase(self._rows([node])[node]["source"]),
             os.path.normcase(os.path.join(self.si_dir, "rel.png").replace("\\", "/")),
         )
 
-    def test_partition_sends_udim_nodes_to_the_search(self):
-        """A UDIM path is never a literal file; only the walk expands it."""
+    def test_a_udim_node_whose_tiles_are_on_disk_is_its_own_source(self):
+        """A UDIM path names its SET: present when its tiles are, never re-sought."""
         self._write(self.ext_dir, "t.1001.png")
         node = self._make_file_node(
             "tex_udim", os.path.join(self.ext_dir, "t.<UDIM>.png").replace("\\", "/")
         )
-        resolved, unresolved = self.editor._partition_resolved_sources([node])
+        self.assertEqual(self.editor.unresolved_file_nodes([node]), [])
+        self.assertTrue(self._rows([node])[node]["source"].endswith("t.<UDIM>.png"))
 
-        self.assertEqual(resolved, {})
-        self.assertEqual(unresolved, [node])
+    # -- same-named textures (BACKLOG 2026-10-23, S1) ---------------------------
+
+    def test_same_named_textures_land_apart_each_node_on_its_own(self):
+        """``wood/diffuse.png`` and ``metal/diffuse.png`` were keyed by NAME: one
+        copy, both nodes repointed at it, and the log reported success."""
+        wood = self._make_file_node(
+            "wood_file",
+            self._write(self._sub("tex", "wood"), "diffuse.png", payload="WOOD"),
+        )
+        metal = self._make_file_node(
+            "metal_file",
+            self._write(self._sub("tex", "metal"), "diffuse.png", payload="METAL"),
+        )
+        self._answer()
+
+        self._run([wood, metal])
+
+        self.assertTrue(self._path_of(wood).endswith("dest/wood/diffuse.png"))
+        self.assertTrue(self._path_of(metal).endswith("dest/metal/diffuse.png"))
+        self.assertEqual(self._read(self.dest_dir, "wood", "diffuse.png"), "WOOD")
+        self.assertEqual(self._read(self.dest_dir, "metal", "diffuse.png"), "METAL")
+        self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "diffuse.png")))
+
+    def test_an_identical_pair_shares_one_copy_a_namesake_is_kept_apart(self):
+        a = self._make_file_node(
+            "a_file", self._write(self._sub("one"), "diffuse.png", payload="SAME")
+        )
+        b = self._make_file_node(
+            "b_file", self._write(self._sub("two"), "diffuse.png", payload="SAME")
+        )
+        c = self._make_file_node(
+            "c_file", self._write(self._sub("three"), "diffuse.png", payload="OTHER")
+        )
+        self._answer()
+
+        self._run([a, b, c])
+
+        self.assertEqual(self._path_of(a), self._path_of(b), "one copy shared")
+        self.assertTrue(self._path_of(a).endswith("dest/one/diffuse.png"))
+        self.assertTrue(self._path_of(c).endswith("dest/three/diffuse.png"))
+        self.assertEqual(sorted(os.listdir(self.dest_dir)), ["one", "three"])
+
+    def test_an_ambiguous_search_hit_waits_for_its_pick(self):
+        """Two different same-named files under the search folder: it took the
+        NEWEST; the row lists both now, and a pick commits the one chosen."""
+        pool = self._sub("pool")
+        older = self._write(self._sub("pool", "a"), "lost.png", payload="OLD")
+        self._write(self._sub("pool", "b"), "lost.png", payload="NEW")
+        os.utime(older, (1_000_000, 1_000_000))
+        node = self._make_file_node(
+            "tex_lost", os.path.join(self.tmp_root, "gone", "lost.png").replace("\\", "/")
+        )
+        self._answer(source_dir=pool)
+
+        (row,) = self.editor.plan_find_and_copy([node], self.answers)
+        self.assertEqual(row["status"], ptk.FileCollect.AMBIGUOUS)
+        self.assertEqual(len(row["candidates"]), 2)
+        self.assertFalse(self._run([node]), "nothing to collect until a pick")
+        self.assertIn("gone/lost.png", self._path_of(node), "never guessed")
+
+        picked = self.editor.plan_find_and_copy(
+            [node], self.answers, choices={("texture", node): older}
+        )
+        self.editor.find_and_copy_textures([node], self.answers, plan=picked)
+        self.assertTrue(self._path_of(node).endswith("dest/lost.png"))
+        self.assertEqual(self._read(self.dest_dir, "lost.png"), "OLD")
 
     # -- the run --------------------------------------------------------------
 
@@ -1372,7 +1450,9 @@ class TestFindAndCopy(MayaTkTestCase):
         with open(os.path.join(self.dest_dir, "dup2.png")) as fh:
             self.assertEqual(fh.read(), "THE LIVE ONE")
 
-    def test_a_valid_path_outranks_a_search_hit_of_the_same_name(self):
+    def test_a_valid_path_and_a_search_hit_of_its_name_each_keep_their_own(self):
+        """The search's hit is the BROKEN node's file, never the valid node's: it
+        bound every same-named node to the one valid copy."""
         valid = self._write(self.ext_dir, "dup.png", payload="THE REAL ONE")
         stale_dir = os.path.join(self.tmp_root, "archive")
         os.makedirs(stale_dir, exist_ok=True)
@@ -1386,8 +1466,9 @@ class TestFindAndCopy(MayaTkTestCase):
 
         self._run([good, gone])
 
-        with open(os.path.join(self.dest_dir, "dup.png")) as fh:
-            self.assertEqual(fh.read(), "THE REAL ONE")
+        self.assertTrue(self._path_of(good).endswith("dest/external/dup.png"))
+        self.assertEqual(self._read(self.dest_dir, "external", "dup.png"), "THE REAL ONE")
+        self.assertTrue(self._path_of(gone).endswith("dest/archive/dup.png"))
 
     def test_a_destination_that_does_not_exist_yet_is_created(self):
         node = self._make_file_node("tex_new", self._write(self.ext_dir, "new.png"))
@@ -1492,11 +1573,11 @@ class TestFindAndCopy(MayaTkTestCase):
         report = self.reported.text()
         self.assertIn("Dry run", report)
         self.assertIn("rep1.png", report)
-        self.assertIn("Would repath 1 file node(s)", report)
+        self.assertIn("Would repath 1 texture(s)", report)
         self.assertIn("Apply", report)
 
     def test_the_preview_promises_the_path_the_commit_writes(self):
-        """Both derive it through ``_plan_remap``."""
+        """Both derive it through ``plan_find_and_copy`` (``ptk.FileCollect.plan``)."""
         node = self._make_file_node("tex_same", self._write(self.ext_dir, "same.png"))
         self._answer(dest_dir=self.si_dir)
 
@@ -1520,7 +1601,7 @@ class TestFindAndCopy(MayaTkTestCase):
         """A cut listing that does not SAY it was cut reads as the whole plan."""
         nodes = [
             self._make_file_node(f"tex_many{i}", self._write(self.ext_dir, f"many{i}.png"))
-            for i in range(TexturePathEditor._PLAN_PREVIEW_ROWS + 3)
+            for i in range(ptk.FileCollect.PREVIEW_ROWS + 3)
         ]
         self._answer()
 
@@ -2100,7 +2181,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
 
         self._run([], lightmaps=self.editor.lightmap_dependencies(), source_dir=self.ext_dir)
 
-        missing = [m for m in self._messages("warning") if "found nowhere" in m]
+        missing = [m for m in self._messages("warning") if "not found under" in m]
         self.assertEqual(len(missing), 1, self.reported.lines)
         self.assertIn("nowhere.exr", missing[0])
         self.assertFalse(any("No textures found" in m for m in self._messages()))
