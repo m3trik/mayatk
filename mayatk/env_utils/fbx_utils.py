@@ -2185,7 +2185,12 @@ class FbxUtils(ptk.HelpMixin):
         cls, mode: str = ptk.ExportContext.PIPELINE, **decisions
     ) -> ptk.ExportContext:
         """A context for this scene: provenance filled in, *decisions*
-        (``clip_mode``, ``clip_span``, ``rendering``, ``scope``) as given."""
+        (``clip_mode``, ``clip_span``, ``rendering``, ``scope``) as given.
+
+        A *scope* names the nodes the write ships as well (``nodes``: every
+        DAG node under its roots, :meth:`_shipped_nodes`), what the snapshot
+        narrows each export-scoped record by -- once, here, so no producer
+        walks the export set again."""
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}
@@ -2197,7 +2202,23 @@ class FbxUtils(ptk.HelpMixin):
             )
         except Exception:  # noqa: BLE001 - provenance never costs an export
             pass
+        if decisions.get("scope") is not None and "nodes" not in decisions:
+            decisions["nodes"] = cls._shipped_nodes(decisions["scope"])
         return ptk.ExportContext(mode=mode, source=source, **decisions)
+
+    @staticmethod
+    def _shipped_nodes(roots: Iterable[str]) -> Optional[frozenset]:
+        """The name of every DAG node a write of *roots* ships, as the file
+        names it: each root and everything under it, shapes included, by its
+        leaf (namespace kept -- Maya writes ``NS:leaf`` as the FBX Model
+        name); ``None`` outside Maya, where no node can be named."""
+        if cmds is None:
+            return None
+        roots = [str(root) for root in roots or ()]
+        if not roots:
+            return frozenset()
+        nodes = cmds.ls(roots, dag=True, long=True) or []
+        return frozenset(node.rsplit("|", 1)[-1] for node in nodes)
 
     @classmethod
     def publish(

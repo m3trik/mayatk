@@ -1059,11 +1059,15 @@ class RenderEffects(ptk.LoggingMixin):
         range as a seed.
 
         Parameters:
-            ctx: The export's decisions (``clip_span``) and the records
-                produced before this one -- the shot record's ``fps`` and the
-                takes its clips declare (``ptk.SceneRecords.declared_takes``);
-                the stored records are read when this assembly did not produce
-                them (an authoring-time republish).
+            ctx: The export's decisions (``clip_span``, ``nodes``) and the
+                records produced before this one -- the shot record's ``fps``
+                and the takes its clips declare
+                (``ptk.SceneRecords.declared_takes``); the stored records are
+                read when this assembly did not produce them (an authoring-time
+                republish). A scoped write keeps the tracks of the nodes it
+                ships, and its take spans count their curves alone (the record
+                is ``export_scoped``): another node's keys are no channel of
+                this file, and a track for it warned "not in this GLB".
 
         A scene that declares takes publishes the whole-timeline entry even
         with no keyed visibility, as the record's only content: it is what
@@ -1079,7 +1083,7 @@ class RenderEffects(ptk.LoggingMixin):
             measured origin of declared takes (the publisher then clears the
             channel).
         """
-        tracks = cls.visibility_tracks()
+        tracks = [track for track in cls.visibility_tracks() if ctx.ships(track["node"])]
         if not tracks and ctx.clip_span is None:
             return None
 
@@ -1118,7 +1122,11 @@ class RenderEffects(ptk.LoggingMixin):
             clip_spans=ptk.MeshConvert.clip_spans(
                 (),
                 takes if tracks else (),
-                key_spans=cls._scene_key_spans if tracks else None,
+                key_spans=(
+                    (lambda windows: cls._scene_key_spans(windows, ctx))
+                    if tracks
+                    else None
+                ),
                 stack_range=stack_range,
             ),
         )
@@ -1389,7 +1397,9 @@ class RenderEffects(ptk.LoggingMixin):
 
     @classmethod
     def _scene_key_spans(
-        cls, windows: List[Tuple[Optional[float], Optional[float]]]
+        cls,
+        windows: List[Tuple[Optional[float], Optional[float]]],
+        ctx: Optional[ptk.ExportContext] = None,
     ) -> List[Optional[Tuple[float, float]]]:
         """Per window, the scene's first and last authored key inside it.
 
@@ -1402,10 +1412,25 @@ class RenderEffects(ptk.LoggingMixin):
         indices (``AnimUtils.curve_key_spans``): listing every key time cost
         10 s a pass on a post-bake production assembly, and the export bracket
         and ``export_data_node`` each run one (2026-09-14).
+
+        A scoped *ctx* counts the curves of the write alone: one driving a
+        DAG node it leaves out is no channel of the file (``ctx.ships``). A
+        curve driving a node outside the DAG (a blend shape's weight, a
+        shader's input) still counts -- what it animates may ride a shipped
+        mesh.
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
 
-        curves = [curve for curve, _plug in cls._curve_outputs()]
+        pairs = cls._curve_outputs()
+        if ctx is not None and ctx.nodes is not None:
+            driven = {plug.partition(".")[0] for _curve, plug in pairs}
+            dag = set(cmds.ls(list(driven), type="dagNode") or []) if driven else set()
+            pairs = [
+                (curve, plug)
+                for curve, plug in pairs
+                if plug.partition(".")[0] not in dag or ctx.ships(plug.partition(".")[0])
+            ]
+        curves = [curve for curve, _plug in pairs]
         return AnimUtils.curve_key_spans(curves, windows)
 
     @classmethod

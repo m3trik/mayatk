@@ -405,6 +405,45 @@ class TestProducerContract(MayaTkTestCase):
         FbxUtils.publish(FbxUtils.export_context())  # a pipeline IS the authority
         self.assertIsNone(SR.LIGHTMAPS.load(DataNodes))
 
+    def test_a_scoped_context_names_every_node_the_write_ships(self):
+        """The host names the shipped nodes once (``ExportContext.nodes``):
+        each root and all under it, shapes included, as the file names them.
+        Added: 2026-10-31"""
+        keep = cmds.group(cmds.polyCube(name="KEEP_cube")[0], name="KEEP_grp")
+        cmds.polyCube(name="DROP_cube")
+        ctx = FbxUtils.export_context(scope=tuple(cmds.ls(keep, long=True)))
+        self.assertEqual(ctx.nodes, frozenset({"KEEP_grp", "KEEP_cube", "KEEP_cubeShape"}))
+        self.assertTrue(ctx.ships("|KEEP_grp|KEEP_cube"))
+        self.assertFalse(ctx.ships("DROP_cube"))
+        self.assertIsNone(FbxUtils.export_context().nodes, "no scope: the whole scene")
+
+    def test_a_scoped_handoff_ships_the_stored_bake_narrowed_and_keeps_it_whole(self):
+        """A hand-off refreshes only the derived records, so the authored ones
+        shipped as stored -- both cubes' lightmaps and the other cube's shadow
+        plane, and the Unity bridge embedded their maps (measured 2026-10-31,
+        ``_scope_probe.py``). The write ships the copy narrowed to what it
+        sends; the scene keeps its whole copy. Added: 2026-10-31"""
+        keep = cmds.polyCube(name="KEEP_cube")[0]
+        cmds.polyCube(name="DROP_cube")
+        SR.LIGHTMAPS.save(
+            DataNodes,
+            {"objects": [{"name": "KEEP_cube", "map": "K.exr"}, {"name": "DROP_cube", "map": "D.exr"}]},
+        )
+        SR.SHADOWS.save(
+            DataNodes, {"unit_scale": 0.01, "planes": [{"name": "DROP_cube_shadow"}]}
+        )
+        ctx = FbxUtils.export_context(
+            mode=ptk.ExportContext.HANDOFF, scope=tuple(cmds.ls(keep, long=True))
+        )
+        with FbxUtils.export_prepared(ctx):
+            shipped = SR.LIGHTMAPS.load(DataNodes)
+            self.assertEqual([o["name"] for o in shipped["objects"]], ["KEEP_cube"])
+            self.assertIsNone(SR.SHADOWS.load(DataNodes), "no plane of the send")
+        self.assertEqual(len(SR.LIGHTMAPS.load(DataNodes)["objects"]), 2)
+        self.assertEqual(
+            SR.SHADOWS.load(DataNodes)["planes"][0]["name"], "DROP_cube_shadow"
+        )
+
     def test_a_session_stager_stages_before_the_producers_read(self):
         """Producers see the staged scene even outside a bracket: a preview
         that must detach before its record is read registers a stager, and a

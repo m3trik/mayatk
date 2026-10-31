@@ -514,6 +514,28 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         self.assertEqual(published["clip_span"]["Shot_1"], [8.0, 23.0])
         self.assertEqual(published["clip_span"]["Shot_5"], [1000.0, 1015.0])
 
+    def test_a_scoped_write_states_the_tracks_and_spans_of_what_it_ships(self):
+        """Every export writes data for the objects it ships. Measured
+        2026-10-31 (fresh mayapy, two cubes, one exported): the record named
+        the other cube's tracks, the GLB build warned "2 keyed node(s) are not
+        in this GLB", and its keys sized the take. Added: 2026-10-31"""
+        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
+        other = cmds.group(cmds.polyCube()[0], name="OTHER_LOC")
+        RenderEffects.key_fade([other], start=3, end=40, direction="in")
+        self._publish_shots([{"name": "Shot_1", "start": 1, "end": 100}])
+
+        scoped = RenderEffects.export_record(
+            FbxUtils.export_context(scope=tuple(cmds.ls(self.grp, long=True)))
+        ).payload
+        whole = RenderEffects.export_record(FbxUtils.export_context()).payload
+
+        self.assertEqual([t["node"] for t in scoped["tracks"]], ["GATE_LOC"])
+        self.assertEqual(scoped["clip_span"]["Shot_1"], [8.0, 23.0])
+        self.assertEqual(
+            sorted(t["node"] for t in whole["tracks"]), ["GATE_LOC", "OTHER_LOC"]
+        )
+        self.assertEqual(whole["clip_span"]["Shot_1"], [3.0, 40.0])
+
     def test_a_curve_that_is_no_timeline_channel_does_not_size_a_take(self):
         """The spans mirror the converter's take sizing, which reads the
         channels the FBX carries. A curve driving nothing (an export
