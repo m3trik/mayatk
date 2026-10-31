@@ -24,6 +24,7 @@ from mayatk.anim_utils.shots._shots import MayaScenePersistence, ShotStore
 from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.node_utils.data_nodes import DataNodes
+from pythontk.core_utils.engines.key_stash.key_stash_model import KeyStashConformance
 
 KEYS = [(1, 0.0), (10, 5.0), (20, 10.0), (30, 15.0), (40, 20.0)]
 
@@ -423,6 +424,53 @@ class KeyStashTestCase(MayaTkTestCase):
         finally:
             backend.remove_callbacks()
             default.remove_callbacks()
+
+    def test_the_saved_record_is_pinned_byte_for_byte(self):
+        """What the store saves is a contract older scenes hold: a filled
+        store saved through the scene's persistence writes the golden case's
+        bytes, and a reloaded one saves them again (the case every host's
+        store is held to)."""
+        backend = MayaScenePersistence(attr_name=KeyStash.ATTR_NAME, store_cls=KeyStash)
+        KeyStash.set_persistence(backend)
+        KeyStashConformance.fill(KeyStash()).save()
+        self.assertEqual(
+            DataNodes.read(ptk.Scope.PRIVATE, KeyStash.ATTR_NAME),
+            KeyStashConformance.payload(),
+        )
+        again = KeyStash.from_dict(backend.load())
+        self.assertEqual(
+            ptk.SceneRecords.KEY_STASH.encode(again.to_dict()),
+            KeyStashConformance.payload(),
+        )
+
+    def test_a_frame_rate_change_moves_the_stashed_times_with_the_keys(self):
+        """A live time-unit change: Maya moves every curve's keys (they keep
+        real time), the parked ones included, and the record follows through
+        the ``timeUnitChanged`` hook the stash's backend subscribes (the shot
+        store's); the store's listeners are told. Blender's twin records the
+        rate only (its keys stay on their frames)."""
+        original = cmds.currentUnit(query=True, time=True)
+        self.addCleanup(cmds.currentUnit, time=original)
+        cmds.currentUnit(time="film")
+        clip = self._stash_range()
+        store = KeyStash.active()
+        stash = BakeSessionStore.resolve_ref(
+            store.get_clip(clip.clip_id).curves[0]["stash"]
+        )
+        events = []
+        store.add_listener(events.append)
+        cmds.currentUnit(time="ntsc")  # 24 -> 30 fps, keys keep their time
+        # The event, pinned: a GUI session runs the scriptJob on its own, and
+        # a second delivery is a no-op (the rate already matches).
+        ScriptJobManager.instance()._dispatch("timeUnitChanged")
+        parked = cmds.keyframe(stash, query=True, timeChange=True)
+        self.assertEqual(parked, [12.5, 25.0, 37.5])
+        self.assertEqual(KeyStash.active().get_clip(clip.clip_id).times, parked)
+        self.assertEqual(store.scene_fps, 30.0)
+        self.assertIn("reloaded", [e.kind for e in events])
+        # The record agrees with the parked curve, so retrieve lands every key.
+        self.assertEqual(store.retrieve(clip.clip_id), 3)
+        self.assertEqual(self._times(), [1.25, 12.5, 25.0, 37.5, 50.0])
 
     def test_scene_change_invalidates_active_store(self):
         self._stash_range()

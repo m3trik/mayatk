@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-29 -- `KeyStash` binds `MayaKeyStashHost` (`anim_utils/key_stash`).** The hooks it overrode are now Maya's `ptk.KeyStashHost` adapter; `watch_undo`, `merge_carrier` and `reconcile` are inherited from pythontk. Callers do not change.
+  - Test(s): `test_key_stash.py` (byte pin of the saved record, a live `cmds.currentUnit` frame-rate change).
 - **2026-10-29 -- Fix: a GUI Maya test pass no longer hangs spawning `maya.exe` as Python (`test/base_test.py`).** Inside a GUI Maya `sys.executable` is `maya.exe`, so `import_without_maya` ran `maya.exe -c <script>`, a GUI Maya that never exits, and the GUI pass stalled on the first import-guard test. `base_test.child_python()` returns the mayapy beside it; the import guard and the driver probe spawn it with a timeout.
   - Test(s): `test_base_test.py::TestChildInterpreter` (red first); `test_playblast_exporter -k import_guard --gui` 1/1 (hung before).
 - **2026-10-29 -- The README describes mayatk as the Maya host library and each tool's API half (docs/README.md, test/).** The tool panels are tentacle's. The editor snippet is `mtk.MayaUiHandler.instance().editors.show("ui_browser")` with the real editor keys (`"browser"` raised KeyError). The note about the removed `RenderOpacity` alias is gone. `test_tentacle_editors.py` is deleted: it imported the retired `tentacle.slots.maya.editors`, and its cases live in `test_ui_utils.py` and tentacle's `test_editors.py`.
