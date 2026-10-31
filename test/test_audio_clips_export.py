@@ -259,27 +259,23 @@ class TestAudioClipsExport(MayaTkTestCase):
             "legacy internal source attr should be dropped",
         )
 
-    def test_the_record_digests_each_played_tracks_file_by_its_name(self):
-        """Each played track's file rides as the SHA-256 of its bytes under its
-        event's name (``ptk.AudioUtils.media_digests``): what Unity compares a
-        same-named clip against before it reuses one -- two models embedding a
-        different ``door.wav`` bound one clip (2026-10-19). A track with no
-        file on disk is left out. Added: 2026-10-31"""
-        import hashlib
-
+    def test_the_record_leaves_its_digests_to_the_dependency_pass(self):
+        """``media`` -- each embedded clip's SHA-256, what Unity compares a
+        same-named clip against before it reuses one -- is the FBX dependency
+        pass's to write, from the bytes it embedded
+        (``ptk.FbxMedia.embed_dependencies``). Written here from the source
+        files, it named audio a raw File > Export or the Game Exporter never
+        embedded, and Unity bound nothing where a library clip had bound
+        (review, 2026-10-31). Added: 2026-10-31"""
         self._seed_tracks()
         wav = self.temp_path("footstep_take3.wav")
         with open(wav, "wb") as fh:
             fh.write(b"footstep bytes")
         audio_utils.set_path("footstep", wav)
-        audio_utils.set_path("jump", self.temp_path("gone.wav"))  # never written
 
         record = AudioClips.export_record(ptk.ExportContext())
         self.assertIsNotNone(record)
-        self.assertEqual(
-            record.payload.get("media"),
-            {"footstep": hashlib.sha256(b"footstep bytes").hexdigest()},
-        )
+        self.assertNotIn("media", record.payload)
         self.assertEqual(
             ptk.SceneRecords.problems(ptk.SceneRecords.AUDIO, record.payload), []
         )
