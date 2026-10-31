@@ -21,6 +21,18 @@
  "materials": {
   "standardSurface1": {
    "properties": {
+    "DiffuseColor": [
+     0.4,
+     0.4,
+     0.4
+    ],
+    "DiffuseFactor": 1.0,
+    "EmissiveColor": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "EmissiveFactor": 1.0,
     "Maya": [],
     "Maya|TypeId": 1398031443,
     "Maya|base": 1.0,
@@ -118,7 +130,14 @@
      0.0,
      0.0
     ],
-    "Maya|transmissionScatterAnisotropy": 0.0
+    "Maya|transmissionScatterAnisotropy": 0.0,
+    "Opacity": 1.0,
+    "TransparencyFactor": 1.0,
+    "TransparentColor": [
+     0.0,
+     0.0,
+     0.0
+    ]
    },
    "shading_model": "unknown",
    "textures": {}
