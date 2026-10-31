@@ -198,13 +198,13 @@ class TestFrameShot(unittest.TestCase):
         self.widget.deleteLater()
         _process_events()
 
-    def test_frame_shot_zooms_to_range(self):
-        """After frame_shot, the range highlight should be visible."""
+    def test_frame_range_zooms_to_range(self):
+        """After frame_range, the range highlight should be visible."""
         tid = self.widget.add_track("obj")
         self.widget.add_clip(tid, 100, 50, label="clip")
         self.widget.set_range_highlight(100, 150)
         _process_events()
-        self.widget.frame_shot()
+        self.widget.frame_range()
         _process_events()
         self.assertIsNotNone(self.widget._range_highlight)
 
@@ -590,10 +590,10 @@ class TestWidgetWithEngine(unittest.TestCase):
         self.assertGreaterEqual(len(self.widget.clips()), 2)
         self.assertIsNotNone(self.widget._range_highlight)
 
-    def test_frame_shot_after_population(self):
+    def test_frame_range_after_population(self):
         self._populate_widget()
         _process_events()
-        self.widget.frame_shot()
+        self.widget.frame_range()
         _process_events()
 
     def test_clear_resets_everything(self):

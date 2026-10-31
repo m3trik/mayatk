@@ -240,7 +240,7 @@ class GraphSync:
         if outline != self._outline_cache:
             self._outline_cache = outline
             self.editor.set_outline(outline)
-        # What the scope shows is what the graph keeps bright (Dim Outside Shots).
+        # What the scope shows is what the graph keeps bright (Dim Outside Range).
         if self.editor.focus_range != self._window:
             self.editor.focus_range = self._window
         self._flush(full)
