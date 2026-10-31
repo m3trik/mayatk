@@ -1,15 +1,14 @@
 # !/usr/bin/python
 # coding=utf-8
-"""User-tunable parameters for the Maya->Unity bridge panel.
+"""The Maya export rows of the Unity hand-off.
 
-Two groups: *Export* knobs drive the Maya-side FBX export (read by
-:class:`mayatk.env_utils.handoff_export.MayaExportMixin`); *Unity* knobs drive the
-copy-to-Assets delivery (read by :class:`unitytk.CopyToAssetsDeliverer`). Unlike the
-script-launch bridges these are never substituted into a template -- the Unity
-deliverer copies the FBX into the project rather than rendering a live-session
-script. Visibility gates on the selected combo entry: the export/Unity params
-show for Copy to Project, the SCRIPTS checklist + SCRIPTS_ACTION for Manage
-Unity Scripts.
+The rows the Unity Workflow app (extapps' ``unity_workflow``) shows for its Current
+Scene source when Maya opened it with this engine: the Scope and the knobs that
+drive the Maya-side FBX export (read by
+:class:`mayatk.env_utils.handoff_export.MayaExportMixin`). The delivery's rows --
+the Assets subfolder, the asset name, the Editor launch and version, Manage Unity
+Scripts -- are the app's, and so is the delivery that reads them. Never
+substituted into a template: the delivery copies the FBX into the project.
 
 Mirrors :mod:`mayatk.env_utils.blender_bridge.parameters` in shape. This copy is
 the SSoT: blendertk's ``env_utils.unity_bridge.parameters`` is the same text, host
@@ -58,109 +57,6 @@ PARAMS: "dict[str, AttributeSpec]" = {
         section="Export",
         tooltip="Triangulate meshes on export.",
     ),
-    "ASSETS_SUBDIR": AttributeSpec(
-        key="ASSETS_SUBDIR",
-        label="Assets Subfolder",
-        kind="str",
-        default="Imported",
-        section="Unity",
-        tooltip=(
-            "Subfolder under the project's <b>Assets/</b> the FBX is copied into\n"
-            "(created if absent). Blank = <i>Imported</i>; <i>/</i> = Assets/ itself."
-        ),
-    ),
-    "ASSET_NAME": AttributeSpec(
-        key="ASSET_NAME",
-        label="Asset Name",
-        kind="str",
-        default="",
-        section="Unity",
-        tooltip=(
-            "Optional name for the copied FBX (no extension). Blank = use the\n"
-            "selected object's name. Invalid filename characters are sanitized."
-        ),
-    ),
-    "LAUNCH_MODE": AttributeSpec(
-        key="LAUNCH_MODE",
-        label="Launch Unity",
-        kind="choice",
-        default="",
-        choices=[
-            ("Don't launch", ""),
-            ("Open Editor", "open"),
-            ("Headless (batch)", "headless"),
-        ],
-        section="Unity",
-        tooltip=(
-            "What to do after the FBX is copied:\n"
-            "• Don't launch — just copy; Unity imports on its next window focus\n"
-            "  (smoothest when the project is already open).\n"
-            "• Open Editor — launch a windowed Unity Editor on the project (the\n"
-            "  chosen Unity Version, else the newest install).\n"
-            "• Headless (batch) — run Unity '-batchmode -quit' to import then exit,\n"
-            "  no window. Needs a batch-capable Editor license."
-        ),
-    ),
-    "UNITY_VERSION": AttributeSpec(
-        key="UNITY_VERSION",
-        label="Unity Version",
-        kind="choice",
-        default="",
-        # Just the auto-default here; the panel appends installed versions
-        # discovered at runtime via unitytk.UnityFinder (dynamic).
-        choices=[("Auto (newest)", "")],
-        section="Unity",
-        tooltip=(
-            "Which installed Unity Editor to create/launch with (used by\n"
-            "Launch Unity's Open Editor and Headless, and 'New Unity Project…').\n"
-            "Auto uses the newest installed version."
-        ),
-    ),
-    # Shown only when the 'Manage Unity Scripts' template is selected
-    # (the slots' _relevant_param_keys gates it; export params hide).
-    "SCRIPTS": AttributeSpec(
-        key="SCRIPTS",
-        label="Scripts",
-        kind="check_list",
-        # Entries + initial checks are filled at runtime from the installed
-        # unitytk release (UnityBridgeSlots._populate_script_components), the
-        # same way UNITY_VERSION is filled from the installed Editors --
-        # nothing about the C# set is duplicated here.
-        default=[],
-        choices=[],
-        section="Unity Scripts",
-        tooltip=(
-            "Which of unitytk's C# scripts the action below applies to — one\n"
-            "row per import channel, all checked by default. Right-click for\n"
-            "Check All / Uncheck All; hover a row for what it does.\n"
-            "The shared core files (the Project Settings ▸ unitytk page and\n"
-            "the import gate every controller compiles against) always ride\n"
-            "along with an install, and leave with the last script removed."
-        ),
-    ),
-    "SCRIPTS_ACTION": AttributeSpec(
-        key="SCRIPTS_ACTION",
-        label="Action",
-        kind="choice",
-        default="status",
-        choices=[
-            ("Status", "status"),
-            ("Install / Update", "install"),
-            ("Uninstall", "uninstall"),
-        ],
-        section="Unity Scripts",
-        tooltip=(
-            "What to do with the scripts checked above, in the Unity project\n"
-            "field (the embedded Packages/com.m3trik.unitytk package):\n"
-            "• Status — report the deployed version vs this unitytk release,\n"
-            "  and which scripts are in the project. Ignores the checkboxes.\n"
-            "• Install / Update — deploy the checked scripts (updates in\n"
-            "  place, leaves unchecked ones alone; configure per-channel\n"
-            "  behavior in Unity under Project Settings ▸ unitytk).\n"
-            "• Uninstall — remove the checked scripts. Removing the last one\n"
-            "  takes the whole package folder with it."
-        ),
-    ),
 }
 
 
@@ -169,8 +65,8 @@ class Parameters(ParamRegistry):
 
     Declared as data: :class:`uitk.bridge.ParamRegistry` supplies
     ``referenced_keys`` / ``defaults`` / ``render_context`` (Python literals)
-    over :data:`PARAMS`, and a bridge slot hands this class to the shared base
-    as its ``params_module``.
+    over :data:`PARAMS`, and the Unity Workflow app builds its Current Scene
+    rows from it (``UnityBridge.params_registry()``).
     """
 
     PARAMS = PARAMS

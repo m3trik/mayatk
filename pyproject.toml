@@ -32,16 +32,8 @@ dependencies = [
     "uitk>=1.8.2",
 ]
 
-# unitytk is OPTIONAL: it only backs the Unity Bridge panel, for users who take
-# exports into Unity and want to extend what ships here. Nothing in mayatk
-# imports it at package-import time -- `env_utils/unity_bridge/` resolves
-# lazily, so `import mayatk` and every non-Unity feature work without it.
-# Install with the extra when you want the bridge:  pip install mayatk[unity]
-# unitytk 0.1.0: the templates moved into one folder per component; an
-# older deployer writes flat copies beside the moved ones (every class twice).
-[project.optional-dependencies]
-unity = ["unitytk>=0.1.0"]
-
+# No Unity extra: the Unity delivery is extapps' Unity Workflow app, which tentacle
+# opens with this package's UnityBridge (the scene's export) as its engine.
 [project.urls]
 Homepage = "https://github.com/m3trik/mayatk"
 Repository = "https://github.com/m3trik/mayatk"

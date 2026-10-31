@@ -1,8 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Maya->Unity hand-off bridge (export the selection into a Unity project's Assets/).
+"""The Maya half of the Unity hand-off: export the scope for a Unity project.
 
-The engine (``_unity_bridge.UnityBridge``) and its parameter registry
+The engine (``_unity_bridge.UnityBridge``) and its export rows
 (``parameters.Parameters``, ``UnityBridge.params_registry()``); the panel is
-tentacle's shared Unity Bridge tool (``slots/tools/unity_bridge.py``).
+extapps' Unity Workflow app, which tentacle opens with this engine injected, and
+whose delivery (unitytk's copy into ``Assets/``) the engine sends through.
 """

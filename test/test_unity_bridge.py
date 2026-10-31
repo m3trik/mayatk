@@ -2,36 +2,100 @@
 # coding=utf-8
 """Test Suite for mayatk.env_utils.unity_bridge.
 
-Maya-side coverage for the Unity hand-off: the engine resolves the selection, exports an FBX
-(shared MayaExportMixin), and copies it into a Unity project's ``Assets/`` (shared
-unitytk.CopyToAssetsDeliverer Strategy). No real Unity is needed -- the project is just a folder
-with an ``Assets/`` directory, and ``LAUNCH_MODE`` defaults to no-launch.
+``UnityBridge`` is the Maya half of the Unity Workflow app (extapps' ``unity_workflow``,
+opened by tentacle with this class as its engine): it resolves the app's Scope, exports the
+FBX with the scene records (the shared MayaExportMixin) and hands the payload to the
+delivery the app attaches (``deliverer=``, unitytk's ``CopyToAssetsDeliverer``). The host
+half names no unitytk; the sends below attach the real deliverer, where unitytk is on the
+path, to drive the production chain into a temp project (a folder with ``Assets/``, no
+Unity), and a hand-back deliverer to pin what the app receives.
 
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py unity_bridge``).
 """
 
+import ast
+import importlib.util
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import maya.cmds as cmds
 
-from pythontk import HandoffRequest
+import pythontk as ptk
 from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
 
 from base_test import MayaTkTestCase
 
+#: The delivery the app attaches (unitytk), on the runner's pinned path.
+UNITYTK = importlib.util.find_spec("unitytk") is not None
 
-def _copy_req():
-    return HandoffRequest(template="copy_to_assets", mode="send_to")
+
+def _unity_deliverer():
+    """The app's delivery: unitytk's copy into Assets/ (+ optional launch)."""
+    from unitytk import CopyToAssetsDeliverer
+
+    return CopyToAssetsDeliverer()
+
+
+class _HandBack(ptk.Deliverer):
+    """What the app receives from the host half: the payload, as produced."""
+
+    def __init__(self, preflight=True):
+        self.ok = preflight
+        self.payloads = []
+
+    def preflight(self, bridge, request):
+        return self.ok
+
+    def deliver(self, bridge, payload, request):
+        self.payloads.append(payload)
+        return {"fbx": payload.primary, "project": bridge.project_path}
+
+
+def _imported_roots(path):
+    """The top-level package of every import in the module at *path*."""
+    roots = []
+    for node in ast.walk(ast.parse(Path(path).read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            roots += [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            roots.append(node.module.split(".")[0])
+    return roots
 
 
 class TestUnityBridgeUnit(unittest.TestCase):
-    """Pure (no Maya geometry) -- composition + delivery modes."""
+    """Pure (no Maya geometry) -- composition, and what is the app's."""
 
-    def test_delivery_modes(self):
-        self.assertEqual(UnityBridge.list_delivery_modes(), [("copy_to_assets", "")])
+    def test_the_host_half_imports_no_unitytk(self):
+        """The delivery is the Unity Workflow app's: no module of the host half
+        imports unitytk, and mayatk declares no ``unity`` extra."""
+        import mayatk.env_utils.unity_bridge as package
+
+        folder = Path(package.__file__).resolve().parent
+        for path in sorted(folder.glob("*.py")):
+            with self.subTest(module=path.name):
+                self.assertNotIn("unitytk", _imported_roots(path))
+        pyproject = folder.parents[2] / "pyproject.toml"
+        self.assertNotIn("unitytk", pyproject.read_text(encoding="utf-8"))
+
+    def test_its_delivery_is_the_callers(self):
+        self.assertIsNone(UnityBridge().deliverer)
+        deliverer = _HandBack()
+        bridge = UnityBridge(project_path="C:/proj", deliverer=deliverer)
+        self.assertIs(bridge.deliverer, deliverer)
+        self.assertEqual(bridge.project_path, "C:/proj")
+        for gone in ("list_delivery_modes", "list_template_modes", "_deliverer_cls"):
+            self.assertFalse(hasattr(UnityBridge, gone), gone)
+
+    def test_an_optional_package_installs_where_maya_imports(self):
+        """The app, opened inside Maya, installs unitytk through its engine."""
+        from mayatk.env_utils.handoff_export import BridgeHost
+
+        with mock.patch.object(BridgeHost, "install_package") as install:
+            UnityBridge.install_package("unitytk>=0.1.0")
+        install.assert_called_once_with("unitytk>=0.1.0")
 
     def test_ships_the_metadata_carrier(self):
         """This FBX lands in Assets/ as the deliverable, not as an intermediate.
@@ -60,66 +124,39 @@ class TestUnityBridgeUnit(unittest.TestCase):
         self.assertIs(getattr(MayaExportMixin, "include_animation", None), False)
 
     def test_params_defaults(self):
+        """The export rows only: the delivery's rows are the app's."""
         d = UnityBridge().params_defaults()
-        self.assertEqual(d["ASSETS_SUBDIR"], "Imported")
-        self.assertEqual(d["LAUNCH_MODE"], "")  # no-launch default
+        self.assertEqual(
+            set(d), {"SCOPE", "INCLUDE_MATERIALS", "EMBED_TEXTURES", "TRIANGULATE"}
+        )
         self.assertTrue(d["INCLUDE_MATERIALS"])
         self.assertEqual(d["SCOPE"], "selected")
-        self.assertEqual(d["UNITY_VERSION"], "")  # auto/newest
 
-    def test_the_panel_reads_its_registry_off_the_engine(self):
-        """tentacle's shared Unity Bridge builds its rows from
+    def test_the_app_reads_its_rows_off_the_engine(self):
+        """The Unity Workflow app builds its Current Scene rows from
         ``UnityBridge.params_registry()``; the engine's defaults read the same."""
         from mayatk.env_utils.unity_bridge import parameters as P
 
         self.assertIs(UnityBridge.params_registry(), P.Parameters)
         self.assertEqual(UnityBridge().params_defaults(), P.Parameters.defaults())
-
-    def test_script_params_are_a_runtime_populated_checklist(self):
-        """The Manage Unity Scripts mode owns a checkable script list + the
-        action combo; the list's entries are filled from the installed unitytk
-        release by the panel, so the registry hard-codes no C# filenames."""
-        from mayatk.env_utils.unity_bridge import parameters as P
-
-        spec = P.PARAMS["SCRIPTS"]
-        self.assertEqual(spec.kind, "check_list")
-        self.assertEqual(list(spec.choices), [])  # runtime-populated
-        self.assertEqual(spec.default, [])
-        self.assertTrue({"SCRIPTS", "SCRIPTS_ACTION"}.issubset(set(P.PARAMS)))
-
-    def test_deployable_components_back_the_checklist(self):
-        """The checklist rows are unitytk's deployable components -- optional
-        controllers only; the core files ride along with every install."""
-        from unitytk import TemplateDeployer
-
-        comps = TemplateDeployer.components()
-        self.assertTrue(comps[0].required and comps[0].key == "core")
-        optional = [c for c in comps if not c.required]
-        self.assertIn("audio_event", [c.key for c in optional])
-        self.assertTrue(all(c.label and c.files for c in optional))
-
-    def test_preflight_requires_project(self):
-        br = UnityBridge()
-        self.assertFalse(br.deliverer.preflight(br, _copy_req()))  # no project set
-
-    def test_preflight_rejects_non_project_dir(self):
-        tmp = tempfile.mkdtemp()
-        try:
-            br = UnityBridge(project_path=tmp)  # no Assets/ subdir
-            self.assertFalse(br.deliverer.preflight(br, _copy_req()))
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual({spec.section for spec in P.PARAMS.values()}, {"Export"})
 
 
 class TestUnityBridgeSend(MayaTkTestCase):
-    """End-to-end: real Maya export -> copy into a temp Unity project's Assets/."""
+    """End-to-end: real Maya export -> the app's delivery (unitytk) into a temp
+    Unity project's Assets/."""
 
     def setUp(self):
         super().setUp()
         self.tmp = Path(tempfile.mkdtemp(prefix="unity_bridge_test_"))
         self.project = self.tmp / "UnityProj"
         (self.project / "Assets").mkdir(parents=True)
-        self.bridge = UnityBridge(project_path=str(self.project))
+        if not UNITYTK:
+            shutil.rmtree(self.tmp, ignore_errors=True)
+            self.skipTest("unitytk (the app's delivery) is not on the path")
+        self.bridge = UnityBridge(
+            project_path=str(self.project), deliverer=_unity_deliverer()
+        )
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -292,6 +329,47 @@ class TestUnityBridgeSend(MayaTkTestCase):
         self.assertIsNone(result)
 
 
+class TestUnityBridgeHandsTheAppItsFiles(MayaTkTestCase):
+    """The host half's contract with the app, with no unitytk: the scope's FBX
+    and its asset name go to the delivery the app attached, checked first."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = Path(tempfile.mkdtemp(prefix="unity_handback_test_"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_the_app_receives_the_fbx_and_the_asset_name(self):
+        cube = cmds.polyCube(name="UnityHandBack")[0]
+        deliverer = _HandBack()
+        bridge = UnityBridge(project_path=str(self.tmp), deliverer=deliverer)
+        result = bridge.send([cube], template="copy_to_assets", mode="")
+        self.assertIsNotNone(result)
+        (payload,) = deliverer.payloads
+        self.assertTrue(ptk.FbxFile.is_fbx(payload.primary), payload.primary)
+        self.assertEqual(payload.extras["default_asset_name"], "UnityHandBack")
+        self.assertEqual(result["project"], str(self.tmp))
+
+    def test_a_refused_delivery_exports_nothing(self):
+        cube = cmds.polyCube(name="UnityRefused")[0]
+        bridge = UnityBridge(deliverer=_HandBack(preflight=False))
+        with mock.patch.object(UnityBridge, "_produce") as produce:
+            self.assertIsNone(bridge.send([cube], template="copy_to_assets", mode=""))
+        produce.assert_not_called()
+
+    def test_a_send_without_delivery_exports_nothing(self):
+        """Library use without the app: refused, saying what is missing,
+        before the export is paid for."""
+        cube = cmds.polyCube(name="UnityNoDelivery")[0]
+        bridge = UnityBridge()
+        with mock.patch.object(UnityBridge, "_produce") as produce:
+            with mock.patch.object(bridge.logger, "error") as error:
+                self.assertIsNone(
+                    bridge.send([cube], template="copy_to_assets", mode="")
+                )
+        produce.assert_not_called()
+        self.assertIn("no deliverer", error.call_args[0][0])
+
+
 _MISSING = object()  # "not passed" -- distinct from an explicit bridge=None
 
 
@@ -370,6 +448,25 @@ class TestUnityScopeResolution(MayaTkTestCase):
         resolved = [str(o) for o in self._resolve("visible")]
         self.assertTrue(any("VisibleCube" in o for o in resolved))
         self.assertFalse(any("HiddenCube" in o for o in resolved))
+
+    def test_the_engine_resolves_the_apps_scope(self):
+        """What the app asks its engine (``scope_objects``): the selection,
+        the DAG roots for Entire Scene, the visible, and no widening."""
+        cube = cmds.polyCube(name="scope_app_cube")[0]
+        grp = cmds.group(cube, name="scope_app_group")
+        hidden = cmds.polyCube(name="scope_app_hidden")[0]
+        cmds.setAttr(f"{hidden}.visibility", 0)
+        cmds.select(cube, replace=True)
+        bridge = UnityBridge()
+
+        def leaves(scope):
+            return [str(o).split("|")[-1] for o in bridge.scope_objects(scope)]
+
+        self.assertEqual(leaves("selected"), [cube])
+        self.assertEqual(leaves("bogus"), [cube])
+        self.assertIn(grp, leaves("all"))
+        self.assertIn(cube, leaves("visible"))
+        self.assertNotIn(hidden, leaves("visible"))
 
     def test_a_maya_scope_ships_as_resolved(self):
         """Maya's export-selection writes a group's subtree: no closure."""

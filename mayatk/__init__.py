@@ -181,7 +181,8 @@ DEFAULT_INCLUDE = {
     # Live browser / WebXR preview — a hand-off bridge whose target is a loopback
     # PreviewServer rather than an app. Counterpart of blendertk's ``WebXrPreview``.
     "env_utils.webxr_preview": "WebXrPreview",
-    # Unity bridge engine (``btk.UnityBridge`` twin); its panel is tentacle's shared tool.
+    # The Unity hand-off's Maya half (``btk.UnityBridge`` twin); its panel is extapps'
+    # Unity Workflow app, opened by tentacle with this engine injected.
     "env_utils.unity_bridge._unity_bridge": "UnityBridge",
     # What every bridge panel asks of the host: scope, closure, package install.
     "env_utils.handoff_export": "BridgeHost",
@@ -567,12 +568,17 @@ MOVED_NAMES = {
         "tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher",
         "0.30.0",
     ),
-    "UnityBridgeSlots": (
-        "tentacle.slots.tools.unity_bridge.UnityBridgeSlots",
+    # The Unity panel: tentacle's for a while, now the one Unity app, extapps' Unity
+    # Workflow, which tentacle opens with ``UnityBridge`` as its engine.
+    "UnityBridgeSlots": ("extapps.UnityWorkflowSlots", "0.30.0"),
+    "UnityPanelMixin": ("extapps.UnityWorkflowSlots", "0.30.0"),
+    # The delivery is the app's, over unitytk's file bridge and its modes.
+    "UnityBridge.list_template_modes": (
+        "unitytk.FileToUnityBridge.list_template_modes",
         "0.30.0",
     ),
-    "UnityPanelMixin": (
-        "tentacle.slots.tools._unity_bridge._unity_panel.UnityPanelMixin",
+    "UnityBridge.list_delivery_modes": (
+        "unitytk.CopyToAssetsDeliverer.DELIVERY_MODES",
         "0.30.0",
     ),
     "ShotsSlots": (
