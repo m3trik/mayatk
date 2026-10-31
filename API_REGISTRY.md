@@ -104,10 +104,9 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`env_utils/reference_manager/_reference_manager.py`](#env_utils--reference_manager--_reference_manager) — Reference Manager engine — Maya file references, assemblies and workspaces.
 - [`env_utils/scene_exporter/_scene_exporter.py`](#env_utils--scene_exporter--_scene_exporter)
 - [`env_utils/scene_exporter/task_manager.py`](#env_utils--scene_exporter--task_manager) — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
-- [`env_utils/scene_state.py`](#env_utils--scene_state) — Read named sections of live-scene state for transport.
 - [`env_utils/script_output.py`](#env_utils--script_output)
-- [`env_utils/unity_bridge/_unity_bridge.py`](#env_utils--unity_bridge--_unity_bridge) — Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
-- [`env_utils/unity_bridge/parameters.py`](#env_utils--unity_bridge--parameters) — User-tunable parameters for the Maya->Unity bridge panel.
+- [`env_utils/unity_bridge/_unity_bridge.py`](#env_utils--unity_bridge--_unity_bridge) — Unity bridge engine -- the Maya half of the Unity Workflow app.
+- [`env_utils/unity_bridge/parameters.py`](#env_utils--unity_bridge--parameters) — The Maya export rows of the Unity hand-off.
 - [`env_utils/usd.py`](#env_utils--usd) — USD import / export over Maya's native ``mayaUsd`` runtime.
 - [`env_utils/webxr_preview.py`](#env_utils--webxr_preview) — Push the Maya selection to a live browser / WebXR preview.
 - [`env_utils/workspace_manager.py`](#env_utils--workspace_manager)
@@ -218,7 +217,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L269) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L267) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -1281,7 +1280,7 @@ Hermetic preview with replay-on-commit (H1 design): Maya's preview session.
   - `CleanupContract.add_file(self, path) -> None`
   - `CleanupContract.record_modification(self, node: str, attr: str) -> None`
   - `CleanupContract.rollback(self) -> None`
-- **[`class MayaPreviewSession`](mayatk/mayatk/core_utils/preview.py#L478)** — Maya's scene half of a preview (:class:`uitk.PreviewSession`).
+- **[`class MayaPreviewSession`](mayatk/mayatk/core_utils/preview.py#L527)** — Maya's scene half of a preview (:class:`uitk.PreviewSession`).
   - `MayaPreviewSession.captured_objects(self) -> List[str]` *(property)* — The objects the preview (or the commit) captured, components
   - `MayaPreviewSession.selection() -> List[str]` *(static)* — The current selection, components included.
   - `MayaPreviewSession.begin(self, objects) -> None` — Capture *objects* and their pristine per-face shading.
@@ -1293,7 +1292,7 @@ Hermetic preview with replay-on-commit (H1 design): Maya's preview session.
   - `MayaPreviewSession.undo_step(name: str)` *(static)* — One undo chunk named *name* (``CoreUtils.undo_chunk``).
   - `MayaPreviewSession.unrecorded()` *(static)* — Undo recording off, the queue kept (``CoreUtils.undo_disabled``).
   - `MayaPreviewSession.select_result(self, checkbox, results, committed: bool) -> None` — :meth:`Preview.apply_result_selection` in object mode;
-- **[`class Preview(uitk.PreviewController)`](mayatk/mayatk/core_utils/preview.py#L769)** — Hermetic preview orchestrator (H1): ``Preview(slot, ui.chk000, ui.b000, ...)``.
+- **[`class Preview(uitk.PreviewController)`](mayatk/mayatk/core_utils/preview.py#L822)** — Hermetic preview orchestrator (H1): ``Preview(slot, ui.chk000, ui.b000, ...)``.
   - `Preview.apply_result_selection(widget, results, *, object_mode: bool = False, defer: bool = False) -> None` *(static)* — Select the operation's result(s) — or explicitly deselect them — per a
 
 <a id="core_utils--script_job_manager"></a>
@@ -1603,7 +1602,7 @@ Procedural draped-cloth (curtain) generator for Maya.
 <a id="edit_utils--naming--_naming"></a>
 ### `edit_utils/naming/_naming.py`
 
-- **[`class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L20)** — Batch find / rename / suffix scene nodes.
+- **[`class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L19)** — Batch find / rename / suffix scene nodes.
   - `Naming.SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]` — ``(keyword, affix, label, type key)`` -- the live convention, joined
   - `Naming.affix_rules(cls, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> Dict[str, 'ptk.AffixRule']` *(class)* — ``{Maya type key: AffixRule}`` -- the convention bound to this host.
   - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
@@ -1619,7 +1618,8 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `Naming.type_key(cls, obj: str) -> str` *(class)* — Resolve a node to its suffix-by-type key (see ``SUFFIX_TYPES``).
   - `Naming.affix_for(cls, obj: str, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> 'ptk.AffixRule'` *(class)* — The convention's affix rule for *obj*'s OWN type.
   - `Naming.suffix_by_type(cls, objects: Union[str, object, List[Union[str, object]]], group_suffix: Optional[str] = None, locator_suffix: Optional[str] = None, joint_suffix: Optional[str] = None, mesh_suffix: Optional[str] = None, nurbs_curve_suffix: Optional[str] = None, camera_suffix: Optional[str] = None, light_suffix: Optional[str] = None, display_layer_suffix: Optional[str] = None, ik_handle_suffix: Optional[str] = None, nurbs_surface_suffix: Optional[str] = None, cluster_suffix: Optional[str] = None, lattice_suffix: Optional[str] = None, skin_cluster_suffix: Optional[str] = None, blend_shape_suffix: Optional[str] = None, constraint_suffix: Optional[str] = None, material_suffix: Optional[str] = None, shading_group_suffix: Optional[str] = None, texture_suffix: Optional[str] = None, set_suffix: Optional[str] = None, custom_suffixes: Optional[Dict[str, str]] = None, affix_mode: Optional[str] = None, affix_modes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Apply each object's conventional type **affix**, stripping any other it carries.
-  - `Naming.append_location_based_suffix(cls, objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False, dry_run: bool = False)` *(class)* — Rename objects with a suffix defined by its location from origin.
+  - `Naming.append_location_based_suffix(cls, objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False, order: str = 'distance', dry_run: bool = False)` *(class)* — Rename objects with a suffix numbering them by location.
+  - `Naming.legalize(name: str) -> str` *(static)* — *name* as a Maya node name, or ``""`` when it holds no name at all.
 
 <a id="edit_utils--primitives"></a>
 ### `edit_utils/primitives.py`
@@ -2040,6 +2040,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
   - `FbxUtils.set_fbx_options(options: Dict[str, Any])` *(static)* — Apply FBX export options via MEL commands.
   - `FbxUtils.load_preset(preset_path: str)` *(static)* — Load an FBX export preset file.
   - `FbxUtils.export(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True, plan: Optional['FbxUtils.WritePlan'] = None) -> str` *(class)* — Export geometry to an FBX file.
+  - `FbxUtils.finish_write(file_path: str, logger: Optional[logging.Logger] = None) -> Dict[str, int]` *(static)* — The repair every Maya FBX write takes before anything reads the file.
   - `FbxUtils.drop_rig_apparatus(file_path: str, scope: Optional[Iterable[str]] = None, logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]` *(static)* — Remove the apparatus of the rigs a written FBX baked, in place.
   - `FbxUtils.embed_dependencies(file_path: str, search_dirs: Optional[Iterable[str]] = None, files: Optional[Iterable[Any]] = None, logger: Optional[logging.Logger] = None, walk_root: Optional[str] = None) -> Optional[Dict[str, Any]]` *(static)* — Embed every file a written FBX's scene records name, in place.
   - `FbxUtils.finish_deliverable(file_path: str, glb: Optional[str] = None, search_dirs: Optional[Iterable[str]] = None, logger: Optional[logging.Logger] = None, walk_root: Optional[str] = None, files: Optional[Iterable[Any]] = None) -> Optional[Dict[str, Any]]` *(static)* — The passes a written FBX deliverable takes, in place.
@@ -2060,7 +2061,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
   - `FbxUtils.declared_takes() -> list` *(static)* — The takes the scene's records declare -- each clip's range in
   - `FbxUtils.apply_takes_from_node(node: Optional[str] = None, attr: Optional[str] = None, resample: bool = True) -> int` *(static)* — Realize the takes the scene declares into FBX export state.
   - `FbxUtils.producers(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]` *(class)* — :attr:`PRODUCERS` resolved to callables, unimportable ones skipped;
-  - `FbxUtils.export_context(cls, mode: str = ptk.ExportContext.PIPELINE, **decisions) -> ptk.ExportContext` *(class)* — A context for this scene: provenance filled in, *decisions*
+  - `FbxUtils.export_context(cls, mode: str = ptk.ExportContext.PIPELINE, writer: str = 'fbx', writer_options: Optional[Dict[str, Any]] = None, **decisions) -> ptk.ExportContext` *(class)* — A context for this scene: provenance filled in, *decisions*
   - `FbxUtils.publish(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None) -> ptk.ExportSnapshot` *(class)* — Assemble every producer's record and commit the carrier ONCE.
   - `FbxUtils.publish_authored(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot` *(class)* — Commit a tool's own records at AUTHORING time, with this scene's
   - `FbxUtils.stagers(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]` *(class)* — The stager table for a bracket: the known stagers (*names* narrows
@@ -2085,7 +2086,7 @@ Maya-side selection + export hooks shared by the hand-off bridge engines.
 - **[`class MayaExportMixin`](mayatk/mayatk/env_utils/handoff_export.py#L40)** — The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).
   - `MayaExportMixin.lightmap_search_dirs(self) -> List[str]` — Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
   - `MayaExportMixin.stepped_keys(nodes: Optional[List[str]] = None, spell: Optional[Callable] = None) -> Dict[str, Dict[str, List[float]]]` *(static)* — The hand-off manifest's ``stepped_keys`` (``ptk.HandoffManifest.
-- **[`class BridgeHost`](mayatk/mayatk/env_utils/handoff_export.py#L862)** — What a bridge panel asks of Maya: a Scope's objects, what a send of them
+- **[`class BridgeHost`](mayatk/mayatk/env_utils/handoff_export.py#L865)** — What a bridge panel asks of Maya: a Scope's objects, what a send of them
   - `BridgeHost.resolve_scope(scope: str, bridge=None) -> List[str]` *(static)* — The objects a ``SCOPE`` word names (``uitk.bridge.Parameters.scope_spec``).
   - `BridgeHost.scope_closure(objects, params: Optional[Dict[str, Any]] = None) -> List[str]` *(static)* — What a send of the scoped *objects* ships: the objects as they are.
   - `BridgeHost.install_package(spec: str) -> None` *(static)* — Install the pip requirement *spec* where this session imports from.
@@ -2367,16 +2368,6 @@ The Scene Exporter's task/check manager -- what ``perform_export`` drives.
   - `TaskManager.check_definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return the check definitions for the UI.
   - `TaskManager.definitions(self) -> Dict[str, Dict[str, Any]]` *(property)* — Return all definitions combined for backward compatibility.
 
-<a id="env_utils--scene_state"></a>
-### `env_utils/scene_state.py`
-
-Read named sections of live-scene state for transport.
-
-- **[`class SceneState`](mayatk/mayatk/env_utils/scene_state.py#L47)** — Section-registry reader of scene state the FBX cannot express --
-  - `SceneState.source() -> Dict[str, str]` *(static)* **DEPRECATED (remove in 0.29.0)** — This host's identity for the envelope's ``source`` key.
-  - `SceneState.read(cls, objects: List[str], include_textures: bool = True, sections: Optional[List[str]] = None) -> Dict[str, Any]` *(class)* **DEPRECATED (remove in 0.29.0)** — Scene state the FBX cannot express, one key per requested section.
-  - `SceneState.emission_weight(cls, mat: str) -> float` *(class)* — The shader's separate emission scalar, or 1.0 when it has none.
-
 <a id="env_utils--script_output"></a>
 ### `env_utils/script_output.py`
 
@@ -2387,21 +2378,20 @@ Read named sections of live-scene state for transport.
 <a id="env_utils--unity_bridge--_unity_bridge"></a>
 ### `env_utils/unity_bridge/_unity_bridge.py`
 
-Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
+Unity bridge engine -- the Maya half of the Unity Workflow app.
 
-- **[`class UnityBridge(MayaExportMixin, pythontk.HandoffBridge)`](mayatk/mayatk/env_utils/unity_bridge/_unity_bridge.py#L37)** — Export the Maya selection and copy it into a Unity project's ``Assets/``.
-  - `UnityBridge.list_template_modes(self)`
-  - `UnityBridge.params_registry(cls)` *(class)* — The panel's parameter registry (``parameters.Parameters``, a
+- **[`class UnityBridge(MayaExportMixin, pythontk.HandoffBridge)`](mayatk/mayatk/env_utils/unity_bridge/_unity_bridge.py#L33)** — Export the Maya scope for a Unity project, through the delivery the caller attaches.
+  - `UnityBridge.params_registry(cls)` *(class)* — The export rows the Unity Workflow app shows for its Current Scene
   - `UnityBridge.params_defaults(self)`
-  - `UnityBridge.list_delivery_modes(cls) -> List[Tuple[str, str]]` *(class)* — ``[(mode_stem, ""), ...]`` for the panel's delivery combo.
+  - `UnityBridge.install_package(spec: str) -> None` *(static)* — Install the pip requirement *spec* where this Maya session imports it
 
 <a id="env_utils--unity_bridge--parameters"></a>
 ### `env_utils/unity_bridge/parameters.py`
 
-User-tunable parameters for the Maya->Unity bridge panel.
+The Maya export rows of the Unity hand-off.
 
-- [`PARAMS`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L26) — constant
-- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L167)** — Parameters — module namespace.
+- [`PARAMS`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L25) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L63)** — Parameters — module namespace.
 
 <a id="env_utils--usd"></a>
 ### `env_utils/usd.py`
@@ -2643,6 +2633,8 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
   - `LightmapRecords.heal_lightmap_paths(cls, objects: Optional[List[str]] = None) -> Dict[str, Any]` *(class)* — Rewrite stale marker hints to where the maps actually are;
   - `LightmapRecords.normalize_lightmap_paths(cls, objects: Optional[List[str]] = None, relative: bool = True) -> int` *(class)* — Rewrite every in-scope marker's folder to its portable (or absolute) spelling.
   - `LightmapRecords.relocate_lightmaps(cls, dest_dir: str, source_dir: str = '', mode: str = 'copy', objects: Optional[List[str]] = None, dry_run: bool = False, maps: Optional[Iterable[str]] = None) -> Dict[str, Any]` *(class)* — Gather the scene's lightmaps into *dest_dir* and repoint the markers.
+  - `LightmapRecords.keep_sources(cls, deps: List[Dict[str, Any]], mode: str) -> List[str]` *(class)* — Mark the records a MOVE must copy instead (``keep_source``), and say so.
+  - `LightmapRecords.landed_dirs(paths: Iterable[str]) -> Dict[str, str]` *(static)* — ``{lower-case map name: its folder}`` for maps now at *paths* --
   - `LightmapRecords.repath_lightmaps(cls, dirs_by_map: Dict[str, str], objects: Optional[List[str]] = None, relative: bool = True) -> int` *(class)* — Point every in-scope marker naming a map in *dirs_by_map* at its new folder.
   - `LightmapRecords.rename_lightmap(cls, old_name: str, new_name: str) -> int` *(class)* — Re-stamp every record naming map *old_name* with *new_name*.
   - `LightmapRecords.fork_lightmap(cls, old_name: str, new_name: str) -> int` *(class)* — Make *new_name* -- this scene's copy of a map another scene file
@@ -3245,7 +3237,7 @@ Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - [`TARGET_AUTO`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L62) — constant
 - [`TARGET_NEW`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L63) — constant
 - [`TARGET_CURRENT`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L64) — constant
-- **[`class SubstanceBridge(SubstanceEngine)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L112)** — Export Maya selection to Substance Painter via a chosen template.
+- **[`class SubstanceBridge(SubstanceEngine)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L114)** — Export Maya selection to Substance Painter via a chosen template.
   - `SubstanceBridge.params_registry(cls)` *(class)* — The panel's parameter registry (``parameters.Parameters``, a
   - `SubstanceBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, painter_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, target: Union[str, int] = TARGET_AUTO, params: Optional[Dict[str, Any]] = None, **legacy_kwargs: Any) -> Optional[Dict[str, Any]]` — Export *objects*, render *template* in *mode*, hand off to Painter.
   - `SubstanceBridge.source_model_path_for(cls, fbx_path: str) -> str` *(class)* — ``.../asset.fbx`` -> ``.../asset_source.fbx``.
@@ -3316,12 +3308,16 @@ HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
 
 Install the substance_rpc plugin into Painter's user plugin folder.
 
-- [`PLUGIN_NAME`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L33) — constant
-- **[`class Installer(_InstallerInternal)`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L110)** — Installer — module namespace.
+- [`PLUGIN_NAME`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L34) — constant
+- [`PAINTER_SETTINGS`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L114) — constant
+- [`LAUNCH_AT_START_KEY`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L115) — constant
+- **[`class Installer(_InstallerInternal)`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L118)** — Installer — module namespace.
   - `Installer.user_plugin_dir() -> Optional[Path]` *(static)* — Resolve Painter's Python plugins folder.
   - `Installer.is_installed() -> bool` *(static)* — True if the plugin is present at the resolved user plugin dir.
   - `Installer.is_current() -> bool` *(static)* — True if the installed plugin matches the one this package ships.
   - `Installer.install(force: bool = False) -> Optional[Path]` *(static)* — Install the plugin into Painter's user plugin folder.
+  - `Installer.painter_settings()` *(static)* — Painter's own QSettings store, or ``None`` without Qt.
+  - `Installer.enable_launch_at_start() -> bool` *(static)* — Turn on Painter's switch to start the plugin at launch, unless the
   - `Installer.uninstall() -> bool` *(static)* — Remove the plugin from the user plugin folder.
 
 <a id="mat_utils--substance_bridge--substance_rpc--plugin_src--substance_rpc--__init__"></a>
@@ -3465,7 +3461,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 
 Texture Path Editor engine: the scene's texture paths and the commands that fix them.
 
-- **[`class TexturePathEditor`](mayatk/mayatk/mat_utils/texture_path_editor.py#L43)** — The Texture Path Editor's scene half: file nodes, their paths, and the
+- **[`class TexturePathEditor`](mayatk/mayatk/mat_utils/texture_path_editor.py#L44)** — The Texture Path Editor's scene half: file nodes, their paths, and the
   - `TexturePathEditor.texture_dir(self) -> str` — The project's texture folder (the ``sourceImages`` rule), ``""`` if none.
   - `TexturePathEditor.resolve_path(self, path: str, file_node=None)` — ``(exists, absolute path)`` for a stored or typed *path*.
   - `TexturePathEditor.is_absolute_path(path: str) -> bool` *(static)* — Whether *path* is stored absolute -- a Normalize Paths candidate.
@@ -3480,7 +3476,11 @@ Texture Path Editor engine: the scene's texture paths and the commands that fix 
   - `TexturePathEditor.normalize_paths(self, file_nodes, external_mode: str = 'rewrite') -> int` — Rewrite (selected) paths inside the project to relative.
   - `TexturePathEditor.resolve_missing_textures(self, modes, file_nodes=None) -> int` — Rebind missing textures to files found under sourceimages.
   - `TexturePathEditor.unresolved_file_nodes(self, file_nodes)` — The nodes whose stored path does not resolve -- what a Find & Copy
-  - `TexturePathEditor.find_and_copy_textures(self, file_nodes, answers, lightmaps=(), dry_run=False, progress=None) -> bool` — Collect sources, relocate them into one directory, repath the nodes.
+  - `TexturePathEditor.plan_find_and_copy(self, file_nodes, answers, lightmaps=(), choices=None, progress=None)` — What Find & Copy would do: one row per file node and per lightmap.
+  - `TexturePathEditor.find_and_copy_textures(self, file_nodes, answers, lightmaps=(), dry_run=False, progress=None, plan=None) -> bool` — Find & Copy: gather the scope's textures into one folder and repath.
+  - `TexturePathEditor.read_elsewhere(self, nodes)` — The files the scene reads through texture readers other than *nodes*
+  - `TexturePathEditor.stored_form(self, path: str, file_node=None) -> str` — The path a file node stores for the absolute *path*: project-relative
+  - `TexturePathEditor.repath(self, rows) -> int` — Point each landed Collect row at its destination (``ptk.CollectHost``),
   - `TexturePathEditor.set_texture_path(self, file_node, path: str, relative: bool = False) -> str` — Point *file_node* at *path* -- Browse for File, or a typed path.
   - `TexturePathEditor.is_file_rename(self, stored: str, typed: str, file_node=None) -> bool` — Whether a typed path renames *stored*'s file rather than repointing.
   - `TexturePathEditor.apply_path_edit(self, file_node, typed: str, shader=None, sync=None) -> str` — A path typed into *file_node*'s row: rename its file, or repoint it.

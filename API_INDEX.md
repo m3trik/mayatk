@@ -369,7 +369,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/naming/_naming.py`
 - `class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`
-  - methods: SUFFIX_TYPES, affix_rules, rename, scene_objects, scope_objects, select_by_name, select_link, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, affix_for, suffix_by_type, append_location_based_suffix
+  - methods: SUFFIX_TYPES, affix_rules, rename, scene_objects, scope_objects, select_by_name, select_link, generate_unique_name, conform_shape_names, strip_illegal_chars, strip_chars, set_case, type_key, affix_for, suffix_by_type, append_location_based_suffix, legalize
 
 ### `edit_utils/primitives.py` — Primitive creation utilities for Maya.
 - `class Primitives`
@@ -496,7 +496,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(pythontk.HelpMixin)`
-  - methods: hook, load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, finish_deliverable, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, write_plan, apply_write_plan, planned_bake_range, offsets_folded, animation_export_enabled, set_animation_export, reset_takes, apply_takes, takes_span, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: hook, load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, finish_write, drop_rig_apparatus, embed_dependencies, finish_deliverable, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, write_plan, apply_write_plan, planned_bake_range, offsets_folded, animation_export_enabled, set_animation_export, reset_takes, apply_takes, takes_span, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -563,19 +563,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class TaskManager(TaskFactory, _SceneTasksMixin, _TextureTasksMixin, _AnimationTasksMixin, _TaskChecksMixin, _TaskDefinitionsMixin)`
   - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, capture_write_baseline, write_plan, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, ensure_scene_records_published, apply_declared_takes, ship_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
 
-### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
-- `class SceneState`
-  - methods: source, read, emission_weight
-
 ### `env_utils/script_output.py`
 - `class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog)`
   - methods: toggle, show_console
 
-### `env_utils/unity_bridge/_unity_bridge.py` — Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
+### `env_utils/unity_bridge/_unity_bridge.py` — Unity bridge engine -- the Maya half of the Unity Workflow app.
 - `class UnityBridge(MayaExportMixin, pythontk.HandoffBridge)`
-  - methods: list_template_modes, params_registry, params_defaults, list_delivery_modes
+  - methods: params_registry, params_defaults, install_package
 
-### `env_utils/unity_bridge/parameters.py` — User-tunable parameters for the Maya->Unity bridge panel.
+### `env_utils/unity_bridge/parameters.py` — The Maya export rows of the Unity hand-off.
 - constants: PARAMS
 - `class Parameters(ParamRegistry)`
 
@@ -625,7 +621,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(pythontk.LoggingMixin)`
-  - methods: baked_objects, lightmap_info, commit, bake_state, scene_state, untracked, track, revert, probe, commit_probe, project_root, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, wrote, strangers, foreign_writer, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps, rename_lightmap, fork_lightmap, transfer_lightmaps
+  - methods: baked_objects, lightmap_info, commit, bake_state, scene_state, untracked, track, revert, probe, commit_probe, project_root, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, wrote, strangers, foreign_writer, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, keep_sources, landed_dirs, repath_lightmaps, rename_lightmap, fork_lightmap, transfer_lightmaps
 
 ### `mat_utils/_mat_utils.py` — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - `class MatUtils(_MatUtilsInternal)`
@@ -804,9 +800,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: wait_until_ready, invoke, eval_js, eval_py, reload_mesh, reload_status, project_info
 
 ### `mat_utils/substance_bridge/substance_rpc/installer.py` — Install the substance_rpc plugin into Painter's user plugin folder.
-- constants: PLUGIN_NAME
+- constants: PLUGIN_NAME, PAINTER_SETTINGS, LAUNCH_AT_START_KEY
 - `class Installer(_InstallerInternal)`
-  - methods: user_plugin_dir, is_installed, is_current, install, uninstall
+  - methods: user_plugin_dir, is_installed, is_current, install, painter_settings, enable_launch_at_start, uninstall
 
 ### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/__init__.py` — Substance 3D Painter RPC plugin -- entry point.
 - `start_server(port=None, host=None)`
@@ -860,7 +856,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/texture_path_editor.py` — Texture Path Editor engine: the scene's texture paths and the commands that fix them.
 - `class TexturePathEditor`
-  - methods: texture_dir, resolve_path, is_absolute_path, rows, file_nodes, node_exists, stored_path, selected_file_nodes, reload_textures, set_texture_directory, make_paths_absolute, normalize_paths, resolve_missing_textures, unresolved_file_nodes, find_and_copy_textures, set_texture_path, is_file_rename, apply_path_edit, rename_texture, can_rename_shader, rename_shader, rename_file_node, select_objects, select_file_nodes, graph_file_nodes, delete_consequences, delete_file_nodes, lightmap_dependencies, lightmap_labels, normalize_lightmaps, repath_lightmap, rename_lightmap, lightmap_revert_scope, revert_lightmaps
+  - methods: texture_dir, resolve_path, is_absolute_path, rows, file_nodes, node_exists, stored_path, selected_file_nodes, reload_textures, set_texture_directory, make_paths_absolute, normalize_paths, resolve_missing_textures, unresolved_file_nodes, plan_find_and_copy, find_and_copy_textures, read_elsewhere, stored_form, repath, set_texture_path, is_file_rename, apply_path_edit, rename_texture, can_rename_shader, rename_shader, rename_file_node, select_objects, select_file_nodes, graph_file_nodes, delete_consequences, delete_file_nodes, lightmap_dependencies, lightmap_labels, normalize_lightmaps, repath_lightmap, rename_lightmap, lightmap_revert_scope, revert_lightmaps
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(pythontk.HelpMixin)`
