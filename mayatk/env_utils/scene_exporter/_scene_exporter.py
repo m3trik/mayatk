@@ -372,7 +372,7 @@ class SceneExporter(ptk.SceneExporterBase):
 
         *tasks* is EXACT: only the entries it names run, and an absent task or
         check is off -- there are no implicit defaults. The panel sends every
-        row (``ptk.ExportProfile.read_values``), so a headless caller that wants
+        row (tentacle's ``SceneExporterSlots`` reads them), so a headless caller that wants
         the panel's behaviour passes every row it wants on -- an omitted
         ``apply_declared_takes``, for one, ships a scene's declared shots as one
         continuous clip.

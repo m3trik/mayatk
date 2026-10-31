@@ -70,7 +70,7 @@ class MayaExportMixin:
     #:
     #: Which RECORDS a hand-off refreshes is not a bridge decision any more:
     #: the export bracket runs with a HANDOFF context, which refreshes exactly
-    #: the ``ptk.Kind.DERIVED`` records (the visibility tracks read the curves
+    #: the ``ptk.SceneRecords.Kind.DERIVED`` records (the visibility tracks read the curves
     #: themselves, which an artist edits between one push and the next) and
     #: leaves the authored ones alone -- a producer with nothing to publish
     #: clears its record, and a bridge that merely ships the carrier is not the
