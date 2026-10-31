@@ -150,6 +150,23 @@ class TestReadingEachFamily(_Scene):
         self.assertEqual((entry["metallicFactor"], entry["roughnessFactor"]), (1.0, 0.25))
         self.assertEqual([round(c, 4) for c in entry["emissiveFactor"]], [2.0, 1.0, 0.0])
 
+    def test_a_surfaces_opacity_and_transmission_read_as_the_model_rules(self):
+        """The opacity colour's one value and the transmission note are the
+        model's (``ptk.MaterialFamilies``): a tinted opacity reads as its
+        channels' mean, a glass says the record states no transmission.
+        Added: 2026-10-31"""
+        from mayatk.env_utils.material_records import MaterialRecords
+
+        cube, mat = self._standard_surface("GLASS")
+        cmds.setAttr(f"{mat}.opacity", 0.25, 0.5, 0.75, type="double3")
+        cmds.setAttr(f"{mat}.transmission", 0.5)
+        notes = []
+        (entry,) = MaterialRecords.entries([cube], notes=notes)
+        self.assertEqual(round(entry["baseColorFactor"][3], 4), 0.5)
+        self.assertEqual(
+            notes, [f"Material GLASS: {ptk.MaterialFamilies.TRANSMISSION_NOTE}"]
+        )
+
     def test_a_surface_shader_is_unlit(self):
         mat = cmds.shadingNode("surfaceShader", asShader=True, name="FLAT")
         cmds.setAttr(f"{mat}.outColor", 0.2, 0.3, 0.4, type="double3")

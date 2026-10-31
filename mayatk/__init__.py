@@ -181,9 +181,6 @@ DEFAULT_INCLUDE = {
     # Live browser / WebXR preview — a hand-off bridge whose target is a loopback
     # PreviewServer rather than an app. Counterpart of blendertk's ``WebXrPreview``.
     "env_utils.webxr_preview": "WebXrPreview",
-    # Retired 2026-10-20 (removed in 0.29.0): the sections of live-scene state
-    # a GLB took beside its FBX -- the materials record states every material.
-    "env_utils.scene_state": "SceneState",
     # Unity bridge engine (``btk.UnityBridge`` twin); its panel is tentacle's shared tool.
     "env_utils.unity_bridge._unity_bridge": "UnityBridge",
     # What every bridge panel asks of the host: scope, closure, package install.
@@ -267,6 +264,9 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
+    # The sections of live-scene state a GLB took beside its FBX: the FBX's
+    # materials record states every material (removed 2026-10-31).
+    "SceneState": ("mayatk.MaterialRecords", "0.30.0"),
     # The curtain drape, written once for both hosts (CurtainMesh subclasses it).
     "CurtainDrape": ("pythontk.CurtainDrape", "0.30.0"),
     "DuplicateRadialSlots": (

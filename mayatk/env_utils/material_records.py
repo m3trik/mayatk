@@ -170,8 +170,6 @@ class MaterialRecords(ptk.HelpMixin):
                     notes=notes,
                 )
             )
-            if notes is not None:
-                notes.extend(cls._unstated(mat, node_type))
         if notes is not None:
             for node_type, names in skipped.items():
                 notes.append(
@@ -208,6 +206,7 @@ class MaterialRecords(ptk.HelpMixin):
             return cls._value(mat, attr) if attr else None
 
         factor = cls._opacity_factor(mat, node_type)
+        transmission = ShaderAttributeMap.get_attr(node_type, "transmission")
         return {
             "base_color": held("baseColor"),
             "base_weight": ShaderAttributeMap.base_weight(mat, node_type),
@@ -217,22 +216,9 @@ class MaterialRecords(ptk.HelpMixin):
             "emission_weight": ShaderAttributeMap.emission_weight(mat, node_type),
             "opacity": 1.0 if factor is None else factor,
             "opacity_driven": cls._surface_opacity_is_driven(mat, node_type),
+            # The record has no field for it; the family says so.
+            "transmission": cls._value(mat, transmission[0]) if transmission else None,
         }
-
-    @classmethod
-    def _unstated(cls, mat: str, node_type: str) -> List[str]:
-        """What *mat* renders with that the record has no field for, one
-        sentence each: a surface's transmission (glass), which every reader
-        then shows as its opacity alone."""
-        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
-
-        slot = ShaderAttributeMap.get_attr(node_type, "transmission")
-        if slot and ptk.MaterialFamilies.as_float(cls._value(mat, slot[0]), 0.0) > 0.0:
-            return [
-                f"Material {mat}: its transmission is not stated (the record has "
-                "no transmission); it reads as its opacity alone."
-            ]
-        return []
 
     @classmethod
     def _legacy_values(cls, mat: str, node_type: str) -> Dict[str, Any]:
@@ -301,7 +287,7 @@ class MaterialRecords(ptk.HelpMixin):
                 value = ShaderAttributeMap.read_constant(mat, "opacity", node_type)
                 if not value:
                     return None
-                factor = sum(value) / len(value)
+                factor = ptk.MaterialFamilies.opacity_scalar(value)
             else:
                 node = sources[0].split(".")[0]
                 if cmds.nodeType(node) != "multiplyDivide" or (
