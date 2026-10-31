@@ -4,8 +4,8 @@
 
 DCC- and UI-agnostic. This module is the single source of truth for the
 *values* a template's ``__KEY__`` tokens default to; it deliberately has
-no knowledge of Qt or widget specs. UI layers (the extapps panel, the
-mayatk slots) build their own ``AttributeSpec`` widget registries on top
+no knowledge of Qt or widget specs. UI layers (tentacle's Marmoset panels)
+build their own ``AttributeSpec`` widget registries on top
 of these keys and pass user-edited values back to
 :meth:`MarmosetEngine.send` as a plain dict.
 

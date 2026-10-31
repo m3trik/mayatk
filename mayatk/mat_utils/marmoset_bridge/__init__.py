@@ -14,9 +14,9 @@ Toolbag SDK glue, not a generic utility, so it lives with its consumer
 (mirroring ``substance_bridge``). Layout:
 
 * :mod:`_marmoset_engine` -- ``MarmosetEngine``, the DCC-agnostic core
-  (launch + templated automation). Identical in shape to the copy the
-  standalone extapps ``marmoset_workflow`` panel keeps -- the panel cannot
-  import mayatk, so the engine is vendored into each consumer.
+  (launch + templated automation). Identical in shape to the copy extapps'
+  ``marmoset_workflow`` keeps for tentacle's standalone Marmoset Workflow panel
+  -- extapps cannot import mayatk, so the engine is vendored into each consumer.
 * :mod:`_marmoset_bridge` -- ``MarmosetBridge`` (a :class:`MarmosetEngine`
   that exports the Maya selection to FBX + sidecars, then delegates).
 * :mod:`_toolbag_helpers`, :mod:`toolbag_log`, :mod:`template_params`,

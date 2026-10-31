@@ -8,7 +8,7 @@ either hands off interactively (``send_to``) or runs headless and
 post-processes outputs (``roundtrip``). It takes plain values -- an
 already-exported model path, an optional materials-manifest path, and a
 plain params dict -- so any host can compose it (the Maya bridge in
-mayatk, the standalone Switchboard panel in extapps, a CLI, a test).
+mayatk, tentacle's standalone Marmoset Workflow panel, a CLI, a test).
 """
 
 from __future__ import annotations
