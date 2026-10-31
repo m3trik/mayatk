@@ -376,18 +376,6 @@ class RigUtils(ptk.HelpMixin):
             # Strip suffixes from the original name once
             base_name_stripped = strip_to_base(orig_name)
 
-            mesh_shapes = NodeUtils.get_shapes(obj, no_intermediate=True)
-            mesh_shape = mesh_shapes[0] if mesh_shapes else None
-            vertex_count = (
-                cmds.polyEvaluate(mesh_shape, vertex=True)
-                if mesh_shape and cmds.objectType(mesh_shape) == "mesh"
-                else 0
-            )
-            vertices = (
-                f"{mesh_shape}.vtx[0:{vertex_count - 1}]"
-                if mesh_shape and vertex_count
-                else None
-            )
             orig_parent = cmds.listRelatives(obj, parent=True, path=True)
             is_group = NodeUtils.is_group(obj)
 
@@ -502,12 +490,16 @@ class RigUtils(ptk.HelpMixin):
                     obj = cmds.parent(obj, loc)[0]
 
                 if freeze_locator:
-                    # store=False: rig construction. The LOC is already at
-                    # identity here (the GRP was parent-constrained to it
-                    # before the reparent), so this is a guard, not a move.
-                    # Its subtree flattens with it: a group's channels and its
-                    # contents' zero. A driven object has not joined yet.
-                    XformUtils.freeze_transforms(loc, normal=True, store=False)
+                    # store=False: rig construction. The LOC's own channels
+                    # are at identity here (the GRP was parent-constrained to
+                    # it before the reparent), but the freeze still bakes its
+                    # subtree: a group's channels and its contents' zero, and
+                    # the object's transform flattens into its points. Normals
+                    # are kept as Maya's own Freeze keeps them (no -normal 1:
+                    # that locked every normal, and unlocking them after threw
+                    # away an import's locked or custom normals). A driven
+                    # object has not joined yet.
+                    XformUtils.freeze_transforms(loc, store=False)
 
                 if orig_parent:
                     grp = cmds.parent(grp, orig_parent)[0]
@@ -519,22 +511,10 @@ class RigUtils(ptk.HelpMixin):
                     XformUtils.freeze_transforms(grp, scale=True, store=False)
                     obj = cls._parent_keeping_channels(obj, loc)
 
-            if vertices and mesh_shape and vertex_count:
-                # Re-derive vertices from the shape's CURRENT path — earlier
-                # parent ops may have invalidated the long path captured at
-                # line 240.
-                current_shapes = NodeUtils.get_shapes(obj, no_intermediate=True)
-                if current_shapes:
-                    vertices = f"{current_shapes[0]}.vtx[0:{vertex_count - 1}]"
-                    try:
-                        cmds.polyNormalPerVertex(vertices, unFreezeNormal=True)
-                    except Exception:
-                        pass
-
             # Freeze object after hierarchy is set up (but not groups)
             if freeze_object and not is_group and not driven:
                 # store=False: rig construction, as above.
-                XformUtils.freeze_transforms(obj, normal=True, store=False)
+                XformUtils.freeze_transforms(obj, store=False)
 
             # Rename group, locator, and object using the clean base name.
             # Capture UUIDs first — while every path is still valid — then

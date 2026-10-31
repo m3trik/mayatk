@@ -12,6 +12,7 @@ Tests for RigUtils class functionality including:
 - Skin cluster operations
 """
 
+import math
 import unittest
 from mayatk.node_utils.attributes._attributes import Attributes
 import maya.cmds as cmds
@@ -31,6 +32,30 @@ except ImportError:
     from mayatk.xform_utils._xform_utils import XformUtils
 
 from base_test import MayaTkTestCase
+
+
+def _face_vertex_normals(mesh):
+    """``{(face, vertex): (world normal, locked)}`` for *mesh*'s shape."""
+    import maya.api.OpenMaya as om
+
+    shape = cmds.listRelatives(mesh, shapes=True, fullPath=True, noIntermediate=True)[0]
+    sel = om.MSelectionList()
+    sel.add(shape)
+    fn = om.MFnMesh(sel.getDagPath(0))
+    out = {}
+    for f in range(fn.numPolygons):
+        for v, nid in zip(fn.getPolygonVertices(f), fn.getFaceNormalIds(f)):
+            n = om.MVector(fn.getFaceVertexNormal(f, v, om.MSpace.kWorld)).normal()
+            out[(f, v)] = (n, fn.isNormalLocked(nid))
+    return out
+
+
+def _max_angle(before, after):
+    """The largest angle (degrees) between matching face-vertex normals."""
+    return max(
+        math.degrees(math.acos(max(-1.0, min(1.0, before[k][0] * after[k][0]))))
+        for k in before
+    )
 
 
 class TestRigUtils(MayaTkTestCase):
@@ -239,6 +264,47 @@ class TestRigUtils(MayaTkTestCase):
 
         with self.assertRaises(ValueError):
             RigUtils.create_locator_at_object(self.sphere, rotate_order="abc")
+
+    def test_create_locator_at_object_keeps_locked_normals(self):
+        """Regression: the rig unlocked every normal (``unFreezeNormal``) to undo
+        the ``-normal 1`` freeze it ran, so an FBX import's locked normals over
+        hard-flagged edges went faceted (64 of 112 off by 22.5 degrees on a
+        soft/hard cylinder). The freeze keeps normals as Maya's own does.
+        Fixed: 2026-10-31."""
+        mesh = cmds.polySphere(name="imported", sx=10, sy=6, ch=False)[0]
+        cmds.polySoftEdge(mesh, angle=180, ch=False)
+        cmds.polyNormalPerVertex(f"{mesh}.vtx[*]", freezeNormal=True)
+        cmds.polySoftEdge(mesh, angle=0, ch=False)
+        cmds.xform(mesh, translation=(3, 1, -2), rotation=(30, 45, 10), scale=(1, 2, 0.5))
+        holder = cmds.group(empty=True, name="holder")
+        cmds.xform(holder, translation=(1, 0, 0), rotation=(10, 20, 0), scale=(1.5, 1, 1.5))
+        mesh = cmds.parent(mesh, holder)[0]
+        before = _face_vertex_normals(mesh)
+
+        RigUtils.create_locator_at_object(mesh)
+
+        after = _face_vertex_normals("imported_GEO")
+        self.assertTrue(all(locked for _, locked in after.values()), "normals unlocked")
+        self.assertLess(_max_angle(before, after), 0.01)
+
+    def test_create_locator_at_group_leaves_contents_normals_unlocked(self):
+        """Regression: the LOC freeze ran ``-normal 1`` over a group's contents and
+        nothing unlocked them, so every normal inside a rigged group ended up
+        locked. Fixed: 2026-10-31."""
+        cyl = cmds.polyCylinder(name="part", sx=8, sy=2, sz=1, ch=False)[0]
+        cmds.polySoftEdge(cyl, angle=50, ch=False)
+        cmds.xform(cyl, translation=(3, 1, -2), rotation=(30, 45, 10), scale=(1, 2, 0.5))
+        grp = cmds.group(cyl, name="assembly")
+        before = _face_vertex_normals(cyl)
+        self.assertFalse(any(locked for _, locked in before.values()))
+
+        RigUtils.create_locator_at_object(grp)
+
+        after = _face_vertex_normals(cmds.ls("part*", type="transform", long=True)[0])
+        self.assertFalse(
+            any(locked for _, locked in after.values()),
+            f"{sum(locked for _, locked in after.values())} normals locked",
+        )
 
     def test_create_locator_at_group_preserves_position(self):
         """Verify locator is placed at the group's content center, not scene root.
