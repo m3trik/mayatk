@@ -105,6 +105,7 @@ class TestShelfBootstrapOwnsItsSwitchboard(_InstancesSandbox):
                 MayaUiHandler,
                 _install_deprecation_sink=inert,
                 _install_record_path_rebase=inert,
+                _install_cancel_provider=inert,
             ),
         ):
             handler = MayaUiHandler()
@@ -136,6 +137,7 @@ class TestHostWindowDeclared(_InstancesSandbox):
                     MayaUiHandler,
                     _install_deprecation_sink=inert,
                     _install_record_path_rebase=inert,
+                    _install_cancel_provider=inert,
                 ),
             ):
                 MayaUiHandler()
@@ -161,11 +163,83 @@ class TestHostWindowDeclared(_InstancesSandbox):
                 MayaUiHandler,
                 _install_deprecation_sink=inert,
                 _install_record_path_rebase=inert,
+                _install_cancel_provider=inert,
             ),
         ):
             PresetEditor.APP_LABELS.pop("mayatk", None)
             MayaUiHandler()
             self.assertEqual(PresetEditor.APP_LABELS.get("mayatk"), "Maya")
+
+
+class TestCancelProviderInstalled(unittest.TestCase):
+    """Maya's cancel strategy is installed where every panel in Maya passes --
+    the handler, tentacle's launcher and a shelf button alike -- not at
+    ``import mayatk`` (imports have no side effects). Interactive Maya only, as
+    the import-time install was. Added: 2026-10-29"""
+
+    def setUp(self):
+        from uitk import CancelManager
+
+        saved = CancelManager._provider
+        self.addCleanup(setattr, CancelManager, "_provider", saved)
+        CancelManager.reset()
+
+    def test_interactive_maya_gets_its_provider_once(self):
+        import maya.cmds as cmds
+        from uitk import CancelManager
+
+        from mayatk.ui_utils.cancel_provider import MayaCancelProvider
+
+        with patch.object(cmds, "about", return_value=False):
+            self.assertTrue(MayaUiHandler._install_cancel_provider())
+            self.assertIsInstance(CancelManager.provider(), MayaCancelProvider)
+            first = CancelManager.provider()
+            self.assertFalse(MayaUiHandler._install_cancel_provider())
+            self.assertIs(CancelManager.provider(), first, "installed once")
+
+    def test_constructing_the_handler_installs_it(self):
+        """Building the handler is what installs it: the other installs inert,
+        an interactive session, a fresh singleton slot."""
+        import maya.cmds as cmds
+        import uitk
+        from uitk import CancelManager, PresetEditor, ShortcutManager
+        from uitk.handlers.ui_handler import UiHandler
+
+        from mayatk.ui_utils.cancel_provider import MayaCancelProvider
+
+        def _bare_init(self, switchboard=None, **_kwargs):
+            self.sb = switchboard
+
+        if "MayaWindow" not in ShortcutManager.host_window_names():
+            self.addCleanup(ShortcutManager.unregister_host_window, "MayaWindow")
+        saved = dict(MayaUiHandler._instances)
+        self.addCleanup(MayaUiHandler._instances.update, saved)
+        self.addCleanup(MayaUiHandler._instances.clear)
+        MayaUiHandler._instances.clear()
+        inert = staticmethod(lambda *a, **k: False)
+        with (
+            patch.object(cmds, "about", return_value=False),
+            patch.dict(PresetEditor.APP_LABELS),
+            patch.object(uitk, "Switchboard", lambda **kw: MagicMock()),
+            patch.object(UiHandler, "__init__", _bare_init),
+            patch.multiple(
+                MayaUiHandler,
+                _install_deprecation_sink=inert,
+                _install_record_path_rebase=inert,
+            ),
+        ):
+            MayaUiHandler()
+        self.assertIsInstance(CancelManager.provider(), MayaCancelProvider)
+
+    def test_batch_maya_keeps_the_default(self):
+        import maya.cmds as cmds
+        from uitk import CancelManager
+
+        from mayatk.ui_utils.cancel_provider import MayaCancelProvider
+
+        with patch.object(cmds, "about", return_value=True):
+            self.assertFalse(MayaUiHandler._install_cancel_provider())
+        self.assertNotIsInstance(CancelManager.provider(), MayaCancelProvider)
 
 
 class TestInstanceLiveness(_InstancesSandbox):

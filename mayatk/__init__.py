@@ -718,6 +718,13 @@ MOVED_NAMES = {
         "tentacle.slots.tools._app_bridge.host_bridge.HostBridge",
         "0.30.0",
     ),
+    # The library answers the colour; the Materials panel paints the icon.
+    "get_mat_swatch_icon": ("mayatk.MatUtils.get_mat_swatch_color", "0.30.0"),
+    # The render-effect channel resolver became its class's own classmethod.
+    "spec_for": (
+        "mayatk.mat_utils.render_opacity.channels.ChannelSpec.resolve",
+        "0.30.0",
+    ),
     # ``ShotStore`` is pythontk's one store; its Maya-only member went to the
     # host adapter the store is injected with.
     "ShotStore.undo_queue_top": ("mayatk.MayaShotsHost.undo_queue_top", "0.30.0"),
@@ -729,49 +736,3 @@ bootstrap_package(
     moved=MOVED_NAMES,
 )
 
-
-# Configure pythontk ExecutionMonitor to use mayapy
-try:
-    import sys
-    import os
-
-    # Only configure if running in Maya GUI (Linux: maya.bin, behind bin/maya)
-    executable = sys.executable
-    if os.path.basename(executable).lower() in ("maya.exe", "maya", "maya.bin"):
-        # Imported here, not above the check: it is used only in the GUI, and
-        # mayapy and plain-Python imports of mayatk need not load it.
-        from pythontk import ExecutionMonitor
-
-        # Try using MAYA_LOCATION first as it's most reliable
-        maya_location = os.environ.get("MAYA_LOCATION")
-        mayapy = None
-
-        if maya_location:
-            if sys.platform == "win32":
-                mayapy = os.path.join(maya_location, "bin", "mayapy.exe")
-            else:
-                mayapy = os.path.join(maya_location, "bin", "mayapy")
-
-        # Fallback to looking relative to executable
-        if not mayapy or not os.path.exists(mayapy):
-            exec_dir = os.path.dirname(executable)
-            if sys.platform == "win32":
-                mayapy = os.path.join(exec_dir, "mayapy.exe")
-            else:
-                mayapy = os.path.join(exec_dir, "mayapy")
-
-        if mayapy and os.path.exists(mayapy):
-            ExecutionMonitor.set_interpreter(mayapy)
-
-        # Teach uitk how to cancel safely in this host: Maya's Esc peek works
-        # while a cmds call blocks the main thread, which is the one moment a
-        # Qt shortcut cannot fire. Deferred import — uitk pulls in Qt, and a
-        # missing/headless uitk must not break importing mayatk.
-        try:
-            from mayatk.ui_utils.cancel_provider import MayaCancelProvider
-
-            MayaCancelProvider.install()
-        except Exception:
-            pass
-except ImportError:
-    pass

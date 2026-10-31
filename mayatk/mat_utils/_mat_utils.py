@@ -1708,15 +1708,16 @@ class MatUtils(_MatUtilsInternal):
         )
 
     @staticmethod
-    def get_mat_swatch_icon(
+    def get_mat_swatch_color(
         mat: Union[str, object],
-        size: List[int] = [20, 20],
-        fallback_to_blank: bool = True,
-    ) -> object:
-        """Get an icon with a color fill matching the given material's RGB value."""
-        return MatUtils._get_mat_swatch_icon(
-            mat=mat, size=size, fallback_to_blank=fallback_to_blank
-        )
+    ) -> Optional[Tuple[float, float, float]]:
+        """The material's base colour as ``(r, g, b)`` in 0..1: what its swatch
+        shows (a panel paints the icon), or ``None`` when there is none to read.
+
+        Parameters:
+            mat: The material, by name or node.
+        """
+        return MatUtils._get_mat_swatch_color(mat=mat)
 
     @staticmethod
     @CoreUtils.undoable

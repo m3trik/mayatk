@@ -41,7 +41,6 @@ from mayatk.mat_utils.render_opacity.channels import (
     CHANNELS,
     OPACITY,
     ChannelSpec,
-    spec_for,
 )
 
 
@@ -117,7 +116,7 @@ class OpacityMaterialMode(ptk.LoggingMixin):
         Returns:
             The materials that carried a binding or were duplicates, short names.
         """
-        specs = [spec_for(spec)] if spec is not None else list(CHANNELS.values())
+        specs = [ChannelSpec.resolve(spec)] if spec is not None else list(CHANNELS.values())
         bindings = cls._bindings()
         touched: List[str] = []
         for obj in cmds.ls(objects):

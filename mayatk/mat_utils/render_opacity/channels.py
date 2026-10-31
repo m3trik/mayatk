@@ -38,6 +38,24 @@ class ChannelSpec:
     #: scene saved with that preview on. New code never creates one.
     material_suffix: str = ""
 
+    @classmethod
+    def resolve(cls, channel) -> "ChannelSpec":
+        """Resolve a name or spec to a :class:`ChannelSpec`.
+
+        Parameters:
+            channel: A channel name (a key of :data:`CHANNELS`) or a spec.
+
+        Raises:
+            KeyError: For a name not in :data:`CHANNELS`.
+        """
+        if isinstance(channel, cls):
+            return channel
+        if channel not in CHANNELS:
+            raise KeyError(
+                f"Unknown render-effect channel {channel!r}. Known: {', '.join(CHANNELS)}."
+            )
+        return CHANNELS[channel]
+
     def stop_attr(self, stop: str = "hi") -> Optional[str]:
         """The Maya attribute holding one end of this channel's colour ramp.
 
@@ -114,17 +132,3 @@ HIGHLIGHT = CHANNELS["highlight"]
 #: The one channel that gates presence (mirrors to ``visibility``).
 PRESENCE = next(spec for spec in CHANNELS.values() if spec.drives_presence)
 
-
-def spec_for(channel) -> ChannelSpec:
-    """Resolve a name or spec to a :class:`ChannelSpec`.
-
-    Raises:
-        KeyError: For a name not in :data:`CHANNELS`.
-    """
-    if isinstance(channel, ChannelSpec):
-        return channel
-    if channel not in CHANNELS:
-        raise KeyError(
-            f"Unknown render-effect channel {channel!r}. Known: {', '.join(CHANNELS)}."
-        )
-    return CHANNELS[channel]

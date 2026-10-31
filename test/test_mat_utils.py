@@ -1063,11 +1063,11 @@ class TestMatUtils(MayaTkTestCase):
         scene_mats = mtk.get_scene_mats()
         self.assertTrue(len(scene_mats) > 0)
 
-        # Test get_mat_swatch_icon exposure
+        # Test get_mat_swatch_color exposure
         try:
-            mtk.get_mat_swatch_icon(scene_mats[0])
+            mtk.get_mat_swatch_color(scene_mats[0])
         except Exception as e:
-            self.fail(f"get_mat_swatch_icon raised exception: {e}")
+            self.fail(f"get_mat_swatch_color raised exception: {e}")
 
         # Test reload_textures exposure
         try:
@@ -2707,6 +2707,16 @@ class TestNamedMaterialOperations(MayaTkTestCase):
             MatUtils.assign_mat(cube, mat)
         cmds.shadingNode("lambert", asShader=True, name="old_mat")
         cmds.select(clear=True)
+
+    def test_the_swatch_color_is_the_materials_base_color(self):
+        """A plain value the panel paints (the library builds no QIcon): the
+        colour's value in 0..1, ``None`` when there is none to read."""
+        cmds.setAttr("old_mat.color", 0.25, 0.5, 1.0, type="double3")
+        color = MatUtils.get_mat_swatch_color("old_mat")
+        self.assertEqual(len(color), 3)
+        for got, want in zip(color, (0.25, 0.5, 1.0)):
+            self.assertAlmostEqual(got, want, places=5)
+        self.assertIsNone(MatUtils.get_mat_swatch_color("no_such_mat"))
 
     def test_scene_mat_names_are_sorted_names(self):
         names = MatUtils.get_scene_mat_names()

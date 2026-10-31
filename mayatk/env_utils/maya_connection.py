@@ -13,18 +13,9 @@ import sys
 import base64
 from typing import Optional, Literal, List, Union, Callable
 
-# Initialize QApplication for standalone mode
-try:
-    from qtpy import QtWidgets
 
-    if not QtWidgets.QApplication.instance():
-        _app = QtWidgets.QApplication([])
-except ImportError:
-    pass
-except Exception as e:
-    print(f"Warning: Failed to initialize QApplication: {e}")
-
-
+# No QApplication at import (imports have no side effects): standalone mode
+# builds its own (``_init_standalone``) and the connect dialog builds one lazily.
 class MayaConnection:
     """Manages connection to Maya for testing purposes."""
 

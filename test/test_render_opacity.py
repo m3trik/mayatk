@@ -1436,6 +1436,20 @@ class TestChannelTableJoin(unittest.TestCase):
             for leaf in "RGB":
                 self.assertIn(f"{attr}{leaf}", HIGHLIGHT.attrs)
 
+    def test_a_name_or_a_spec_resolves_to_its_spec(self):
+        """``ChannelSpec.resolve``, the one door every engine method takes its
+        channel through (was the module-level ``spec_for``)."""
+        from mayatk.mat_utils.render_opacity.channels import (
+            HIGHLIGHT,
+            OPACITY,
+            ChannelSpec,
+        )
+
+        self.assertIs(ChannelSpec.resolve("highlight"), HIGHLIGHT)
+        self.assertIs(ChannelSpec.resolve(OPACITY), OPACITY)
+        with self.assertRaises(KeyError):
+            ChannelSpec.resolve("glow")
+
 
 class TestWholeFrameKeys(MayaTkTestCase):
     """Render-effect keys land on whole frames.

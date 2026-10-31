@@ -912,11 +912,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 warn_msg = f"Large input detected ({total_size_mb:.1f} MB). Processing may take some time..."
                 self.logger.warning(warn_msg)
                 if progress_callback:
+                    # The caller's callback repaints (the panel's pumps its
+                    # events); the engine never touches Qt.
                     progress_callback(0, warn_msg)
-                    # Force a UI update immediately so the user sees the warning before the heavy lift starts
-                    from qtpy import QtWidgets
-
-                    QtWidgets.QApplication.instance().processEvents()
         except Exception as e:
             self.logger.debug(f"Could not calculate input size: {e}")
 

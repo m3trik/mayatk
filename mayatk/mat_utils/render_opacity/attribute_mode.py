@@ -16,7 +16,6 @@ from mayatk.mat_utils.render_opacity.channels import (
     HIGHLIGHT,
     PRESENCE,
     ChannelSpec,
-    spec_for,
 )
 
 
@@ -66,7 +65,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         handled by the behavior system or by calling
         :meth:`sync_visibility_from_opacity` explicitly after keying.
         """
-        spec = spec_for(spec)
+        spec = ChannelSpec.resolve(spec)
         results = {}
 
         Attributes.apply_preset(spec.preset, objects)
@@ -89,7 +88,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     def has_channel(cls, obj, spec: ChannelSpec = OPACITY) -> bool:
         """Whether *obj* carries the channel's attribute."""
         return bool(
-            cmds.attributeQuery(spec_for(spec).name, node=str(obj), exists=True)
+            cmds.attributeQuery(ChannelSpec.resolve(spec).name, node=str(obj), exists=True)
         )
 
     @classmethod
@@ -134,7 +133,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             ValueError: When the channel has no such colour attribute, or
                 *color* is not three components.
         """
-        spec = spec_for(spec)
+        spec = ChannelSpec.resolve(spec)
         attr = spec.stop_attr(stop)
         if not attr:
             raise ValueError(f"Channel {spec.name!r} has no {stop!r} colour attribute.")
@@ -163,7 +162,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         then falls back to that stop's own default rather than to the other
         end's colour.
         """
-        spec = spec_for(spec)
+        spec = ChannelSpec.resolve(spec)
         attr = spec.stop_attr(stop)
         if not attr or not cls.has_channel(obj, spec):
             return None
@@ -184,7 +183,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         which is the difference between seeding a picker and overwriting a
         deliberate choice.
         """
-        spec = spec_for(spec)
+        spec = ChannelSpec.resolve(spec)
         if spec.color_stops is None:
             return ()
         stops = ("hi", "lo")[: len(spec.color_stops.keys)]
@@ -228,7 +227,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         Returns:
             List of ``(object_name, "in"|"out")`` for each keyed object.
         """
-        spec = spec_for(spec)
+        spec = ChannelSpec.resolve(spec)
         objects = cmds.ls(objects)
         if not objects:
             return []
@@ -327,7 +326,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         Returns:
             The keyed objects' short names.
         """
-        spec = spec_for(spec)
+        spec = ChannelSpec.resolve(spec)
         objects = cmds.ls(objects)
         # The shape is planned once, host-free (``ptk.RampKeys.pulse``): the
         # WebXR preview publishes the same plan without keying, so the pulse
@@ -404,7 +403,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             ``(anim curve, time)`` for every key set, the mirror's included --
             what the manifest records as its own.
         """
-        spec = spec_for(spec)
+        spec = ChannelSpec.resolve(spec)
         if mirror is None:
             mirror = spec.drives_presence
         itt = "stepnext" if tangent == "step" else tangent
@@ -473,7 +472,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         If its value is >= 0.5 (opaque), the object needs a fade-out.
         Defaults to fade-in when no previous key exists.
         """
-        plug = cls._long_plug(obj, spec_for(spec).name)
+        plug = cls._long_plug(obj, ChannelSpec.resolve(spec).name)
         key_times = cmds.keyframe(plug, query=True, timeChange=True) or []
         prev_time = None
         for t in sorted(key_times):
@@ -732,7 +731,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         *spec* ``None`` removes every channel the object carries. The presence
         channel also takes its ``visibility`` mirror, leaving the object shown.
         """
-        specs = [spec_for(spec)] if spec is not None else list(CHANNELS.values())
+        specs = [ChannelSpec.resolve(spec)] if spec is not None else list(CHANNELS.values())
         for obj in objects:
             obj = str(obj)
             for one in specs:

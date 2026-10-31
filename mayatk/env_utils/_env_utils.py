@@ -55,7 +55,7 @@ class EnvUtils(ptk.HelpMixin):
                 ``None`` returns every key as a dict -- the form a hand-off or
                 a bug report wants, where the point is to capture the host as
                 it stands rather than to ask it one question. It mirrors
-                ``btk.CoreUtils.get_env_info()``, whose no-key call has always
+                ``btk.EnvUtils.get_env_info()``, whose no-key call has always
                 returned the whole dict; asking Maya for ~30 facts one call at
                 a time was the only way to get the same answer here.
         Returns:

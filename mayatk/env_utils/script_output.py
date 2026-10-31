@@ -1,12 +1,24 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
-import maya.mel as mel
 from typing import Optional
+
 from qtpy import QtWidgets, QtGui, QtCore
-from maya.OpenMayaUI import MQtUtil
-from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 from shiboken6 import wrapInstance
+
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+    from maya.OpenMayaUI import MQtUtil
+    from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
+except Exception:
+    cmds = mel = MQtUtil = None
+
+    class MayaQWidgetDockableMixin:
+        """Outside Maya: a stand-in base, so the module (and ``mtk.ScriptConsole``)
+        resolves for the registry, docs tooling and mock tests. The console
+        itself mirrors Maya's Script Editor and only runs inside Maya."""
+
+
 from mayatk.env_utils.maya_connection import MayaConnection
 from uitk import ScriptOutput
 

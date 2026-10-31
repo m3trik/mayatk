@@ -35,7 +35,7 @@ try:
 except Exception:
     cmds = om = None
 
-from uitk.managers.cancel_manager import CancelProvider
+from uitk import CancelProvider
 
 
 class _MayaBracket:

@@ -23,7 +23,6 @@ from mayatk.mat_utils.render_opacity.channels import (
     HIGHLIGHT,
     OPACITY,
     ChannelSpec,
-    spec_for,
 )
 
 
@@ -264,7 +263,7 @@ class RenderEffects(ptk.LoggingMixin):
             RuntimeError: When *delete_visibility_keys* is ``False`` and one
                 or more objects have visibility keyframes.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if mode not in ("attribute", "remove"):
             # Refused up front: past this point the objects' existing channel
             # (and, with delete_visibility_keys, their visibility keys) is
@@ -381,7 +380,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             List of ``(object_name, "in"|"out")`` per keyed object.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         objects = cls._selection_or(objects)
         if not objects:
             return []
@@ -626,7 +625,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             The keyed objects' short names.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         objects = cls._selection_or(objects)
         if not objects:
             return []
@@ -787,7 +786,7 @@ class RenderEffects(ptk.LoggingMixin):
         """
         from mayatk.node_utils._node_utils import NodeUtils
 
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         transforms = NodeUtils.get_transform_node(list(objects or [])) or []
         # The leaf the producer publishes (``render_effects``) and the GLB
         # node is named: no DAG path, no namespace.
@@ -834,7 +833,7 @@ class RenderEffects(ptk.LoggingMixin):
         Raises:
             KeyError: An unknown channel.
         """
-        return OpacityAttributeMode.has_channel(obj, spec_for(channel))
+        return OpacityAttributeMode.has_channel(obj, ChannelSpec.resolve(channel))
 
     @staticmethod
     def select_objects(objects) -> List[str]:
@@ -872,7 +871,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             Long names, in scene order.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         return [
             obj
             for obj in (cmds.ls(type="transform", long=True) or [])
@@ -898,7 +897,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             ``{long name: (r, g, b)}``, skipping objects without the channel.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if objects is None:
             objects = cls.objects_with_channel(spec)
         colors: Dict[str, Tuple] = {}
@@ -921,7 +920,7 @@ class RenderEffects(ptk.LoggingMixin):
             ``{long name: ((r, g, b) | None, ...)}``, skipping objects without
             the channel.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if objects is None:
             objects = cls.objects_with_channel(spec)
         out: Dict[str, Tuple] = {}
@@ -957,7 +956,7 @@ class RenderEffects(ptk.LoggingMixin):
         Raises:
             ValueError: When *color* is missing, or the channel has no colour.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if color is None:
             raise ValueError("A colour is required.")
         if objects is None:
@@ -1430,7 +1429,7 @@ class RenderEffects(ptk.LoggingMixin):
             # cls.logger.warning("No objects selected.")
             return
 
-        spec = spec_for(channel) if channel is not None else None
+        spec = ChannelSpec.resolve(channel) if channel is not None else None
         modes = [mode] if mode else ["material", "attribute"]
 
         # Legacy material-mode leftovers BEFORE the attribute — the

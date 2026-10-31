@@ -185,7 +185,7 @@ class TestEnvUtils(MayaTkTestCase):
             EnvUtils.get_env_info("non_existent_key_12345")
 
     def test_get_env_info_with_no_key_returns_every_key(self):
-        """The whole-host form, mirroring btk.CoreUtils.get_env_info().
+        """The whole-host form, mirroring btk.EnvUtils.get_env_info().
 
         What a hand-off, a bug report, or an agent triaging a remote failure
         wants: the host as it stands, without having to know the key list to

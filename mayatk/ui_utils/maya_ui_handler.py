@@ -2,8 +2,7 @@
 # coding=utf-8
 import sys
 from typing import Optional, TYPE_CHECKING
-from uitk import Switchboard
-from uitk.handlers.ui_handler import UiHandler
+from uitk import Switchboard, UiHandler
 
 try:
     from mayatk.ui_utils import maya_native_menus
@@ -59,8 +58,7 @@ class MayaUiHandler(UiHandler):
         # Maya's main window owns application-scoped shortcuts (it is always
         # up); uitk names no host, so the host declares it -- here, not only
         # in tentacle's launcher, so a window this handler stands up alone gets it too.
-        from uitk import PresetEditor
-        from uitk.managers.shortcut_manager import ShortcutManager
+        from uitk import PresetEditor, ShortcutManager
 
         ShortcutManager.register_host_window("MayaWindow")
         PresetEditor.register_app_label("mayatk", "Maya")
@@ -70,7 +68,7 @@ class MayaUiHandler(UiHandler):
         # here (a runtime init point, not on module import) per the no-import-
         # side-effects rule; idempotent, so repeated handler construction is safe.
         try:
-            from uitk.bridge.slots import BridgeSlotsBase
+            from uitk import BridgeSlotsBase
             from mayatk.ui_utils._ui_utils import UiUtils
 
             BridgeSlotsBase.register_log_link_handler(UiUtils.dispatch_log_link)
@@ -83,6 +81,8 @@ class MayaUiHandler(UiHandler):
         # And keep the scene records' paths spelled from the scene's own
         # project across a Save As into another one (the re-base hook).
         self._install_record_path_rebase()
+        # And teach uitk how to cancel in this host (see _install_cancel_provider).
+        self._install_cancel_provider()
 
     @staticmethod
     def _install_record_path_rebase() -> bool:
@@ -93,6 +93,34 @@ class MayaUiHandler(UiHandler):
             from mayatk.node_utils.data_nodes import DataNodes
 
             return DataNodes.install_path_rebase()
+        except Exception:  # never let a wiring hiccup block UI-handler startup
+            return False
+
+    @staticmethod
+    def _install_cancel_provider() -> bool:
+        """``MayaCancelProvider`` as uitk's cancel strategy, once per session.
+
+        Maya's Esc peek (``MComputation``) works while a ``cmds`` call blocks the
+        main thread, the one moment a Qt shortcut cannot fire. Installed here,
+        where every panel in Maya passes (tentacle's launcher and a shelf
+        button's alike), not at ``import mayatk``: imports have no side effects.
+        Interactive Maya only, as before: batch has no Esc to peek. Never blocks
+        UI-handler startup.
+
+        Returns:
+            bool: True when this call installed it.
+        """
+        try:
+            import maya.cmds as cmds
+            from uitk import CancelManager
+
+            from mayatk.ui_utils.cancel_provider import MayaCancelProvider
+
+            if cmds.about(batch=True):
+                return False
+            if isinstance(CancelManager.provider(), MayaCancelProvider):
+                return False
+            return MayaCancelProvider.install() is not None
         except Exception:  # never let a wiring hiccup block UI-handler startup
             return False
 
