@@ -49,7 +49,6 @@ import pythontk as ptk
 #: pythontk, shared with every other host of the exporter.
 from pythontk import CaptureResult, ExportResult, ExportTarget  # noqa: F401
 
-from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.render_utils._render_utils import RenderUtils
 
 
@@ -60,6 +59,11 @@ class MayaPlayblastHost(ptk.PureSequenceHost):
 
     #: Native playblast format -> file extension.
     NATIVE_EXTENSIONS: Dict[str, str] = {"avi": ".avi", "movie": ".avi"}
+
+    #: The render-options plug an unlicensed batch render reads. mtoa creates
+    #: the options with it on, so the batch render aborts; it is off for the
+    #: run, so a preview watermarks as Maya's interactive Render View does.
+    _ABORT_ON_LICENSE_FAIL: str = "defaultArnoldRenderOptions.abortOnLicenseFail"
 
     #: Arnold ai_translator -> written file extension.
     _ARNOLD_EXTENSIONS: Dict[str, str] = {
@@ -329,63 +333,92 @@ class MayaPlayblastHost(ptk.PureSequenceHost):
         The scene is first readied to render what the viewport shows
         (:meth:`RenderUtils.prepare_arnold_preview`: game shaders bridged,
         viewport backface culling mirrored); that setup is Arnold-only and
-        stays. Render globals touched for the run are restored afterward.
+        stays. The render is mtoa's batch render (never the Render View) of the
+        current render layer through *camera*, at the exporter's resolution,
+        with the range, naming and image folder set for it; every setting it
+        touches is put back afterward.
+
+        Raises:
+            ValueError: No camera resolves, the range runs backwards, or
+                *render_layer* names a layer other than the current one
+                (mtoa's render has no layer flag) -- each before the scene is
+                touched.
+            Plugins.LoadError: mtoa is not installed.
+            RuntimeError: Arnold wrote no frame (its log in the Script Editor
+                says why).
         """
-        output_dir = ptk.format_path(os.path.abspath(output_dir))
-        os.makedirs(output_dir, exist_ok=True)
-
-        Plugins.load("mtoa")  # raises Plugins.LoadError (a ValueError) when unavailable
-
-        camera_shape = self._resolve_camera_shape(camera or exporter.camera)
-        if not camera_shape:
-            raise ValueError("Could not resolve a valid camera for Arnold rendering.")
-        RenderUtils.prepare_arnold_preview()  # only once the render will run
-
         prefix = prefix or exporter.sequence_name()
         start, end = exporter.resolve_frame_range("playback", start, end)
         padding = int(
             frame_padding if frame_padding is not None else exporter.frame_padding
         )
-        layer = render_layer or cmds.editRenderLayerGlobals(
+        current_layer = cmds.editRenderLayerGlobals(
             query=True, currentRenderLayer=True
         )
+        if render_layer and render_layer != current_layer:
+            raise ValueError(
+                f"Arnold renders the current render layer ({current_layer!r}); "
+                f"make {render_layer!r} current first."
+            )
+        camera_shape = self._resolve_camera_shape(camera or exporter.camera)
+        if not camera_shape:
+            raise ValueError("Could not resolve a valid camera for Arnold rendering.")
+
+        # mtoa, and the render options a never-rendered scene lacks.
+        RenderUtils.ensure_arnold_options()
+        output_dir = ptk.format_path(os.path.abspath(output_dir))
+        os.makedirs(output_dir, exist_ok=True)
+        RenderUtils.prepare_arnold_preview()  # only once the render will run
+
         extension = self._arnold_extension()
         preexisting = self._snapshot_files(output_dir, prefix, extension)
 
+        width, height = int(exporter.width), int(exporter.height)
+        # Every plug the render reads, set for it and put back after:
+        # - the name, the range, every frame of it, none skipped as existing;
+        # - the padding: ``extensionPadding`` (Maya has no ``framePadding``);
+        # - ``name.#.ext``: with animation on, Maya's default names a frame
+        #   ``name.ext.#``, which no image-sequence reader takes for a frame
+        #   (nor :meth:`_snapshot_files`);
+        # - the exporter's resolution, square pixels: a batch render reads the
+        #   scene's (arnoldRender's own width/height flags do not reach it).
+        plugs: Dict[str, Any] = {
+            "defaultRenderGlobals.imageFilePrefix": prefix,
+            "defaultRenderGlobals.animation": True,
+            "defaultRenderGlobals.startFrame": start,
+            "defaultRenderGlobals.endFrame": end,
+            "defaultRenderGlobals.byFrameStep": 1,
+            "defaultRenderGlobals.skipExistingFrames": False,
+            "defaultRenderGlobals.extensionPadding": padding,
+            "defaultRenderGlobals.outFormatControl": 0,  # the extension is written
+            "defaultRenderGlobals.putFrameBeforeExt": True,
+            "defaultRenderGlobals.periodInExt": 1,  # dot-separated
+            "defaultResolution.width": width,
+            "defaultResolution.height": height,
+            "defaultResolution.deviceAspectRatio": width / float(height),
+            "defaultResolution.pixelAspect": 1.0,
+        }
+        if cmds.objExists(self._ABORT_ON_LICENSE_FAIL):
+            plugs[self._ABORT_ON_LICENSE_FAIL] = False
+        saved = {plug: cmds.getAttr(plug) for plug in plugs}
         old_workspace_images = cmds.workspace(fileRuleEntry="images")
-        old_animation = cmds.getAttr("defaultRenderGlobals.animation")
-        old_start = cmds.getAttr("defaultRenderGlobals.startFrame")
-        old_end = cmds.getAttr("defaultRenderGlobals.endFrame")
-        old_padding = cmds.getAttr("defaultRenderGlobals.framePadding")
-        old_prefix = cmds.getAttr("defaultRenderGlobals.imageFilePrefix")
 
         try:
             cmds.workspace(fileRule=("images", output_dir))
-            cmds.setAttr("defaultRenderGlobals.imageFilePrefix", prefix, type="string")
-            cmds.setAttr("defaultRenderGlobals.animation", True)
-            cmds.setAttr("defaultRenderGlobals.startFrame", start)
-            cmds.setAttr("defaultRenderGlobals.endFrame", end)
-            cmds.setAttr("defaultRenderGlobals.framePadding", padding)
-
-            cmds.arnoldRender(
-                seq=True,
-                startFrame=start,
-                endFrame=end,
-                camera=camera_shape,
-                layer=layer,
-                **kwargs,
-            )
+            for plug, value in plugs.items():
+                self._set_plug(plug, value)
+            # Batch, flagged as mtoa's own batch render is: the globals' range
+            # written under the images rule, no Render View. arnoldRender has
+            # no start/end/layer flags (it ignores unknown ones), and its
+            # interactive ``seq`` renders into the Render View's tmp/ folder.
+            flags = {"batch": True, "camera": camera_shape, "width": width}
+            flags["height"] = height
+            flags.update(kwargs)  # a caller's own arnoldRender flags win
+            cmds.arnoldRender(**flags)
         finally:
             cmds.workspace(fileRule=("images", old_workspace_images or "images"))
-            # getAttr returns None when the prefix was never set; setAttr
-            # rejects None for string attrs -- and this is a finally block.
-            cmds.setAttr(
-                "defaultRenderGlobals.imageFilePrefix", old_prefix or "", type="string"
-            )
-            cmds.setAttr("defaultRenderGlobals.animation", old_animation)
-            cmds.setAttr("defaultRenderGlobals.startFrame", old_start)
-            cmds.setAttr("defaultRenderGlobals.endFrame", old_end)
-            cmds.setAttr("defaultRenderGlobals.framePadding", old_padding)
+            for plug, value in saved.items():
+                self._set_plug(plug, value)
 
         # Only files this run created or rewrote -- a shared output dir can
         # hold frames from earlier renders with the same prefix.
@@ -397,6 +430,11 @@ class MayaPlayblastHost(ptk.PureSequenceHost):
             if path not in preexisting or preexisting[path] != mtime
         ]
         rendered.sort()
+        if not rendered:
+            raise RuntimeError(
+                f"Arnold wrote no frames to {output_dir!r}: the render failed or "
+                "was aborted, and its log in the Script Editor says why."
+            )
         exporter._notify(
             f"Arnold render completed: {len(rendered)} frame(s) written to {output_dir}"
         )
@@ -500,6 +538,15 @@ class MayaPlayblastHost(ptk.PureSequenceHost):
             return None
 
     # --- arnold ---------------------------------------------------------
+    @staticmethod
+    def _set_plug(plug: str, value: Any) -> None:
+        """Set *plug*. The image prefix is a string, and getAttr reads an unset
+        one as None, which setAttr rejects -- and this runs in a finally."""
+        if plug.endswith(".imageFilePrefix"):
+            cmds.setAttr(plug, value or "", type="string")
+        else:
+            cmds.setAttr(plug, value)
+
     @classmethod
     def _arnold_extension(cls) -> str:
         """File extension the Arnold driver will write (default ``exr``)."""

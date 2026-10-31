@@ -57,6 +57,60 @@ except ImportError:
 
 FFMPEG_AVAILABLE = ptk.VidUtils.resolve_ffmpeg(required=False) is not None
 
+#: The render globals an Arnold sequence render sets and must restore.
+_ARNOLD_GLOBALS = (
+    "imageFilePrefix",
+    "animation",
+    "startFrame",
+    "endFrame",
+    "byFrameStep",
+    "skipExistingFrames",
+    "extensionPadding",
+    "outFormatControl",
+    "putFrameBeforeExt",
+    "periodInExt",
+)
+
+#: The render-options plug an unlicensed batch render reads.
+_ABORT_ON_LICENSE_FAIL = "defaultArnoldRenderOptions.abortOnLicenseFail"
+
+
+#: The render resolution plugs an Arnold sequence render sets and must restore.
+_RESOLUTION = (
+    "defaultResolution.width",
+    "defaultResolution.height",
+    "defaultResolution.deviceAspectRatio",
+    "defaultResolution.pixelAspect",
+)
+
+
+def _exr_size(path):
+    """``(width, height)`` from an OpenEXR header's ``dataWindow``."""
+    import struct
+
+    with open(path, "rb") as handle:
+        data = handle.read(65536)
+    pos = 8  # magic + version
+    while pos < len(data) and data[pos] != 0:
+        name_end = data.index(b"\0", pos)
+        type_end = data.index(b"\0", name_end + 1)
+        size = struct.unpack("<i", data[type_end + 1 : type_end + 5])[0]
+        if data[pos:name_end] == b"dataWindow":
+            x0, y0, x1, y1 = struct.unpack("<4i", data[type_end + 5 : type_end + 21])
+            return x1 - x0 + 1, y1 - y0 + 1
+        pos = type_end + 5 + size
+    return None
+
+
+def _mtoa_available() -> bool:
+    """True if the Arnold plug-in loads in this Maya (CI without Arnold: False)."""
+    try:
+        if not cmds.pluginInfo("mtoa", query=True, loaded=True):
+            cmds.loadPlugin("mtoa", quiet=True)
+        return bool(cmds.pluginInfo("mtoa", query=True, loaded=True))
+    except Exception:
+        return False
+
 from base_test import MayaTkTestCase
 
 
@@ -973,6 +1027,9 @@ class TestPlayblastExporter(MayaTkTestCase):
             patch(f"{pe_path}.arnoldRender", create=True, side_effect=fake_render),
             patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
             patch(
+                "mayatk.anim_utils.playblast_exporter.RenderUtils.ensure_arnold_options"
+            ),
+            patch(
                 "mayatk.anim_utils.playblast_exporter.RenderUtils.prepare_arnold_preview"
             ),
             patch(f"{pe_path}.workspace", return_value="images"),
@@ -1000,17 +1057,20 @@ class TestPlayblastExporter(MayaTkTestCase):
         order = []
         exporter = PlayblastExporter()
         pe_path = "mayatk.anim_utils.playblast_exporter"
+
+        def render(**kwargs):
+            order.append("render")
+            with open(os.path.join(out_dir, "shot.0001.exr"), "w") as handle:
+                handle.write("frame")
+
         with (
             patch(
                 f"{pe_path}.RenderUtils.prepare_arnold_preview",
                 side_effect=lambda: order.append("prepare"),
             ),
-            patch(
-                f"{pe_path}.cmds.arnoldRender",
-                create=True,
-                side_effect=lambda **kw: order.append("render"),
-            ),
+            patch(f"{pe_path}.cmds.arnoldRender", create=True, side_effect=render),
             patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
             patch(f"{pe_path}.cmds.workspace", return_value="images"),
             patch(f"{pe_path}.cmds.setAttr"),
             patch(
@@ -1039,6 +1099,176 @@ class TestPlayblastExporter(MayaTkTestCase):
             "mayatk.anim_utils.playblast_exporter", ("cmds", "mel", "om")
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    #: ``abortOnLicenseFail`` as mtoa creates the render options.
+    _abort_default = True
+
+    def _render_globals(self):
+        """The Arnold-touched render globals (an unset prefix reads ``""``)."""
+        values = {
+            attr: cmds.getAttr(f"defaultRenderGlobals.{attr}")
+            for attr in _ARNOLD_GLOBALS
+        }
+        values["imageFilePrefix"] = values["imageFilePrefix"] or ""
+        return values
+
+    def test_render_with_arnold_sets_and_restores_the_real_render_globals(self):
+        """Regression: the render read ``defaultRenderGlobals.framePadding``,
+        which Maya does not have (its padding is ``extensionPadding``), so the
+        Arnold Sequence target raised before a frame rendered; and it asked
+        ``arnoldRender`` for flags mtoa does not have (``startFrame``,
+        ``endFrame``, ``layer``: ignored, so one frame rendered into the Render
+        View's ``tmp/``). Only Arnold's call is stood in for: the globals, the
+        images rule and the ``name.#.ext`` names they make are Maya's."""
+        self.assertFalse(
+            cmds.attributeQuery("framePadding", node="defaultRenderGlobals", exists=True)
+        )
+        self.assertTrue(
+            cmds.attributeQuery(
+                "extensionPadding", node="defaultRenderGlobals", exists=True
+            )
+        )
+        out_dir = os.path.join(self.tmp, "arnold_globals")
+        # A scene rendering every other frame and skipping what exists would
+        # leave holes in the sequence: both are pinned for the render.
+        cmds.setAttr("defaultRenderGlobals.byFrameStep", 2)
+        cmds.setAttr("defaultRenderGlobals.skipExistingFrames", True)
+        before = self._render_globals()
+        resolution_before = [cmds.getAttr(plug) for plug in _RESOLUTION]
+        images_before = cmds.workspace(fileRuleEntry="images")
+        calls, seen = [], []
+
+        def batch_render(**kwargs):
+            """Write what Arnold's batch render writes for the globals it reads."""
+            calls.append(kwargs)
+            rg = self._render_globals()
+            rg.update({plug: cmds.getAttr(plug) for plug in _RESOLUTION})
+            seen.append(rg)
+            folder = cmds.workspace(fileRuleEntry="images")
+            for frame in range(int(rg["startFrame"]), int(rg["endFrame"]) + 1):
+                number = f"{frame:0{rg['extensionPadding']}d}"
+                name = (
+                    f"{rg['imageFilePrefix']}.{number}.exr"
+                    if rg["putFrameBeforeExt"] and rg["periodInExt"] == 1
+                    else f"{rg['imageFilePrefix']}.exr.{number}"
+                )
+                with open(os.path.join(folder, name), "wb") as handle:
+                    handle.write(b"exr")
+
+        pe_path = "mayatk.anim_utils.playblast_exporter"
+        with (
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
+            patch(f"{pe_path}.RenderUtils.prepare_arnold_preview"),
+            patch(
+                f"{pe_path}.cmds.arnoldRender", create=True, side_effect=batch_render
+            ),
+        ):
+            frames = PlayblastExporter(width=320, height=240).render_with_arnold(
+                out_dir, start=1, end=2, camera="persp", prefix="shot", frame_padding=3
+            )
+
+        self.assertEqual(
+            [os.path.basename(f) for f in frames], ["shot.001.exr", "shot.002.exr"]
+        )
+        self.assertEqual(
+            calls,
+            [{"batch": True, "camera": "perspShape", "width": 320, "height": 240}],
+        )
+        pinned = ("animation", "startFrame", "endFrame", "byFrameStep",
+                  "skipExistingFrames", "extensionPadding")
+        self.assertEqual(
+            {k: seen[0][k] for k in pinned},
+            {"animation": True, "startFrame": 1.0, "endFrame": 2.0, "byFrameStep": 1.0,
+             "skipExistingFrames": False, "extensionPadding": 3},
+        )
+        width, height, aspect, pixel = (seen[0][plug] for plug in _RESOLUTION)
+        self.assertEqual((width, height, pixel), (320, 240, 1.0))
+        self.assertAlmostEqual(aspect, 320 / 240.0, places=6)  # a float attribute
+        self.assertEqual([cmds.getAttr(plug) for plug in _RESOLUTION], resolution_before)
+        self.assertEqual(self._render_globals(), before)
+        self.assertEqual(cmds.workspace(fileRuleEntry="images"), images_before)
+
+    def test_render_with_arnold_refuses_before_touching_the_scene(self):
+        """A refused layer or a backwards range raises before the scene is
+        readied for Arnold (shaders bridged, culling mirrored) or a folder made."""
+        pe_path = "mayatk.anim_utils.playblast_exporter"
+        out_dir = os.path.join(self.tmp, "refused")
+        before = self._render_globals()
+        with (
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
+            patch(f"{pe_path}.RenderUtils.prepare_arnold_preview") as prepare,
+            patch(f"{pe_path}.cmds.arnoldRender", create=True) as render,
+        ):
+            with self.assertRaisesRegex(ValueError, "current render layer"):
+                PlayblastExporter().render_with_arnold(
+                    out_dir, start=1, end=2, camera="persp", render_layer="other"
+                )
+            with self.assertRaisesRegex(ValueError, "after end frame"):
+                PlayblastExporter().render_with_arnold(
+                    out_dir, start=5, end=2, camera="persp"
+                )
+        prepare.assert_not_called()
+        render.assert_not_called()
+        self.assertFalse(os.path.exists(out_dir))
+        self.assertEqual(self._render_globals(), before)
+
+    def test_a_render_that_wrote_no_frame_is_an_error(self):
+        """Not "0 frame(s) written" as a success: an aborted batch render (an
+        unlicensed Arnold with abortOnLicenseFail on) fails its target."""
+        pe_path = "mayatk.anim_utils.playblast_exporter"
+        before = self._render_globals()
+        with (
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
+            patch(f"{pe_path}.RenderUtils.prepare_arnold_preview"),
+            patch(f"{pe_path}.cmds.arnoldRender", create=True),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no frames"):
+                PlayblastExporter().render_with_arnold(
+                    os.path.join(self.tmp, "aborted"), start=1, end=2, camera="persp"
+                )
+        self.assertEqual(self._render_globals(), before)
+
+    def test_render_with_arnold_renders_frames_with_a_live_arnold(self):
+        """Arnold itself, in this fresh Maya (unlicensed, it watermarks): two
+        frames of a trivial scene, through the camera asked for (none is
+        renderable, so only the render's camera flag can pick it), land in the
+        output folder as ``<prefix>.<frame>.exr``, and the scene's render
+        globals are put back."""
+        if not _mtoa_available():
+            self.skipTest("mtoa (Arnold) plugin not available")
+        camera = cmds.camera(name="shotCam")[0]
+        cmds.setAttr(f"{camera}.translate", 0, 2, 12)
+        # No camera renderable, the one asked for included: only the render's
+        # camera flag can pick it.
+        for shape in cmds.ls(type="camera"):
+            cmds.setAttr(f"{shape}.renderable", False)
+        out_dir = os.path.join(self.tmp, "arnold_live")
+        before = self._render_globals()
+        resolution_before = [cmds.getAttr(plug) for plug in _RESOLUTION]
+
+        # This machine may hold no Arnold license: the render must watermark,
+        # as the Render View does, rather than abort (the batch default).
+        frames = PlayblastExporter(width=64, height=36).render_with_arnold(
+            out_dir, start=1, end=2, camera=camera, prefix="live"
+        )
+
+        self.assertEqual(
+            [os.path.basename(f) for f in frames], ["live.0001.exr", "live.0002.exr"]
+        )
+        for frame in frames:
+            self.assertGreater(os.path.getsize(frame), 0, frame)
+            self.assertEqual(_exr_size(frame), (64, 36), frame)
+        self.assertEqual(sorted(os.listdir(out_dir)), ["live.0001.exr", "live.0002.exr"])
+        self.assertEqual(self._render_globals(), before)
+        self.assertEqual(cmds.getAttr(_ABORT_ON_LICENSE_FAIL), self._abort_default)
+        self.assertEqual([cmds.getAttr(plug) for plug in _RESOLUTION], resolution_before)
+        self.assertNotEqual(
+            os.path.normcase(cmds.workspace(fileRuleEntry="images")),
+            os.path.normcase(out_dir),
+        )
 
     def test_arnold_extension_translator_map(self):
         pe_path = "mayatk.anim_utils.playblast_exporter.cmds"
