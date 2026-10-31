@@ -1351,6 +1351,22 @@ class TestFindAndCopy(MayaTkTestCase):
         self.assertTrue(self._path_of(c).endswith("dest/three/diffuse.png"))
         self.assertEqual(sorted(os.listdir(self.dest_dir)), ["one", "three"])
 
+    def test_a_move_leaves_a_file_a_reader_outside_the_scope_reads(self):
+        """A file node the scope leaves out -- an Arnold-only one under Exclude
+        Arnold Nodes, an unselected row -- reading the file a scoped node reads:
+        the Move took the file away and left that node on a deleted path."""
+        shared = self._write(self.ext_dir, "wood.png", payload="WOOD")
+        scoped = self._make_file_node("tex_scoped", shared)
+        outside = self._make_file_node("tex_outside", shared)
+        self._answer(mode="Move")
+
+        self._run([scoped])
+
+        self.assertTrue(os.path.exists(shared), "the outside reader was stranded")
+        self.assertTrue(self._path_of(scoped).endswith("dest/wood.png"))
+        self.assertEqual(self._path_of(outside), shared)
+        self.assertEqual(self.editor.unresolved_file_nodes([outside]), [])
+
     def test_an_ambiguous_search_hit_waits_for_its_pick(self):
         """Two different same-named files under the search folder: it took the
         NEWEST; the row lists both now, and a pick commits the one chosen."""

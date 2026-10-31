@@ -7050,6 +7050,21 @@ class TestLightmapFolderHints(MayaTkTestCase):
             self._found_by(), [("fh_box_LightMap.exr", LightmapRecords.FOUND_BY_HINT)]
         )
 
+    def test_lifting_a_legacy_markers_folder_is_a_change(self):
+        """A repath to the folder a legacy marker already names rewrote the
+        marker (its ``dir`` lifted) and reported 0 -- Blender's twin then
+        dropped the undo step of a real change (review, 2026-10-31)."""
+        cube, path = self._lit("fh_count")
+        legacy = dict(self._marker(cube), dir=LightmapRecords._portable_dir(path))
+        LightmapRecords._write_marker(cube, legacy)
+
+        count = LightmapRecords.repath_lightmaps(
+            {"fh_count_lightmap.exr": os.path.dirname(path)}
+        )
+
+        self.assertEqual(count, 1)
+        self.assertNotIn("dir", self._marker(cube))
+
     def test_an_export_ships_a_legacy_marker_without_its_folder(self):
         import maya.mel as mel
 

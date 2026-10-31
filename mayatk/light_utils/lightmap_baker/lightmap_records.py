@@ -2326,8 +2326,9 @@ class LightmapRecords(ptk.LoggingMixin):
         portable spelling (workspace-relative when inside the project) unless
         ``relative=False`` -- the Make Paths Absolute case; a LEGACY marker's
         own ``dir`` naming the map is lifted off it on the way. One undo chunk.
-        Returns how many markers now resolve to a different folder; one
-        already there is untouched.
+        Returns how many markers it changed: each that now resolves to a
+        different folder, and each legacy marker rewritten without its
+        ``dir``; one already there, in the current shape, is untouched.
         """
         count = 0
         with CoreUtils.undo_chunk("Repath Lightmaps"):
@@ -2344,12 +2345,13 @@ class LightmapRecords(ptk.LoggingMixin):
                 else:
                     spelling = os.path.abspath(new_dir).replace("\\", "/")
                 current = cls._folder_hint(info, hints, transform, modules)
-                if current.replace("\\", "/") != spelling:
-                    count += 1
+                changed = current.replace("\\", "/") != spelling
                 hints[cls._hint_key(basename)] = spelling
-                if "dir" in info:
+                if "dir" in info:  # the marker itself is rewritten: a change
                     info.pop("dir")
                     cls._write_marker(cls._marker_node(transform) or transform, info)
+                    changed = True
+                count += changed
             # The probe has no marker and no objects: it follows when its file
             # is named, whatever the scope.
             probe = cls.probe()

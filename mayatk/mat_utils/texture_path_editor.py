@@ -928,15 +928,15 @@ class TexturePathEditor:
         """
         source_dir, dest_dir, mode = self._find_copy_answers(answers)
         with self._progress(progress, f"Searching {source_dir or 'the paths'}…") as tick:
-            entries = FileCollect(self).entries(
+            return FileCollect(self).plan_nodes(
                 [str(n) for n in file_nodes],
+                dest_dir,
                 search_dir=source_dir,
                 find_files=self._texture_walk(tick),
+                choices=choices,
+                kind="texture",
+                extra=self._lightmap_entries(lightmaps, source_dir, dest_dir, mode),
             )
-        entries = [dict(e, kind="texture") for e in entries] + self._lightmap_entries(
-            lightmaps, source_dir, dest_dir, mode
-        )
-        return FileCollect.plan(entries, dest_dir, choices)
 
     def find_and_copy_textures(
         self, file_nodes, answers, lightmaps=(), dry_run=False, progress=None, plan=None
@@ -985,6 +985,35 @@ class TexturePathEditor:
             copy=self._copy_into,
             progress=progress,
         )
+
+    #: The texture readers a Move must leave their files to, by node type: its
+    #: path attribute. Every one in the scene counts, in the table's scope or
+    #: not (a row selection, Exclude Arnold Nodes), Arnold's own image node too.
+    _TEXTURE_READERS = {"file": "fileTextureName", "aiImage": "filename"}
+
+    def read_elsewhere(self, nodes):
+        """The files the scene reads through texture readers other than *nodes*
+        (``ptk.CollectHost``): every node of :attr:`_TEXTURE_READERS`' types,
+        absolute. A Move copies these instead of taking them away -- moved, an
+        Arnold-only file node or an unselected row reading the same file was
+        left on a deleted path."""
+        names = [str(n) for n in nodes]
+        held = set(cmds.ls(names, uuid=True) or []) if names else set()
+        roots = self._project_roots()
+        files = []
+        for node_type, attr in self._TEXTURE_READERS.items():
+            try:
+                readers = cmds.ls(type=node_type) or []
+            except RuntimeError:  # the type's plug-in is not loaded
+                continue
+            uuids = (cmds.ls(readers, uuid=True) or []) if readers else []
+            for node, uuid in zip(readers, uuids):
+                if uuid in held:
+                    continue
+                path = cmds.getAttr(f"{node}.{attr}") or ""
+                if path:
+                    files.append(MatUtils.to_absolute(path, *roots))
+        return files
 
     def stored_form(self, path: str, file_node=None) -> str:
         """The path a file node stores for the absolute *path*: project-relative
