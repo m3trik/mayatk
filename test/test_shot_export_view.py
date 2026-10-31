@@ -728,7 +728,7 @@ class TestShotStoreLegacyPrefKeys(QuickTestCase):
         with (
             mock.patch.object(_shots, "QSettings", _Settings),
             mock.patch.object(ShotStore, "_prefs_path") as prefs_path,
-            mock.patch.object(ShotStore, "_save_user_prefs"),
+            mock.patch.object(ShotStore, "save_user_prefs"),
         ):
             prefs_path.return_value.exists.return_value = False
             store._restore_user_prefs()

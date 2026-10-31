@@ -428,7 +428,7 @@ class TestCrossScenePrefs(unittest.TestCase):
 
     @patch("mayatk.anim_utils.shots._shots.QSettings")
     def test_save_writes_detection_mode_to_prefs_store(self, mock_qs_cls):
-        """_save_user_prefs persists to the JSON store — QSettings is read-only legacy."""
+        """save_user_prefs persists to the JSON store — QSettings is read-only legacy."""
         import json as _json
 
         mock_qs = MagicMock()
@@ -436,7 +436,7 @@ class TestCrossScenePrefs(unittest.TestCase):
 
         store = ShotStore()
         store.detection_mode = "zero_as_end"
-        store._save_user_prefs()
+        store.save_user_prefs()
 
         data = _json.loads(self._prefs_file().read_text(encoding="utf-8"))
         self.assertEqual(data["detection_mode"], "zero_as_end")
@@ -447,7 +447,7 @@ class TestCrossScenePrefs(unittest.TestCase):
         """Once the JSON store exists, legacy QSettings are never consulted."""
         store = ShotStore()
         store.detection_mode = "zero_as_end"
-        store._save_user_prefs()
+        store.save_user_prefs()
 
         mock_qs = MagicMock()
         mock_qs.value.return_value = "skip_zero"
