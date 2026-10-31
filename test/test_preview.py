@@ -481,6 +481,107 @@ class TestPreview(MayaTkTestCase):
         self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
 
+class _BevelEdge:
+    """Bevels each object's first edge with construction history, as the Bevel
+    tool does (``polyBevel3``)."""
+
+    PRESERVE_GEOMETRY = True
+
+    def perform_operation(self, objects, contract=None):
+        for obj in objects:
+            cmds.polyBevel3(f"{obj}.e[0]", offset=0.1, constructionHistory=True)
+
+
+class TestPreviewKeepsPriorWork(MayaTkTestCase):
+    """A preview never takes the user's earlier work with it (2026-10-31).
+
+    A history op on a mesh with unbaked vertex tweaks moves the tweaks into a
+    new ``polyTweak``; the rollback deleted it as "created", so after Create the
+    first Ctrl+Z seemed to undo the user's earlier moves too (Bevel, reported).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="tweaked_cube")[0]  # with history
+        self.moved = None
+
+    def _pos(self, index=7):
+        return tuple(round(v, 4) for v in cmds.pointPosition(f"{self.cube}.vtx[{index}]"))
+
+    def _tweak(self, delta=(-0.1, 0.1, 0.1)):
+        self.original = self._pos()
+        cmds.move(*delta, f"{self.cube}.vtx[7]", relative=True)
+        self.moved = self._pos()
+        self.assertNotEqual(self.moved, self.original)
+
+    def _preview(self, op):
+        preview = Preview(op, _CheckBox(), _PushButton(), message_func=lambda m: None)
+        self.addCleanup(preview.cleanup)
+        return preview
+
+    def test_rollback_restores_tweaks_moved_into_a_polyTweak(self):
+        self._tweak()
+        contract = CleanupContract()
+        with contract:
+            cmds.polySmooth(self.cube, constructionHistory=True)
+        contract.rollback()
+        self.assertEqual(self._pos(), self.moved)
+        self.assertEqual(cmds.ls(type="polyTweak"), [])
+
+    def test_previewed_commit_undo_keeps_the_prior_vertex_move(self):
+        self._tweak()
+        cmds.select(self.cube)
+        preview = self._preview(_BevelEdge())
+        preview.enable()
+        preview.refresh()
+        preview.finalize_changes()
+        # The bevel renumbers vertices: the moved point is still one of them.
+        points = {
+            tuple(round(v, 4) for v in cmds.pointPosition(f"{self.cube}.vtx[{i}]"))
+            for i in range(cmds.polyEvaluate(self.cube, vertex=True))
+        }
+        self.assertIn(self.moved, points, "the preview dropped the vertex move")
+
+        cmds.undo()  # the Bevel
+        self.assertEqual(cmds.polyEvaluate(self.cube, face=True), 6)
+        self.assertEqual(self._pos(), self.moved, "Undo took the earlier vertex move")
+        for _ in range(2):  # the select, then the move itself
+            cmds.undo()
+        self.assertEqual(self._pos(), self.original)
+
+    def test_discard_keeps_construction_history(self):
+        self._tweak(delta=(0.4, 0.4, 0.4))  # outward: the bbox changes
+        cmds.select(self.cube)
+        preview = self._preview(_BevelEdge())
+        preview.enable()
+        preview.disable()
+        self.assertEqual(self._pos(), self.moved)
+        self.assertIn(
+            "polyCube1", cmds.listHistory(self.cube) or [],
+            "the discard deleted the mesh's construction history",
+        )
+
+    def test_discard_records_nothing_on_a_multi_material_mesh(self):
+        for index, colour in enumerate(((1, 0, 0), (0, 0, 1))):
+            shader = cmds.shadingNode("lambert", asShader=True, name=f"mat{index}")
+            cmds.setAttr(f"{shader}.color", *colour, type="double3")
+            group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+            cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader")
+            cmds.sets(f"{self.cube}.f[{index * 3}:{index * 3 + 2}]", forceElement=group)
+        cmds.move(0, 2, 0, self.cube, relative=True)
+        moved_y = cmds.xform(self.cube, query=True, translation=True, worldSpace=True)[1]
+        cmds.select(self.cube)
+        preview = self._preview(_BevelEdge())
+        preview.enable()
+        preview.disable()
+        cmds.undo()  # the select
+        cmds.undo()  # the move
+        self.assertAlmostEqual(
+            cmds.xform(self.cube, query=True, translation=True, worldSpace=True)[1],
+            moved_y - 2, places=4, msg="the discard put steps on the user's queue",
+        )
+
+
 class TestPreviewBypass(MayaTkTestCase):
     """Committing WITHOUT a preview (the default) and the ``require_preview`` opt-in.
 

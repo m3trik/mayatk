@@ -297,6 +297,48 @@ class CleanupContract:
             return ("curve",) + sig
         return None
 
+    #: A tweak node a history op creates to hold the shape's unbaked
+    #: component tweaks, and the shape plug those tweaks came from.
+    _TWEAK_PLUGS = {"polyTweak": ("tweak", "pnts"), "polyTweakUV": ("uvTweak", "uvpt")}
+
+    def _moved_tweaks(self) -> List[Tuple[str, str, List[int], List[tuple]]]:
+        """``[(shape, plug, indices, values)]``: the tweaks each created tweak
+        node holds for a shape that existed before the pass (read before the
+        node is deleted)."""
+        moved = []
+        for node in self.created:
+            if not cmds.objExists(node):
+                continue
+            plugs = self._TWEAK_PLUGS.get(cmds.nodeType(node))
+            if not plugs:
+                continue
+            src, dst = plugs
+            indices = cmds.getAttr(f"{node}.{src}", multiIndices=True) or []
+            if not indices:
+                continue
+            values = [cmds.getAttr(f"{node}.{src}[{i}]")[0] for i in indices]
+            for shape in cmds.listHistory(node, future=True) or []:
+                if (
+                    cmds.nodeType(shape) == "mesh"
+                    and not cmds.getAttr(f"{shape}.intermediateObject")
+                    and not set(cmds.ls(shape, long=True) or [shape]) & self.created
+                ):
+                    moved.append((shape, dst, indices, values))
+        return moved
+
+    @staticmethod
+    def _restore_moved_tweaks(moved) -> None:
+        """Write :meth:`_moved_tweaks` back onto their shapes, then evaluate the
+        mesh: the divergence check reads its bounding box next, which is stale
+        right after a ``pnts`` write (it baked the duplicate in and applied the
+        tweak twice)."""
+        for shape, plug, indices, values in moved:
+            if not cmds.objExists(shape):
+                continue
+            for index, value in zip(indices, values):
+                cmds.setAttr(f"{shape}.{plug}[{index}]", *value)
+            cmds.dgeval(f"{shape}.outMesh")
+
     @classmethod
     def _geo_diverged(cls, transform: str, dup: str) -> bool:
         a = cls._geo_signature(transform)
@@ -382,6 +424,12 @@ class CleanupContract:
                         cmds.setAttr(f"{node}.{attr}", value)
                 except Exception:
                     pass
+            # Before the created nodes go: a construction-history op on a mesh
+            # with unbaked component tweaks (polyBevel3 on a moved vertex) MOVES
+            # those tweaks out of the shape into a new polyTweak. Deleting it as
+            # "created" deleted the user's moves -- after Create, Undo seemed to
+            # undo their earlier work too.
+            moved_tweaks = self._moved_tweaks()
             # 2. Delete created nodes -- expressions first to avoid eval errors
             # on still-dangling references. Skip multiply-instanced shape paths
             # shared with a surviving (non-created) instance: instance-mode ops
@@ -402,6 +450,7 @@ class CleanupContract:
             remaining = [n for n in rest if cmds.objExists(n)]
             if remaining:
                 cmds.delete(remaining)
+            self._restore_moved_tweaks(moved_tweaks)
             # 3. Restore preserved originals if perform_operation deleted them.
             # Identity check is by UUID, not name -- a new node with the same
             # name is not the same node.
@@ -582,9 +631,13 @@ class MayaPreviewSession:
         # No op follows a cancel, so the restored (in-place) shading is what
         # the user is left looking at; it renders correctly even though a
         # future op could collapse it -- acceptable for a cancelled preview.
-        self._reassert_shading_snapshot()
-        if reselect:
-            self._reselect_captured()
+        # Undo off: the reassert's set edits recorded >= 3 steps on a
+        # multi-material mesh, so Ctrl+Z after a discard spent them before it
+        # reached the user's own work (the failed-commit discard too).
+        with CoreUtils.undo_disabled():
+            self._reassert_shading_snapshot()
+            if reselect:
+                self._reselect_captured()
 
     def commit(self) -> None:
         """Roll the hermetic pass back (recorded nowhere, even inside the open
