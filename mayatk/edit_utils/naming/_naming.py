@@ -838,7 +838,12 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             # excluding it left the name unstripped and applied a SECOND affix
             # ("GEO_body_GEO"). Without it: "body_GEO" -> "GEO_body", while an
             # already-correct "GEO_body" still round-trips unchanged.
-            base_name = ptk.StrUtils.strip_any_affix(short_name, known)
+            #
+            # numbered: a duplicate's '1' (Ctrl+D of crate_GEO is crate_GEO1)
+            # or an index after the affix (wall_GEO_01) is peeled first and
+            # kept on the base, so the result is crate1_GEO / wall_01_GEO
+            # rather than a second affix.
+            base_name = ptk.StrUtils.strip_any_affix(short_name, known, numbered=True)
 
             # Apply strip_trailing_ints if specified
             if strip_trailing_ints:

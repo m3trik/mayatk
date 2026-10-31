@@ -826,6 +826,16 @@ class TestNamingEdgeCases(MayaTkTestCase):
         self.assertNotIn("polyCube1", {f.split("|")[-1] for f in found})
         self.assertNotIn("time1", {f.split("|")[-1] for f in found})
 
+    # -- G: a numbered duplicate is re-affixed, not decorated -----------------
+
+    def test_suffix_by_type_re_affixes_a_numbered_duplicate(self):
+        """Regression: Ctrl+D of crate_GEO (crate_GEO1) came out crate_GEO1_GEO."""
+        dup = cmds.polyCube(n="crate_GEO1")[0]
+        idx = cmds.polyCube(n="wall_GEO_01")[0]
+        ud, ui = _uuid(dup), _uuid(idx)
+        Naming.suffix_by_type([dup, idx])
+        self.assertEqual((_name(ud), _name(ui)), ("crate1_GEO", "wall_01_GEO"))
+
     def test_a_frozen_scope_survives_a_parent_rename(self):
         """Regression: Apply after the user renamed a parent found nothing in
         scope -- the frozen long names had gone stale."""
