@@ -126,7 +126,7 @@ One-click hand-offs that export the selection and drive the target app with a te
 
 ### More highlights
 
-- `Preview` — hermetic operation preview: tools show live results, roll back on cancel, replay on commit.
+- `Preview` — uitk's `PreviewController` bound to a Maya scene session: tools show live results, roll back on cancel, replay on commit.
 - `Components` — component islands, border edges, edge paths, normal-angle edge selection.
 - `ExplodedView` — force-based exploded view (vectorized repulsion), toggleable and reversible.
 - `NamespaceSandbox` — import files into disposable namespaces for analysis or object swapping, with guaranteed cleanup.
