@@ -444,6 +444,23 @@ class TestProducerContract(MayaTkTestCase):
             SR.SHADOWS.load(DataNodes)["planes"][0]["name"], "DROP_cube_shadow"
         )
 
+    def test_every_record_is_labelled_with_the_writers_unit(self):
+        """The writer states its unit once (``ExportContext.unit_scale``); a
+        producer labels its record with it and converts nothing -- the scene's
+        unit only when no writer stated one. Added: 2026-10-31"""
+        from mayatk.core_utils.units import Units
+        from mayatk.rig_utils.shadow_rig._shadow_rig import ShadowRig
+
+        cube = cmds.polyCube(name="unit_cube")[0]
+        ShadowRig.create([cube], light_pos=(5, 10, 5), texture_res=16)
+        scene = Units.metres_per("working")
+        self.assertEqual(FbxUtils.export_context().unit_scale, scene)
+        self.assertEqual(FbxUtils.export_context(writer="usd").unit_scale, scene)
+        stated = ShadowRig.export_record(FbxUtils.export_context(unit_scale=1.0))
+        self.assertEqual(stated.payload["unit_scale"], 1.0, "the writer's label")
+        bare = ShadowRig.export_record(ptk.ExportContext())
+        self.assertEqual(bare.payload["unit_scale"], scene, "no writer: the scene's")
+
     def test_a_session_stager_stages_before_the_producers_read(self):
         """Producers see the staged scene even outside a bracket: a preview
         that must detach before its record is read registers a stager, and a

@@ -2182,7 +2182,11 @@ class FbxUtils(ptk.HelpMixin):
 
     @classmethod
     def export_context(
-        cls, mode: str = ptk.ExportContext.PIPELINE, **decisions
+        cls,
+        mode: str = ptk.ExportContext.PIPELINE,
+        writer: str = "fbx",
+        writer_options: Optional[Dict[str, Any]] = None,
+        **decisions,
     ) -> ptk.ExportContext:
         """A context for this scene: provenance filled in, *decisions*
         (``clip_mode``, ``clip_span``, ``rendering``, ``scope``) as given.
@@ -2190,7 +2194,10 @@ class FbxUtils(ptk.HelpMixin):
         A *scope* names the nodes the write ships as well (``nodes``: every
         DAG node under its roots, :meth:`_shipped_nodes`), what the snapshot
         narrows each export-scoped record by -- once, here, so no producer
-        walks the export set again."""
+        walks the export set again. The *writer* (``"fbx"``, ``"usd"``) and
+        its *writer_options* state the unit every record is labelled with
+        (``unit_scale``: ``ptk.ExportContext.WRITER_UNITS``), so no producer
+        reads the scene's unit for it."""
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}
@@ -2204,7 +2211,24 @@ class FbxUtils(ptk.HelpMixin):
             pass
         if decisions.get("scope") is not None and "nodes" not in decisions:
             decisions["nodes"] = cls._shipped_nodes(decisions["scope"])
+        if "unit_scale" not in decisions:
+            decisions["unit_scale"] = cls._writer_unit(writer, writer_options)
         return ptk.ExportContext(mode=mode, source=source, **decisions)
+
+    @classmethod
+    def _writer_unit(
+        cls, writer: str, options: Optional[Dict[str, Any]] = None
+    ) -> Optional[float]:
+        """The metres one working unit is in the file Maya's *writer* writes
+        (``ptk.ExportContext.writer_unit``); ``None`` outside Maya, where the
+        scene states no unit."""
+        from mayatk.core_utils.units import Units
+
+        if cmds is None:
+            return None
+        return ptk.ExportContext.writer_unit(
+            cls.HOST, writer, Units.metres_per("working"), options
+        )
 
     @staticmethod
     def _shipped_nodes(roots: Iterable[str]) -> Optional[frozenset]:

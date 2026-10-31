@@ -1624,12 +1624,18 @@ class LightmapRecords(ptk.LoggingMixin):
         (``FbxUtils.PRODUCERS``). Pure: it reads the markers and never writes.
 
         Parameters:
-            ctx: The export's decisions; only its ``scope`` is read. A scoped
-                export names the export set's objects alone (the record is
-                ``export_scoped``): a marker outside it -- a hidden group of
-                stale copies -- would ship its map with nothing to bind it to.
+            ctx: The export's decisions; its ``scope`` and its writer's unit
+                are read. A scoped export names the export set's objects alone
+                (the record is ``export_scoped``): a marker outside it -- a
+                hidden group of stale copies -- would ship its map with
+                nothing to bind it to. The record's ``unit_scale`` is the
+                writer's (``ctx.unit``), the scene's without one.
         """
-        return cls._record(ctx.scope)
+        from mayatk.core_utils.units import Units
+
+        return cls._record(
+            ctx.scope, unit_scale=ctx.unit(lambda: Units.metres_per("working"))
+        )
 
     @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
@@ -1666,13 +1672,18 @@ class LightmapRecords(ptk.LoggingMixin):
     SPECULAR_LIGHT_LIMIT = 16
 
     @classmethod
-    def _record(cls, objects: Optional[List[str]] = None) -> Optional[ptk.Record]:
+    def _record(
+        cls, objects: Optional[List[str]] = None, unit_scale: Optional[float] = None
+    ) -> Optional[ptk.Record]:
         """(Re)build the lightmap manifest record from the scene's markers.
 
         One entry per marked TRANSFORM (one per instance, each with its own
         atlas ``scaleOffset``), legacy shape markers included, in the one
         marker enumeration's order (:meth:`_marker_records`, sorted by path);
         *objects* scopes it like that enumeration (``None`` = the scene).
+        *unit_scale* labels its lengths, which stay in the working unit (the
+        writer's metres per unit, ``ExportContext.unit``); ``None`` labels
+        them with the working unit's own.
         Its shape -- one ``unit_scale`` for every length, the version stamped
         -- is the record's model's (``ptk.LightmapRecord.payload``), which
         blendertk's producer publishes through too. unitytk's optional editor
@@ -1794,9 +1805,9 @@ class LightmapRecords(ptk.LoggingMixin):
         if baked:
             box = cmds.exactWorldBoundingBox(baked)
             near = [(box[i] + box[i + 3]) / 2.0 for i in range(3)]
-        # The probe and the lights both in the working unit -- the one the
-        # export writes the file in (the Scene Exporter switches it to its
-        # target first) -- so one unit_scale states them all.
+        # The probe and the lights both in the working unit, so one
+        # unit_scale -- the writer's, else the working unit's -- states them
+        # all; nothing here converts to the writer's.
         payload = ptk.LightmapRecord.payload(
             entries,
             probe=cls._in_working_unit(probe) if probe else None,
@@ -1807,7 +1818,9 @@ class LightmapRecords(ptk.LoggingMixin):
                 {k: v for k, v in light.items() if k != "name"}
                 for light in cls._baked_lights(baked, near)
             ],
-            unit_scale=Units.metres_per("working"),
+            unit_scale=(
+                unit_scale if unit_scale is not None else Units.metres_per("working")
+            ),
         )
         return ptk.SceneRecords.LIGHTMAPS.make(payload) if payload else None
 

@@ -124,16 +124,19 @@ class MayaExportMixin:
         """
         return tuple(self.export_stagers)
 
-    def _handoff_context(self, transforms: List[str]) -> ptk.ExportContext:
+    def _handoff_context(
+        self, transforms: List[str], writer: str = "fbx"
+    ) -> ptk.ExportContext:
         """The export context of a send of *transforms*: a HANDOFF context
         (only the DERIVED records refresh) scoped to the roots it sends, as
         the Scene Exporter's is -- so its export-scoped records state what it
         ships, not the whole scene, and the bracket puts the scene's own
         copy back after the write (``ptk.ExportSnapshot.restore_scene_wide``).
-        An empty send is scoped to nothing it could ship."""
+        An empty send is scoped to nothing it could ship. *writer* is the
+        carrier the send writes, which states the records' unit."""
         roots = cmds.ls([str(t) for t in transforms], long=True) if transforms else []
         return FbxUtils.export_context(
-            mode=ptk.ExportContext.HANDOFF, scope=tuple(roots or ())
+            mode=ptk.ExportContext.HANDOFF, writer=writer, scope=tuple(roots or ())
         )
 
     def _includes_animation(self, params: Dict[str, Any]) -> bool:
@@ -680,7 +683,7 @@ class MayaExportMixin:
             )
 
         with FbxUtils.export_prepared(
-            self._handoff_context(transforms),
+            self._handoff_context(transforms, writer="usd"),
             stagers=self._export_stagers(),
         ):
             options = self._usd_options(params, transforms)

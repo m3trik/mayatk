@@ -2294,7 +2294,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 "ShadowRig.refresh_silhouette) before exporting."
             )
         return ptk.SceneRecords.SHADOWS.make(
-            {"unit_scale": cls.unit_scale(), "planes": records}
+            {"unit_scale": ctx.unit(cls.unit_scale), "planes": records}
         )
 
     @classmethod
