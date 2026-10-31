@@ -49,12 +49,16 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: validate_meshes, validate_blendshape
 
 ### `anim_utils/key_stash/_key_stash.py` — Key Stash — park keyframes outside the working animation, retrieve later (Maya).
-- `class KeyStash(pythontk.core_utils.engines.key_stash.key_stash_model.KeyStash, _KeyStashInternal)`
-  - methods: active, watch_undo, reconcile, merge_carrier, discard_carrier, stash, retrieve, drop, stash_from, select_clip_objects, preview, end_preview
+- `class MayaKeyStashHost(object)`
+  - methods: persistence, store_state, scene_fps, schedule_flush, undo_chunk, save_in_step, reconcile, script_jobs
+- `class KeyStash(pythontk.KeyStash, _KeyStashInternal)`
+  - methods: discard_carrier, stash, retrieve, drop, stash_from, select_clip_objects, preview, end_preview
 
 ### `anim_utils/playblast_exporter.py` — Playblast capture, encoding, and preview-render exports for Maya.
+- `class MayaPlayblastHost(pythontk.PureSequenceHost)`
+  - methods: frame_range, sequence_name, sequence_fps, sound_source, audio_source, notify, warn, capture_frames, capture_still, capture_movie, export_target, render_with_arnold
 - `class PlayblastExporter(pythontk.SequenceExporter)`
-  - methods: scene_name, scene_fps, sequence_name, sequence_fps, resolve_sound_node, capture_sequence, capture_still, capture_movie, render_with_arnold
+  - methods: resolve_sound_node, capture_movie, render_with_arnold
 
 ### `anim_utils/scale_keys.py` — Dedicated scale-keys module to keep AnimUtils lean and testable.
 - `class ScaleKeys`
@@ -75,11 +79,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ShotApply(_ShotApplyInternal)`
   - methods: pin_shot_bounds, retime_gaps, apply
 
-### `anim_utils/shots/_shots.py` — Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
+### `anim_utils/shots/_shots.py` — Maya shots host — the DCC layer under ``pythontk``'s one shot store.
 - `class MayaScenePersistence`
   - methods: store_cls, save, load, record_changed, remove_callbacks
-- `class ShotStore(pythontk.ShotStore, _ShotStoreInternal)`
-  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, member_nodes, publish_export_view, export_transfer, apply_transfer, transfer_out, transfer_in, merge_carrier, discard_carrier
+- `class MayaShotsHost(_MayaShotsHostInternal)`
+  - methods: resolve, available, persistence, store_state, scene_fps, schedule_flush, legacy_prefs, migrate_ledger, follow_renames, has_animation, detection, assess, member_nodes, existing_objects, member_ids, keyed_windows, members_keyed_windows, audio_spans, curve_ledger_keys, undo_queue_top, undo_step, step_crossed, install_undo_sync, remove_undo_sync, publish_records, export_producer, transfer
 
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - `class ShotManifest(pythontk.core_utils.engines.shots.manifest.manifest_engine.ShotManifest, _ShotManifestInternal)`
@@ -196,9 +200,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GeometryMatcher(_GeometryMatcherInternal)`
   - methods: clear_cache, quantize, get_pca_basis, get_mesh_signature, are_meshes_identical, get_hierarchy_signature, are_meshes_identical_with_transform, are_hierarchies_identical, mesh_points, mesh_triangles, mesh_uv_set_names, mesh_get_uvs, mesh_num_uvs, calculate_mesh_volume
 
-### `core_utils/auto_instancer/instancing_strategy.py` — AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
-- `class InstancingStrategy(pythontk.InstancingStrategy)`
-
 ### `core_utils/components.py`
 - `class GetComponentsMixin`
   - methods: get_component_type, convert_alias, convert_component_type, get_component_index, convert_int_to_component, filter_components, get_components
@@ -274,12 +275,14 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class Plugins`
   - methods: is_loaded, available, load
 
-### `core_utils/preview.py` — Hermetic preview with replay-on-commit (H1 design).
+### `core_utils/preview.py` — Hermetic preview with replay-on-commit (H1 design): Maya's preview session.
 - `class OperationError(Exception)`
 - `class CleanupContract`
   - methods: snapshot_created, add_file, record_modification, rollback
-- `class Preview(_PreviewInternal)`
-  - methods: cleanup_all_instances, init_show_hide_behavior, conditionally_enable, conditionally_disable, toggle, validate_operation, enable, refresh, disable, finalize_changes, cleanup, enabled, operated_object_count, get_operated_objects, cleanup_all_previews, apply_result_selection
+- `class MayaPreviewSession`
+  - methods: captured_objects, selection, begin, run, rollback, discard, commit, apply, undo_step, unrecorded, select_result
+- `class Preview(uitk.PreviewController)`
+  - methods: apply_result_selection
 
 ### `core_utils/script_job_manager.py` — Centralized Maya event subscription manager.
 - `class ScriptJobManager`
@@ -322,16 +325,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `edit_utils/curtain/_curtain.py` — Procedural draped-cloth (curtain) generator for Maya.
 - `class Rail(pythontk.Polyline)`
   - methods: from_selection, sample_curve
-- `class CurtainMesh(CurtainDrape)`
+- `class CurtainMesh(pythontk.CurtainDrape)`
   - methods: create, build
 - `class CurtainRig`
   - methods: attach
 - `class Curtain`
   - methods: rail_from_selection, create, rail_curve, delete_rail_curve, triangle_count
-
-### `edit_utils/curtain/_curtain_drape.py` — Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
-- `class CurtainDrape(_CurtainDrapeInternal)`
-  - methods: prepare, grid_points, drape
 
 ### `edit_utils/cut_on_axis.py`
 - `class CutOnAxis`
@@ -523,9 +522,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class HierarchySyncSession(pythontk.LoggingMixin)`
   - methods: loggers, fuzzy_matching, is_loaded, load_reference, release_reference, analyze, clear_analysis, repair, pull, current_scene_nodes, hierarchy_structure, clean_path, node_path, node_name, node_alive, rename_nodes, reparent_nodes, delete_nodes, select_nodes, scene_path, workspace, recent_scenes, open_scene, reference_formats
 
-### `env_utils/hierarchy_sync/scene_data_sidecar.py` — Scene-data sidecar -- Maya's scene hooks over ``ptk.SceneDataSidecarBase``.
+### `env_utils/hierarchy_sync/scene_data_sidecar.py` — Scene-data sidecar -- Maya's host adapter for ``ptk.SceneDataSidecarBase``.
+- `class MayaSidecarHost`
+  - methods: expand_to_descendants, drop_intermediate, clean_path
 - `class SceneDataSidecar(pythontk.SceneDataSidecarBase)`
-  - methods: build_clean_path_set, expand_to_descendants, drop_intermediate
 
 ### `env_utils/material_records.py` — The ``materials`` record's Maya producer.
 - `class MaterialRecords(pythontk.HelpMixin)`
@@ -591,9 +591,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class WorkspaceManager(pythontk.HelpMixin, pythontk.LoggingMixin)`
   - methods: current_workspace, current_working_dir, recursive_search, ignore_empty_workspaces, workspace_files, find_available_workspaces, invalidate_workspace_files, resolve_file_path
 
-### `env_utils/workspace_map.py`
-- `class WorkspaceMap(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin)`
-  - methods: current_working_dir, recursive_search, workspace_data, invalidate_workspace_data, get_workspace_tree_data, get_filtered_workspaces, create_project, mark_root_as_project
+### `env_utils/workspace_map.py` — Workspace Map -- Maya's host adapter for ``ptk.WorkspaceMapBase``.
+- `class MayaWorkspaceMapHost`
+  - methods: current_workspace, find_workspaces, scene_files, create_workspace, promote_workspace
+- `class WorkspaceMap(pythontk.WorkspaceMapBase, pythontk.HelpMixin)`
 
 ### `light_utils/_light_utils.py` — Light utilities — building real scene lights from the geometry that represents them.
 - `class LightUtils(_LightUtilsInternal, pythontk.HelpMixin)`
@@ -601,7 +602,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, set_hdr_map_visibility, sky_radius, preview, rotation, intensity, exposure, resolution, samples, diffuse, specular, create_network, clear, select, defer_apply
+  - methods: arnold_loaded, arnold_available, ensure_plugin_loaded, hdr_env, hdr_env_transform, hdr_file_node, hdr_file_path, visibility, set_hdr_map_visibility, sky_radius, preview, rotation, intensity, exposure, resolution, samples, diffuse, specular, create_network, clear, select, defer_apply, import_hdrs
 
 ### `light_utils/light_layer_baker.py` — Light layers: each light of a rig baked alone, the raw material of a look match.
 - `class LightLayerBaker(pythontk.LoggingMixin)`
@@ -612,6 +613,8 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: store, aim_rotation, normalize, fixture_overrides, diff, fingerprint, capture, applied, compare, scene_rigs, can_swap_back, remove, apply, swap_back, names, load, save, delete, rename, landed_overrides
 
 ### `light_utils/lightmap_baker/_probe_placement.py` — Where a lightmap bake's reflection probe stands -- Maya's scene for the placement.
+- `class MayaProbeHost`
+  - methods: nodes, rays, intersect, normal, lights, bounds, to_scene, to_internal
 - `class ProbePlacement(pythontk.ProbePlacement)`
 
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
@@ -626,7 +629,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/_mat_utils.py` — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, get_mat_names, get_scene_mat_names, get_mat_facts, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_scopes, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, assign_random_mat, assign_new_mat, rename_mat, delete_mats, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, select_by_mat, select_unassigned, show_mat_attributes, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, rename_texture_file, sync_material_names, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, find_duplicate_materials, merge_duplicate_materials, delete_unused_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, get_texture_file_node, probe_texture_path, has_path_token, is_frame_sequence, token_wildcard, texture_tiles, apply_uv_tiling
+  - methods: resolve_path, get_mats, get_mat_names, get_scene_mat_names, get_mat_facts, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_scopes, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, assign_random_mat, assign_new_mat, rename_mat, delete_mats, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, select_by_mat, select_unassigned, show_mat_attributes, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, rename_texture_file, sync_material_names, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, find_duplicate_materials, merge_duplicate_materials, delete_unused_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_color, convert_bump_to_normal, validate_normal_map_setup, graph_materials, get_texture_file_node, probe_texture_path, has_path_token, is_frame_sequence, token_wildcard, texture_tiles, apply_uv_tiling
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(pythontk.LoggingMixin, _ArnoldBridgeInternal)`
@@ -744,10 +747,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: create, has_channel, channels_on, set_color, get_color, get_color_stops, key_fade, key_pulse, write_keys, fade_windows, sync_visibility_from_opacity, ensure_connections, remove
 
 ### `mat_utils/render_opacity/channels.py` — The per-object render-effect channel table.
-- `spec_for(channel) -> ChannelSpec`
 - constants: CHANNELS, OPACITY, HIGHLIGHT, PRESENCE
 - `class ChannelSpec`
-  - methods: stop_attr, track_color_stops, attrs
+  - methods: resolve, stop_attr, track_color_stops, attrs
 
 ### `mat_utils/render_opacity/material_mode.py` — Clean up what the retired viewport "material mode" left in a scene.
 - `class OpacityMaterialMode(pythontk.LoggingMixin)`

@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (916)
+## Moved out (927)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -38,6 +38,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.refresh` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
 - `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.refresh_from_scene` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
 - `anim_utils/key_stash/key_stash_slots.py::KeyStashSlots.store` → `tentacle.slots.tools.key_stash.KeyStashSlots` (from 0.30.0)
+- `anim_utils/shots/_shots.py::ShotStore.undo_queue_top` → `mayatk.MayaShotsHost.undo_queue_top` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin.export` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/header_menu.py::HeaderMenuMixin` → `tentacle.slots.tools._shot_manifest.header_menu.HeaderMenuMixin` (from 0.30.0)
@@ -280,6 +281,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `audio_utils/audio_clips/callbacks.py::CallbacksMixin` → `mayatk.AudioClips` (from 0.30.0)
 - `audio_utils/audio_clips/callbacks.py::CallbacksMixin.remove_callbacks` → `mayatk.AudioClips` (from 0.30.0)
 - `audio_utils/audio_clips/export_ops.py::ExportMixin` → `mayatk.AudioClips` (from 0.30.0)
+- `core_utils/preview.py::Preview.cleanup_all_previews` → `mayatk.Preview.cleanup_all_instances` (from 0.30.0)
+- `core_utils/preview.py::Preview.enabled` → `mayatk.Preview.is_enabled` (from 0.30.0)
+- `core_utils/preview.py::Preview.get_operated_objects` → `mayatk.core_utils.preview.MayaPreviewSession.captured_objects` (from 0.30.0)
+- `core_utils/preview.py::Preview.operated_object_count` → `mayatk.core_utils.preview.MayaPreviewSession.captured_objects` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots.b000` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots.b001` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
@@ -301,6 +306,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/bridge.py::BridgeSlots` → `tentacle.slots.tools.bridge.BridgeSlots` (from 0.30.0)
 - `edit_utils/bridge.py::BridgeSlots.header_init` → `tentacle.slots.tools.bridge.BridgeSlots` (from 0.30.0)
 - `edit_utils/bridge.py::BridgeSlots.perform_operation` → `tentacle.slots.tools.bridge.BridgeSlots` (from 0.30.0)
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape` → `pythontk.CurtainDrape` (from 0.30.0)
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape.drape` → `pythontk.CurtainDrape` (from 0.30.0)
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape.grid_points` → `pythontk.CurtainDrape` (from 0.30.0)
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape.prepare` → `pythontk.CurtainDrape` (from 0.30.0)
 - `edit_utils/curtain/curtain_slots.py::CurtainSlots` → `tentacle.slots.tools.curtain.CurtainSlots` (from 0.30.0)
 - `edit_utils/curtain/curtain_slots.py::CurtainSlots.b001_init` → `tentacle.slots.tools.curtain.CurtainSlots` (from 0.30.0)
 - `edit_utils/curtain/curtain_slots.py::CurtainSlots.b002` → `tentacle.slots.tools.curtain.CurtainSlots` (from 0.30.0)
@@ -361,12 +370,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/snap.py::SnapSlots.b002` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.b002_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.header_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
-- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
-- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.b000` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
-- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.list_template_modes` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
-- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.make_bridge` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
-- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.params_module` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
-- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.template_dir` → `tentacle.slots.tools.blender_bridge.BlenderBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots` → `tentacle.slots.tools.dcc_bridge.DccBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.b000` → `tentacle.slots.tools.dcc_bridge.DccBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.list_template_modes` → `tentacle.slots.tools.dcc_bridge.DccBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.make_bridge` → `tentacle.slots.tools.dcc_bridge.DccBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.params_module` → `tentacle.slots.tools.dcc_bridge.DccBridgeSlots` (from 0.30.0)
+- `env_utils/blender_bridge/blender_bridge_slots.py::BlenderBridgeSlots.template_dir` → `tentacle.slots.tools.dcc_bridge.DccBridgeSlots` (from 0.30.0)
 - `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
 - `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.analyze_hierarchies` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
 - `env_utils/hierarchy_sync/hierarchy_sync_slots.py::HierarchySyncController.clear_ignored_paths` → `tentacle.slots.tools._hierarchy_sync.controller.HierarchySyncController` (from 0.30.0)
@@ -519,25 +528,25 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.b000` → `tentacle.slots.tools.unity_bridge.UnityBridgeSlots` (from 0.30.0)
 - `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.make_bridge` → `tentacle.slots.tools.unity_bridge.UnityBridgeSlots` (from 0.30.0)
 - `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.params_module` → `tentacle.slots.tools.unity_bridge.UnityBridgeSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapController` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapController.open_selected_workspace` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapController.refresh_tree` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapController.selected_workspace` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapController.update_current_dir` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.browse_directory` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.btn_explore_folder` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.btn_open_workspace` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.chk000` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.filter_workspaces` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.header_init` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.mark_root` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.new_project` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.save_template` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.set_to_workspace` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.tree000_init` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.txt000_init` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
-- `env_utils/workspace_map.py::WorkspaceMapSlots.txt001_init` → `tentacle.slots.tools.workspace_map.WorkspaceMapSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapController` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapController.open_selected_workspace` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapController.refresh_tree` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapController.selected_workspace` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapController.update_current_dir` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.browse_directory` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.btn_explore_folder` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.btn_open_workspace` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.chk000` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.filter_workspaces` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.header_init` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.mark_root` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.new_project` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.save_template` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.set_to_workspace` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.tree000_init` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.txt000_init` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
+- `env_utils/workspace_map.py::WorkspaceMapSlots.txt001_init` → `tentacle.slots.tools.workspaces.WorkspacesSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.add_hdr` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.clear_network` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
@@ -600,6 +609,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.track_selected` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
 - `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.txt000_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
 - `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.txt_output_dir_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `mat_utils/_mat_utils.py::MatUtils.get_mat_swatch_icon` → `mayatk.MatUtils.get_mat_swatch_color` (from 0.30.0)
 - `mat_utils/arnold_bridge.py::ArnoldBridgeSlots` → `tentacle.slots.tools.arnold_bridge.ArnoldBridgeSlots` (from 0.30.0)
 - `mat_utils/arnold_bridge.py::ArnoldBridgeSlots.b000` → `tentacle.slots.tools.arnold_bridge.ArnoldBridgeSlots` (from 0.30.0)
 - `mat_utils/arnold_bridge.py::ArnoldBridgeSlots.b001` → `tentacle.slots.tools.arnold_bridge.ArnoldBridgeSlots` (from 0.30.0)
@@ -662,6 +672,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/mat_updater.py::MatUpdaterSlots.move_to_folder` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
 - `mat_utils/mat_updater.py::MatUpdaterSlots.selection_mode` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
 - `mat_utils/mat_updater.py::MatUpdaterSlots.shader_type` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
+- `mat_utils/render_opacity/channels.py::spec_for` → `mayatk.mat_utils.render_opacity.channels.ChannelSpec.resolve` (from 0.30.0)
 - `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
 - `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.b000` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
 - `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.btn_remove` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
@@ -921,7 +932,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (479)
+## Added (562)
 
 - `anim_utils/_anim_utils.py::AnimUtils.copied_key_counts(copied_data: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, int]`
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
@@ -934,8 +945,57 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.selected_base(cls) -> Optional[str]`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.tween_topology(self) -> Tuple[Optional[int], List[Tuple[Target, Optional[int]]]]`
 - `anim_utils/key_stash/_key_stash.py::KeyStash.select_clip_objects(self, clip_id: int) -> List[str]`
-- `anim_utils/key_stash/_key_stash.py::KeyStash.stash_from(self, source: str) -> Optional[StashedClip]`
-- `anim_utils/key_stash/_key_stash.py::KeyStash.watch_undo(cls, owner, widget=None) -> List[int]`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.stash_from(self, source: str) -> Optional[ptk.StashedClip]`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost(class)`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.persistence(store_cls: type) -> Optional[MayaScenePersistence]`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.reconcile(store) -> List[int]`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.save_in_step(backend, data: Dict[str, Any]) -> bool`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.scene_fps() -> float`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.schedule_flush(store) -> None`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.script_jobs()`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.store_state() -> None`
+- `anim_utils/key_stash/_key_stash.py::MayaKeyStashHost.undo_chunk(name: str) -> ContextManager[Any]`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost(class)`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.audio_source(self) -> Tuple[Optional[str], float]`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.capture_frames(self, exporter: ptk.SequenceExporter, directory: str, prefix: str, start: int, end: int, camera: Optional[str], image_format: str, padding: int, overrides: Dict[str, Any]) -> None`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.capture_movie(self, exporter: ptk.SequenceExporter, filepath: str, fmt: str, compression: str, start: int, end: int, camera: Optional[str], sound: Optional[str], overrides: Dict[str, Any]) -> str`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.capture_still(self, exporter: ptk.SequenceExporter, filepath: str, frame: int, camera: Optional[str], image_format: str, overrides: Dict[str, Any]) -> None`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.export_target(self, exporter: ptk.SequenceExporter, spec: ExportTarget, output_dir: str, name: str, start: int, end: int, camera: Optional[str], sound: Optional[str], overrides: Dict[str, Any]) -> Union[str, List[str]]`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.frame_range(mode: str) -> Tuple[float, float]`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.notify(message: str) -> bool`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.render_with_arnold(self, exporter: ptk.SequenceExporter, output_dir: str, start: Optional[int] = None, end: Optional[int] = None, camera: Optional[str] = None, prefix: Optional[str] = None, frame_padding: Optional[int] = None, render_layer: Optional[str] = None, **kwargs: Any) -> List[str]`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.sequence_fps() -> float`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.sequence_name() -> str`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.sound_source() -> Optional[str]`
+- `anim_utils/playblast_exporter.py::MayaPlayblastHost.warn(message: str) -> bool`
+- `anim_utils/shots/_shots.py::MayaShotsHost(class)`
+- `anim_utils/shots/_shots.py::MayaShotsHost.assess(store) -> Dict[int, str]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.audio_spans() -> List[tuple]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.available() -> bool`
+- `anim_utils/shots/_shots.py::MayaShotsHost.curve_ledger_keys(store, objects=None)`
+- `anim_utils/shots/_shots.py::MayaShotsHost.detection()`
+- `anim_utils/shots/_shots.py::MayaShotsHost.existing_objects(store, names) -> set`
+- `anim_utils/shots/_shots.py::MayaShotsHost.export_producer(enabled: bool) -> None`
+- `anim_utils/shots/_shots.py::MayaShotsHost.follow_renames(store) -> bool`
+- `anim_utils/shots/_shots.py::MayaShotsHost.has_animation() -> bool`
+- `anim_utils/shots/_shots.py::MayaShotsHost.install_undo_sync(cls, on_step) -> None`
+- `anim_utils/shots/_shots.py::MayaShotsHost.keyed_windows(store, windows) -> List[bool]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.legacy_prefs(cls) -> Optional[Dict[str, Any]]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.member_ids(names) -> Dict[str, str]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.member_nodes(name: str) -> List[str]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.members_keyed_windows(store, entries) -> List[Optional[bool]]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.migrate_ledger(store) -> None`
+- `anim_utils/shots/_shots.py::MayaShotsHost.persistence() -> Optional[MayaScenePersistence]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.publish_records(records) -> Optional[str]`
+- `anim_utils/shots/_shots.py::MayaShotsHost.remove_undo_sync(cls, on_step) -> None`
+- `anim_utils/shots/_shots.py::MayaShotsHost.resolve(cls) -> Optional['MayaShotsHost']`
+- `anim_utils/shots/_shots.py::MayaShotsHost.scene_fps() -> float`
+- `anim_utils/shots/_shots.py::MayaShotsHost.schedule_flush(store) -> None`
+- `anim_utils/shots/_shots.py::MayaShotsHost.step_crossed(cls, marker, redo: bool = False) -> bool`
+- `anim_utils/shots/_shots.py::MayaShotsHost.store_state() -> None`
+- `anim_utils/shots/_shots.py::MayaShotsHost.transfer() -> '_MayaShotTransfer'`
+- `anim_utils/shots/_shots.py::MayaShotsHost.undo_queue_top(redo: bool = False) -> str`
+- `anim_utils/shots/_shots.py::MayaShotsHost.undo_step(cls, store, label: str = 'edit', snapshot: bool = True)`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.behaviors_cls()`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.range_resolver_cls()`
 - `anim_utils/shots/shot_sequencer/segment_collector.py::SegmentCollector.abbreviate_attrs(attrs) -> str`
@@ -1061,6 +1121,18 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `core_utils/components.py::Components.transfer(cls, objects, transfer_type: str)`
 - `core_utils/diagnostics/mesh_diag.py::MeshDiagnostics.cleanup_meshes(cls, scope: str = 'selected', repair: bool = False, *, checks=(), area_tolerance: float = 1e-05, edge_length_tolerance: float = 1e-05, uv_area_tolerance: float = 1e-05, merge_vertices: bool = False, merge_distance: float = 0.0001, delete_history: bool = False, delete_loose: bool = False, dissolve_degenerate: bool = False, recalculate_normals: bool = False, fill_holes: bool = False, overlapping_faces: bool = False, overlapping_objects: bool = False, omit_selected: bool = False) -> dict`
 - `core_utils/diagnostics/transform_diag.py::TransformDiagnostics.transforms_in_scope(scope: str = 'selection') -> List[str]`
+- `core_utils/preview.py::MayaPreviewSession(class)`
+- `core_utils/preview.py::MayaPreviewSession.apply(self, objects) -> None`
+- `core_utils/preview.py::MayaPreviewSession.begin(self, objects) -> None`
+- `core_utils/preview.py::MayaPreviewSession.captured_objects(self) -> List[str]`
+- `core_utils/preview.py::MayaPreviewSession.commit(self) -> None`
+- `core_utils/preview.py::MayaPreviewSession.discard(self, reselect: bool) -> None`
+- `core_utils/preview.py::MayaPreviewSession.rollback(self) -> None`
+- `core_utils/preview.py::MayaPreviewSession.run(self) -> None`
+- `core_utils/preview.py::MayaPreviewSession.select_result(self, checkbox, results, committed: bool) -> None`
+- `core_utils/preview.py::MayaPreviewSession.selection() -> List[str]`
+- `core_utils/preview.py::MayaPreviewSession.undo_step(name: str)`
+- `core_utils/preview.py::MayaPreviewSession.unrecorded()`
 - `display_utils/_display_utils.py::DisplayUtils.clear_xray(cls) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_component_ids() -> Optional[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_normals_display() -> Optional[str]`
@@ -1170,6 +1242,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.scene_path() -> str`
 - `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.select_nodes(nodes: Sequence[Any]) -> int`
 - `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.workspace() -> str`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::MayaSidecarHost(class)`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::MayaSidecarHost.clean_path(path: str) -> str`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::MayaSidecarHost.drop_intermediate(nodes) -> list`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::MayaSidecarHost.expand_to_descendants(objects) -> list`
 - `env_utils/reference_manager/_reference_manager.py::ReferenceManager.bake_project_root(self) -> Optional[str]`
 - `env_utils/reference_manager/_reference_manager.py::ReferenceManager.bake_scene(self, path: str, **kwargs) -> str`
 - `env_utils/reference_manager/_reference_manager.py::ReferenceManager.bake_source(referenced_path) -> Optional[str]`
@@ -1199,8 +1275,24 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.refresh_fbx_presets(self) -> Dict[str, Optional[str]]`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.restore_fbx_preset(self, metadata: Optional[Dict[str, str]]) -> Optional[str]`
 - `env_utils/unity_bridge/_unity_bridge.py::UnityBridge.params_registry(cls)`
+- `env_utils/workspace_map.py::MayaWorkspaceMapHost(class)`
+- `env_utils/workspace_map.py::MayaWorkspaceMapHost.create_workspace(root: str) -> Optional[ptk.Workspace]`
+- `env_utils/workspace_map.py::MayaWorkspaceMapHost.current_workspace() -> str`
+- `env_utils/workspace_map.py::MayaWorkspaceMapHost.find_workspaces(root_dir: str, recursive: bool) -> List[str]`
+- `env_utils/workspace_map.py::MayaWorkspaceMapHost.promote_workspace(root: str) -> Optional[ptk.Workspace]`
+- `env_utils/workspace_map.py::MayaWorkspaceMapHost.scene_files(workspace: str) -> List[str]`
 - `light_utils/hdr_manager.py::HdrManager.defer_apply(callback: Callable[[], None]) -> None`
+- `light_utils/hdr_manager.py::HdrManager.import_hdrs(cls, paths, folder: Optional[str], mode: str = 'copy', on_conflict='reuse', strict: bool = False) -> dict`
 - `light_utils/hdr_manager.py::HdrManager.select(self, part: str = 'skydome') -> Optional[str]`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost(class)`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.bounds(nodes: Sequence[str]) -> Box`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.intersect(payload, origin, direction, far)`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.lights(self) -> Tuple[List[Tuple[Vec, Optional[str]]], bool]`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.nodes(objects: Sequence[str]) -> List[str]`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.normal(payload, face) -> Vec`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.rays(self, nodes: Sequence[str]) -> ptk.ProbeRays`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.to_internal(point: Sequence[float]) -> List[float]`
+- `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.to_scene(value: float) -> float`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.preset_name(cls, name: str) -> str`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_lights(cls, scope: str = 'selected') -> List[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_meshes(scope: str = 'selected') -> List[str]`
@@ -1212,6 +1304,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/_mat_utils.py::MatUtils.find_duplicate_materials(cls, materials=None) -> Dict[str, str]`
 - `mat_utils/_mat_utils.py::MatUtils.get_mat_facts(cls, materials) -> Dict[str, Dict[str, Any]]`
 - `mat_utils/_mat_utils.py::MatUtils.get_mat_names(cls, objects=None) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.get_mat_swatch_color(mat: Union[str, object]) -> Optional[Tuple[float, float, float]]`
 - `mat_utils/_mat_utils.py::MatUtils.get_scene_mat_names(cls, exclude_defaults: bool = False, exc_renderer=None) -> List[str]`
 - `mat_utils/_mat_utils.py::MatUtils.get_texture_scopes(cls) -> Dict[str, Callable[[], List[str]]]`
 - `mat_utils/_mat_utils.py::MatUtils.merge_duplicate_materials(cls, pairs: Dict[str, str]) -> int`
@@ -1255,6 +1348,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/mat_updater.py::MatUpdater.selected_materials(cls, shader_type: Optional[str] = None) -> List[str]`
 - `mat_utils/mat_updater.py::MatUpdater.shader_type_choices() -> List[Tuple[str, str]]`
 - `mat_utils/mat_updater.py::MatUpdater.texture_root() -> str`
+- `mat_utils/render_opacity/channels.py::ChannelSpec.resolve(cls, channel) -> 'ChannelSpec'`
 - `mat_utils/render_opacity/render_effects.py::RenderEffects.has_channel(cls, obj, channel='opacity') -> bool`
 - `mat_utils/render_opacity/render_effects.py::RenderEffects.select_objects(objects) -> List[str]`
 - `mat_utils/render_opacity/render_effects.py::RenderEffects.selected_objects(last_only: bool = False) -> List[str]`
@@ -1421,10 +1515,56 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - `env_utils/_env_utils.py::EnvUtils.set_scene_source` — remove in 0.30.0, not before 2026-11-24
 - `env_utils/_env_utils.py::EnvUtils.twin_save_target` — remove in 0.30.0, not before 2026-11-24
 
-## Moved (20)
+## Moved (66)
 
 _Still resolvable at the same call site -- hoisted to a base class or re-exported from another module. NOT a removal: no alias or minor bump is owed._
 
+- `anim_utils/key_stash/_key_stash.py::KeyStash.active`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.merge_carrier`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.reconcile`
+- `anim_utils/playblast_exporter.py::PlayblastExporter.capture_sequence`
+- `anim_utils/playblast_exporter.py::PlayblastExporter.capture_still`
+- `anim_utils/playblast_exporter.py::PlayblastExporter.scene_fps`
+- `anim_utils/playblast_exporter.py::PlayblastExporter.scene_name`
+- `anim_utils/playblast_exporter.py::PlayblastExporter.sequence_fps`
+- `anim_utils/playblast_exporter.py::PlayblastExporter.sequence_name`
+- `anim_utils/shots/_shots.py::ShotStore`
+- `anim_utils/shots/_shots.py::ShotStore.active`
+- `anim_utils/shots/_shots.py::ShotStore.apply_transfer`
+- `anim_utils/shots/_shots.py::ShotStore.assess`
+- `anim_utils/shots/_shots.py::ShotStore.detect_regions`
+- `anim_utils/shots/_shots.py::ShotStore.discard_carrier`
+- `anim_utils/shots/_shots.py::ShotStore.export_transfer`
+- `anim_utils/shots/_shots.py::ShotStore.has_animation`
+- `anim_utils/shots/_shots.py::ShotStore.member_nodes`
+- `anim_utils/shots/_shots.py::ShotStore.merge_carrier`
+- `anim_utils/shots/_shots.py::ShotStore.publish_export_view`
+- `anim_utils/shots/_shots.py::ShotStore.scene_edit`
+- `anim_utils/shots/_shots.py::ShotStore.transfer_in`
+- `anim_utils/shots/_shots.py::ShotStore.transfer_out`
+- `core_utils/auto_instancer/instancing_strategy.py::InstancingStrategy`
+- `core_utils/preview.py::Preview.cleanup`
+- `core_utils/preview.py::Preview.cleanup_all_instances`
+- `core_utils/preview.py::Preview.conditionally_disable`
+- `core_utils/preview.py::Preview.conditionally_enable`
+- `core_utils/preview.py::Preview.disable`
+- `core_utils/preview.py::Preview.enable`
+- `core_utils/preview.py::Preview.finalize_changes`
+- `core_utils/preview.py::Preview.init_show_hide_behavior`
+- `core_utils/preview.py::Preview.refresh`
+- `core_utils/preview.py::Preview.toggle`
+- `core_utils/preview.py::Preview.validate_operation`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.build_clean_path_set`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.drop_intermediate`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.expand_to_descendants`
+- `env_utils/workspace_map.py::WorkspaceMap.create_project`
+- `env_utils/workspace_map.py::WorkspaceMap.current_working_dir`
+- `env_utils/workspace_map.py::WorkspaceMap.get_filtered_workspaces`
+- `env_utils/workspace_map.py::WorkspaceMap.get_workspace_tree_data`
+- `env_utils/workspace_map.py::WorkspaceMap.invalidate_workspace_data`
+- `env_utils/workspace_map.py::WorkspaceMap.mark_root_as_project`
+- `env_utils/workspace_map.py::WorkspaceMap.recursive_search`
+- `env_utils/workspace_map.py::WorkspaceMap.workspace_data`
 - `mat_utils/emissive_groups.py::EmissiveGroups.add_group`
 - `mat_utils/emissive_groups.py::EmissiveGroups.bake_mask`
 - `mat_utils/emissive_groups.py::EmissiveGroups.bake_vertex_colors`
@@ -1446,7 +1586,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (26)
+## Signature changed (28)
 
 - `anim_utils/_anim_utils.py::AnimUtils.fit_playback_range`
   - was: `(objects=None, padding: float = 0) -> bool`
@@ -1457,6 +1597,12 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `anim_utils/_anim_utils.py::AnimUtils.transfer_keyframes`
   - was: `(cls, objects: List[str], relative: bool = False, transfer_tangents: bool = False, optimize: bool = False, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None)`
   - now: `(cls, objects: Optional[List[str]] = None, relative: bool = False, transfer_tangents: bool = False, optimize: bool = False, on_replace: Optional[Callable[[str, List[float]], Any]] = None, on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None)`
+- `anim_utils/key_stash/_key_stash.py::KeyStash.stash`
+  - was: `(self, objects: Optional[Sequence[str]] = None, time_range: Optional[Tuple[float, float]] = None, selected_keys: bool = False, attributes: Optional[Sequence[str]] = None, label: Optional[str] = None, source_shot_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None, targets: Optional[Sequence[Tuple[str, Any, float, float]]] = None) -> Optional[StashedClip]`
+  - now: `(self, objects: Optional[Sequence[str]] = None, time_range: Optional[Tuple[float, float]] = None, selected_keys: bool = False, attributes: Optional[Sequence[str]] = None, label: Optional[str] = None, source_shot_id: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None, targets: Optional[Sequence[Tuple[str, Any, float, float]]] = None) -> Optional[ptk.StashedClip]`
+- `anim_utils/playblast_exporter.py::PlayblastExporter.resolve_sound_node`
+  - was: `() -> Optional[str]`
+  - now: `(cls) -> Optional[str]`
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
   - now: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, select: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
