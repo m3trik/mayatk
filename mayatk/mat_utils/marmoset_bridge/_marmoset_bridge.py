@@ -16,7 +16,7 @@ is bundled alongside this module in the ``marmoset_bridge`` subpackage:
 the Toolbag SDK glue is not a generic pythontk utility, so it lives with
 its consumer (mirroring ``substance_bridge``). This module owns only what
 genuinely needs Maya. extapps' ``marmoset_workflow`` keeps its own copy of the
-same engine (for tentacle's standalone Marmoset Workflow panel), since it cannot
+same engine (for its standalone Marmoset Workflow panel), since it cannot
 import mayatk.
 """
 
