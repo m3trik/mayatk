@@ -743,5 +743,64 @@ class TestNamingToolApi(MayaTkTestCase):
         self.assertEqual(Naming.UNSUPPORTED_TYPES, {})
 
 
+class _Captured:
+    """Collect what ``Naming.logger`` emits during a block (message texts)."""
+
+    def __init__(self):
+        import logging
+
+        self.texts = []
+        handler = logging.Handler()
+        handler.emit = lambda record: self.texts.append(record.getMessage())
+        self.handler = handler
+
+    def __enter__(self):
+        Naming.logger.addHandler(self.handler)
+        return self
+
+    def __exit__(self, *_exc):
+        Naming.logger.removeHandler(self.handler)
+
+    def lines(self, word):
+        return [t for t in self.texts if word in t]
+
+
+class TestNamingEdgeCases(MayaTkTestCase):
+    """The Naming probe's findings (2026-10-31), one regression each."""
+
+    def tearDown(self):
+        cmds.namespace(setNamespace=":")
+        super().tearDown()
+
+    # -- S1-A: the node's own namespace is kept --------------------------------
+
+    def test_every_operation_keeps_the_namespace(self):
+        """Regression: each operation renamed ``ns:prop1`` into the CURRENT
+        namespace (``|PROP1``, ``|prop1_GEO``, ...), dropping ``ns``."""
+        cmds.namespace(add="ns")
+        runs = (
+            lambda n: Naming.set_case([n], "upper"),
+            lambda n: Naming.suffix_by_type([n]),
+            lambda n: Naming.strip_chars([n], 1, trailing=True),
+            lambda n: Naming.rename([n], "**_v2"),
+            lambda n: Naming.append_location_based_suffix([n]),
+        )
+        for run in runs:
+            node = cmds.polyCube(n="ns:prop1")[0]
+            uid = _uuid(node)
+            run(node)
+            path = cmds.ls(uid, long=True)[0]
+            self.assertTrue(path.split("|")[-1].startswith("ns:"), path)
+            cmds.delete(path)
+
+    def test_a_root_node_stays_in_the_root_while_another_namespace_is_current(self):
+        cmds.group(em=True, n="rootobj")
+        uid = _uuid("rootobj")
+        cmds.namespace(add="other")
+        cmds.namespace(setNamespace=":other")
+        Naming.rename(["|rootobj"], "moved")
+        self.assertEqual(cmds.ls(uid, long=True), ["|moved"])
+
+
 if __name__ == "__main__":
     unittest.main()

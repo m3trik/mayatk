@@ -997,7 +997,7 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             # so they must keep their name here.
             for key, old, new in plan:
                 if new != old:
-                    cmds.rename(cls._path(key), "p0000000000")
+                    cls._rename_node(key, "p0000000000")
         return cls._apply_plan(plan, "Suffix By Location", dry_run)
 
     # ------------------------------------------------------------------
@@ -1008,6 +1008,18 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
     def _leaf(path: str) -> str:
         """The node's leaf name: no DAG path, no namespace."""
         return path.split("|")[-1].split(":")[-1]
+
+    @staticmethod
+    def _namespace(path: str) -> str:
+        """The node's own namespace: ``a:b`` of ``|grp|a:b:box``, ``""`` at the root."""
+        return path.split("|")[-1].rpartition(":")[0]
+
+    @staticmethod
+    def _in_namespace(namespace: str, name: str) -> str:
+        """*name* spelled absolute in *namespace* -- what ``cmds.rename`` needs
+        to keep a node where it is: a bare name lands in the CURRENT namespace
+        (``ns:prop1`` renamed ``PROP1`` became ``|PROP1``)."""
+        return f":{namespace}:{name}" if namespace else f":{name}"
 
     @staticmethod
     def _key(path: str) -> str:
@@ -1021,8 +1033,11 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
 
     @classmethod
     def _rename_node(cls, key: str, new_name: str) -> str:
-        """The :class:`pythontk.RenamePlan` strategy: rename one node, return its new leaf."""
-        return cls._leaf(str(cmds.rename(cls._path(key), new_name)))
+        """The :class:`pythontk.RenamePlan` strategy: rename one node, in its
+        own namespace, and return its new leaf."""
+        path = cls._path(key)
+        target = cls._in_namespace(cls._namespace(path), new_name)
+        return cls._leaf(str(cmds.rename(path, target)))
 
     @classmethod
     def _node_link(cls, key: str, name: str) -> str:
