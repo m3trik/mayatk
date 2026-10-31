@@ -74,7 +74,7 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
         Deferring the import keeps a missing one from raising while the module
         is merely being imported -- which would fire before any UI exists to say
         so -- and lets the panel offer to install it on demand instead
-        (:meth:`uitk.bridge.BridgeSlotsBase.ensure_optional_package`).
+        (:meth:`uitk.bridge.ParamPanelSlots.ensure_optional_package`).
         """
         from unitytk import CopyToAssetsDeliverer
 

@@ -281,7 +281,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         super().__init__()
         # The Toolbag-side launch/roundtrip Strategy (also usable standalone).
         self.deliverer = MarmosetEngine(toolbag_path)
-        # The panel redirects only the bridge's logger (`BridgeSlotsBase`); route
+        # The panel redirects only the bridge's logger (`ParamPanelSlots`); route
         # the engine's delivery-phase output (Toolbag launch, output links,
         # roundtrip results) through the SAME logger so it reaches the log panel.
         # `LoggingMixin.logger` is a non-data ClassProperty, so this instance
