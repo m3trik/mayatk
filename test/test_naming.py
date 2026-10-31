@@ -892,6 +892,46 @@ class TestNamingEdgeCases(MayaTkTestCase):
         Naming.suffix_by_type([dup, idx])
         self.assertEqual((_name(ud), _name(ui)), ("crate1_GEO", "wall_01_GEO"))
 
+    # -- H: alphabetical numbering is re-runnable -----------------------------
+
+    def test_alphabetical_location_is_re_runnable(self):
+        """Regression: a second alphabetical run gave tile_C_C."""
+        tiles = []
+        for x in range(4):
+            tiles.append(_uuid(cmds.group(em=True, n="tile")))
+            cmds.move(x, 0, 0, cmds.ls(tiles[-1])[0])
+        Naming.append_location_based_suffix(cmds.ls(tiles), alphabetical=True)
+        first = [_name(u) for u in tiles]
+        self.assertEqual(first, ["tile_A", "tile_B", "tile_C", "tile_D"])
+        Naming.append_location_based_suffix(cmds.ls(tiles), alphabetical=True)
+        self.assertEqual([_name(u) for u in tiles], first)
+
+    def test_independent_groups_re_run_is_stable(self):
+        """A kept type suffix: the number before it is this tool's, so a re-run
+        groups the objects again instead of numbering each alone (collision)."""
+        u1 = _uuid(cmds.group(em=True, n="Container_GRP"))
+        u2 = _uuid(cmds.group(em=True, n="Container_GRP"))
+        cmds.move(10, 0, 0, cmds.ls(u2)[0])
+        for alphabetical, want in ((False, ("Container_01_GRP", "Container_02_GRP")),
+                                   (True, ("Container_A_GRP", "Container_B_GRP"))):
+            for _run in range(2):
+                Naming.append_location_based_suffix(
+                    cmds.ls([u1, u2]),
+                    independent_groups=True,
+                    strip_defined_suffixes=False,
+                    alphabetical=alphabetical,
+                    valid_suffixes=["_GRP"],
+                )
+                self.assertEqual((_name(u1), _name(u2)), want)
+
+    def test_alphabetical_keeps_a_side_marker(self):
+        """A letter the tool never wrote ('_L', '_R') is name content."""
+        left, right = cmds.group(em=True, n="arm_L"), cmds.group(em=True, n="arm_R")
+        cmds.move(1, 0, 0, right)
+        ul, ur = _uuid(left), _uuid(right)
+        Naming.append_location_based_suffix([left, right], alphabetical=True)
+        self.assertEqual((_name(ul), _name(ur)), ("arm_L_A", "arm_R_B"))
+
     # -- K / L: every planned name is legalized -------------------------------
 
     def test_strip_leading_keeps_the_digit(self):
@@ -969,6 +1009,67 @@ class TestNamingEdgeCases(MayaTkTestCase):
         found, searched = Naming.select_by_name("aim*", locators_only=True)
         self.assertEqual(sorted(found), sorted(cmds.ls([loc, inst], long=True)))
         self.assertEqual(searched, 2)
+
+    # -- Suffix By Location's order --------------------------------------------
+
+    def _row(self):
+        """east, west, north, up, center, far_west, near_east -- the probe's L1."""
+        spots = {
+            "east": (3, 0, 0), "west": (-3, 0, 0), "north": (0, 0, -3),
+            "up": (0, 3, 0), "center": (0, 0, 0), "far_west": (-6, 0, 0),
+            "near_east": (1, 0, 0),
+        }
+        uids = {}
+        for name, pos in spots.items():
+            node = cmds.group(em=True, n=name)
+            cmds.move(*pos, node)
+            uids[name] = _uuid(node)
+        return uids
+
+    def test_location_orders_along_an_axis_by_signed_position(self):
+        uids = self._row()
+        Naming.append_location_based_suffix(cmds.ls(list(uids.values())), order="x")
+        got = {name: _name(u) for name, u in uids.items()}
+        # x: far_west -6, west -3, then the three at x=0 by y, z (north z=-3
+        # first, center, up y=3), near_east 1, east 3.
+        self.assertEqual(got["far_west"], "far_west_01")
+        self.assertEqual(got["west"], "west_02")
+        self.assertEqual(got["north"], "north_03")
+        self.assertEqual(got["center"], "center_04")
+        self.assertEqual(got["up"], "up_05")
+        self.assertEqual(got["near_east"], "near_east_06")
+        self.assertEqual(got["east"], "east_07")
+
+    def test_location_auto_numbers_along_the_row(self):
+        row = []
+        for x in (4, -2, 9, 0):
+            node = cmds.group(em=True, n="post")
+            cmds.move(x, 0.001 * x, 0, node)  # a row along X, a hair of Y noise
+            row.append(_uuid(node))
+        Naming.append_location_based_suffix(cmds.ls(row), order="auto")
+        self.assertEqual([_name(u) for u in row], ["post_03", "post_01", "post_04", "post_02"])
+        Naming.append_location_based_suffix(cmds.ls(row), order="auto", reverse=True)
+        self.assertEqual([_name(u) for u in row], ["post_02", "post_04", "post_01", "post_03"])
+
+    def test_location_distance_ties_break_by_position_not_selection(self):
+        """Regression: east and west at equal distance numbered in selection order."""
+        uids = self._row()
+        for names in (("east", "west"), ("west", "east")):
+            nodes = cmds.ls([uids[n] for n in names])
+            Naming.append_location_based_suffix(nodes, strip_trailing_ints=True)
+            self.assertEqual(_name(uids["west"]), "west_01")
+            self.assertEqual(_name(uids["east"]), "east_02")
+
+    def test_location_reads_the_pivot_not_the_bounding_box(self):
+        """Regression: an empty group's bounding box sits at the origin, so it
+        numbered first wherever it stood."""
+        null = cmds.group(em=True, n="nullA")
+        cmds.move(10, 0, 0, null)
+        box = cmds.polyCube(n="boxC")[0]
+        cmds.move(2, 0, 0, box)
+        un, ub = _uuid(null), _uuid(box)
+        Naming.append_location_based_suffix([null, box])
+        self.assertEqual((_name(ub), _name(un)), ("boxC_01", "nullA_02"))
 
 
 if __name__ == "__main__":

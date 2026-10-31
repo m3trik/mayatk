@@ -14,7 +14,6 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.xform_utils._xform_utils import XformUtils
 
 
 class Naming(ptk.HelpMixin, ptk.LoggingMixin):
@@ -883,43 +882,73 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         valid_suffixes=None,
         reverse=False,
         independent_groups=False,
+        order: str = "distance",
         dry_run: bool = False,
     ):
-        """Rename objects with a suffix defined by its location from origin.
+        """Rename objects with a suffix numbering them by location.
+
+        Each object's location is its pivot (the world rotate pivot), as
+        blendertk reads ``matrix_world.translation``, so both hosts number one
+        layout the same way -- and an empty group counts where it stands, not
+        at its empty bounding box's origin. The order is
+        :meth:`pythontk.PointCloud.order_points`'s: deterministic, float noise
+        quantized away, a tie never left to the selection order.
 
         Parameters:
             objects (str)(int/list): The object(s) to rename. Only transforms
                 have a location to order by; anything else is skipped.
-            first_obj_as_ref (bool): When True, use the first object's bounding box center as reference_point instead of origin.
+            first_obj_as_ref (bool): With ``order="distance"``, measure from the
+                first object's pivot instead of the world origin.
             alphabetical (str): When True use an alphabetical character as a suffix when there is less than 26 objects else use integers.
+                A letter this tool wrote (the batch's letters run A, B, C, ...)
+                is stripped first, so a re-run is stable; any other trailing
+                letter ('_L', '_R') is name content.
             strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
             strip_defined_suffixes (bool): Strip any suffixes found in valid_suffixes kwarg.
             valid_suffixes (list): List of valid suffixes to strip.
-            reverse (bool): Reverse the naming order. (Farthest object first)
+            reverse (bool): Reverse the naming order (the farthest, or the far
+                end of the axis, first).
             independent_groups (bool): When True, objects matching the same base name (after stripping) are grouped and suffixed independently.
+            order (str): What the numbers follow, one of
+                :attr:`pythontk.PointCloud.ORDERS`: ``"distance"`` (the default:
+                from the origin, or the first object), ``"x"`` / ``"y"`` /
+                ``"z"`` (signed position along that world axis; ties go to the
+                other axes, then the name), or ``"auto"`` (the axis the objects
+                are most spread along, so a row is numbered along the row).
             dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
-            list[str]: The final names, in distance order (grouped when
+            list[str]: The final names, in order (grouped when
                 ``independent_groups``); ``[]`` with no transform to rename.
         """
         # A scene scope also holds shapes, shaders and sets: none of them has a
         # location, so only the transforms are numbered.
         objects = (
-            cmds.ls(CoreUtils.as_strings(objects), type="transform", flatten=True)
+            cmds.ls(
+                CoreUtils.as_strings(objects), type="transform", flatten=True, long=True
+            )
             or []
         )
         if not objects:
             cls.logger.warning("No transforms to suffix by location.")
             return []
 
-        # Determine the reference point
-        reference_point = [0, 0, 0]
-        if first_obj_as_ref and objects:
-            first_obj_bbox = cmds.exactWorldBoundingBox(objects[0])
-            reference_point = [
-                (first_obj_bbox[i] + first_obj_bbox[i + 3]) / 2 for i in range(3)
-            ]
+        positions = {
+            obj: tuple(cmds.xform(obj, q=True, worldSpace=True, rotatePivot=True))
+            for obj in objects
+        }
+        order = (order or "distance").lower()
+        if order == "auto":  # one axis for the whole batch, groups included
+            order = ptk.PointCloud.spread_axis(list(positions.values()))
+        reference = positions[objects[0]] if first_obj_as_ref else (0.0, 0.0, 0.0)
+
+        def ordered(objs):
+            return ptk.PointCloud.order_points(
+                [(o, positions[o]) for o in objs],
+                order_by=order,
+                reference=reference,
+                reverse=reverse,
+            )
 
         # Helper to determine if we should strip valid suffixes
         # If independent_groups is True, we generally want to PRESERVE the group suffix (Type)
@@ -928,25 +957,56 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         if independent_groups:
             strip_suffixes_for_grouping = False
 
-        def get_base_name(name):
-            # Sort suffixes by length (descending) to match longest first (e.g. match _GRP before _G)
-            sorted_suffixes = sorted(valid_suffixes or [], key=len, reverse=True)
+        def strip_ints(name):
+            if strip_trailing_ints and name and name[-1].isdigit():
+                match = re.search(r"(_\d+|\d+)$", name)
+                if match:
+                    return name[: match.start()]
+            return name
 
+        sorted_suffixes = sorted(valid_suffixes or [], key=len, reverse=True)
+
+        def peel_suffix(name):
+            """``(root, suffix)``: *name* less the defined suffix it ends with."""
+            for suffix in sorted_suffixes:
+                if name.endswith(suffix):
+                    return name[: -len(suffix)], suffix
+            return name, ""
+
+        # The letters a previous alphabetical run wrote: the batch's '_A',
+        # '_B', ... (before a kept type suffix too) running from A with no
+        # gap. Only those are stripped (a re-run gave 'tile_C_C'); a side
+        # marker ('_L', '_R') is content.
+        letters = set()
+        for o in objects:
+            root = strip_ints(peel_suffix(strip_ints(cls._leaf(o)))[0])
+            m = re.search(r"_([A-Z])$", root)
+            if m:
+                letters.add(m.group(1))
+        own_letters = (
+            alphabetical
+            and bool(letters)
+            and sorted(letters) == list(string.ascii_uppercase[: len(letters)])
+        )
+
+        def strip_own_letter(name):
+            if own_letters and re.search(r"_[A-Z]$", name):
+                return name[:-2]
+            return name
+
+        def get_base_name(name):
             # Loop to handle stacked suffixes (e.g. Name_GRP_01_A)
             # We continue stripping as long as we find something to strip
             while True:
                 original_name = name
 
                 # 1. Strip Trailing Integers (e.g. _01, 123)
-                if strip_trailing_ints:
-                    if name and name[-1].isdigit():
-                        # Determine if prefixed with underscore
-                        match = re.search(r"(_\d+|\d+)$", name)
-                        if match:
-                            name = name[: match.start()]
+                name = strip_ints(name)
 
-                # 2. Strip Defined Suffixes (e.g. _GRP, _A)
-                # Replaces the old "strip_trailing_alpha" logic which only handled single chars
+                # 2. Strip this tool's own letter (e.g. _A)
+                name = strip_own_letter(name)
+
+                # 3. Strip Defined Suffixes (e.g. _GRP)
                 if strip_suffixes_for_grouping and sorted_suffixes:
                     for suffix in sorted_suffixes:
                         if name.endswith(suffix):
@@ -965,20 +1025,18 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             # Group objects by base name
             groups = {}
             for obj in objects:
-                # Use nodeName() to ignore namespace/path for grouping purposes
-                # This ensures similar objects in different hierarchies are grouped together
-                short_name = obj.split("|")[-1]
-                base_name = get_base_name(short_name)
-
-                if base_name not in groups:
-                    groups[base_name] = []
-                groups[base_name].append(obj)
+                # The leaf name (no path, no namespace) groups similar objects
+                # in different hierarchies together.
+                base_name = get_base_name(cls._leaf(obj))
+                # A kept type suffix: the number or letter before it is this
+                # tool's too (Container_01_GRP), so a re-run groups as before.
+                root, suffix = peel_suffix(base_name)
+                if suffix:
+                    base_name = get_base_name(root) + suffix
+                groups.setdefault(base_name, []).append(obj)
 
             for base_name, group_objs in groups.items():
-                # Sort group by distance
-                ordered_group = XformUtils.order_by_distance(
-                    group_objs, reference_point=reference_point, reverse=reverse
-                )
+                ordered_group = ordered(group_objs)
 
                 length = len(ordered_group)
                 if alphabetical and length <= 26:
@@ -995,8 +1053,7 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
                 type_suffix = ""
 
                 # Identify the suffix
-                sorted_valid = sorted(valid_suffixes or [], key=len, reverse=True)
-                for s in sorted_valid:
+                for s in sorted_suffixes:
                     if base_name.endswith(s):
                         root_name = base_name[: -len(s)]
                         type_suffix = s
@@ -1017,9 +1074,7 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
 
                 all_ordered_objs.extend(ordered_group)
         else:
-            ordered_objs = XformUtils.order_by_distance(
-                objects, reference_point=reference_point, reverse=reverse
-            )
+            ordered_objs = ordered(objects)
 
             length = len(ordered_objs)
             if alphabetical and length <= 26:
@@ -1037,15 +1092,15 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
 
             all_ordered_objs = ordered_objs
 
-        # ``order_by_distance`` may return nodes from un-migrated callers;
-        # ``cmds`` does not accept those, so str-coerce here.
         plan = [
-            (cls._key(str(obj)), cls._leaf(str(obj)), newNames[obj])
-            for obj in all_ordered_objs
+            (cls._key(obj), cls._leaf(obj), newNames[obj]) for obj in all_ordered_objs
         ]
+        title = "Suffix By Location"
+        if order in ("x", "y", "z"):
+            title += f" (along {order.upper()})"
         # Two phases (no target collides with a name the batch still holds)
         # are the shared plan step's, after its skip filter.
-        return cls._apply_plan(plan, "Suffix By Location", dry_run)
+        return cls._apply_plan(plan, title, dry_run)
 
     # ------------------------------------------------------------------
     # Plan execution — shared by every operation
