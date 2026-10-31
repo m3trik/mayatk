@@ -936,9 +936,9 @@ class TestIsolationSet(MayaTkTestCase):
     def test_dag_roots_keeps_parents_and_drops_dg_and_descendants(self):
         """Preview's node diff mixes long DAG paths with short DG names and
         lists every descendant; only the shallowest DAG paths are isolatable."""
-        from mayatk.core_utils.preview import Preview
+        from mayatk.core_utils.preview import MayaPreviewSession
 
-        roots = Preview._dag_roots(
+        roots = MayaPreviewSession._dag_roots(
             {"|grp", "|grp|child", "|grp|child|leaf", "|other", "lambert1", "polyCube1"}
         )
         self.assertEqual(roots, ["|grp", "|other"])

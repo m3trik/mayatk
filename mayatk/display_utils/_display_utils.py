@@ -354,7 +354,7 @@ class DisplayUtils(ptk.HelpMixin):
         Doubles as the cheap gate for callers deciding whether more expensive
         work (Preview's full-scene node diff) is worth doing at all.
 
-        Never raises: it gates a commit path (``Preview._replay``)
+        Never raises: it gates a commit path (``MayaPreviewSession._replay``)
         where an exception would abort the user's operation before it even runs.
 
         Returns:

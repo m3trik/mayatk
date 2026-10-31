@@ -1,6 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Hermetic preview with replay-on-commit (H1 design).
+"""Hermetic preview with replay-on-commit (H1 design): Maya's preview session.
+
+The widgets and the lifecycle -- the enable checkbox, the commit button, the
+window's show / hide hooks, Select Result, the error popup -- are uitk's
+``PreviewController``, shared with blendertk; :class:`Preview` is it bound to
+:class:`MayaPreviewSession`, the scene half written here.
 
 The preview phase runs ``perform_operation`` with Maya's undo recording
 suppressed. A :class:`CleanupContract` records what was created (and
@@ -59,10 +64,8 @@ empirical tests this design passes.
 """
 
 import logging
-import weakref
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Set, Tuple
-from functools import wraps
 
 try:
     import maya.cmds as cmds
@@ -70,7 +73,10 @@ try:
 except Exception:
     cmds = om = None
 
+import uitk
+
 # From this package:
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.node_utils._node_utils import NodeUtils
 
@@ -469,166 +475,26 @@ class CleanupContract:
             cmds.undoInfo(stateWithoutFlush=prev)
 
 
-class _PreviewInternal(object):
-    """Internal helpers for Preview."""
+class MayaPreviewSession:
+    """Maya's scene half of a preview (:class:`uitk.PreviewSession`).
 
-    @staticmethod
-    def _format_op_error(err: Exception) -> str:
-        """Build a clean, readable message-box string from an exception.
+    Each pass runs under a fresh :class:`CleanupContract` with undo recording
+    suppressed, and a rollback reverses it from the contract's diff; a commit
+    rolls the pass back (recorded nowhere) and replays the operation inside
+    the commit's undo chunk. Per-face shading the in-place geometry rollback
+    drops is reasserted from an enable-time snapshot after every clean
+    operation; Isolate Select viewports get the result added.
 
-        The full traceback is logged to the console separately; this is only the
-        popup text. :class:`OperationError` contributes its curated message and
-        bullet causes; any other exception is reduced to its first non-empty line
-        so multi-line driver errors don't leak into the popup. Falls back to plain
-        text if the ``uitk`` rich-text helper is unavailable.
-        """
-        if isinstance(err, OperationError):
-            # Author-controlled text -- inline HTML (e.g. <b>) is intentional.
-            title, body, bullets = err.title, err.user_message, (err.causes or None)
-        else:
-            from html import escape
-
-            title = "Operation failed"
-            lines = [ln.strip() for ln in str(err).splitlines() if ln.strip()]
-            # Untrusted text -> escape so a stray '<' (e.g. "'<' not supported")
-            # renders literally instead of being swallowed as an HTML tag.
-            body = escape(lines[0]) if lines else type(err).__name__
-            bullets = None
-
-        try:
-            from pythontk import TooltipFormat
-
-            return TooltipFormat.fmt(title=title, body=body, bullets=bullets)
-        except Exception:  # uitk unavailable -- degrade to plain text
-            tail = (" " + " ".join(bullets)) if bullets else ""
-            return f"{title}: {body}{tail}"
-
-    @staticmethod
-    def _safe(func):
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            try:
-                return func(self, *args, **kwargs)
-            except Exception as e:
-                self.logger.exception(f"Error in {func.__name__}: {e}")
-                if self.message_func:
-                    self.message_func(_PreviewInternal._format_op_error(e))
-                # Reentry guard: if disable() itself raises, _safe(disable) would
-                # otherwise call self.disable() again -> infinite recursion.
-                if not getattr(self, "_in_recovery", False):
-                    self._in_recovery = True
-                    try:
-                        self.disable()
-                    except Exception as inner:
-                        self.logger.exception(
-                            f"disable() during recovery raised: {inner}"
-                        )
-                    finally:
-                        self._in_recovery = False
-                raise
-
-        return wrapper
-
-
-class Preview(_PreviewInternal):
-    """Hermetic preview orchestrator (H1).
-
-    ``perform_operation`` on the operation instance must accept
-    ``(objects, contract)``.
-
-    The preview itself is **optional**: Create is enabled from the start and,
-    with no preview running, commits the operation straight onto the live
-    selection (same gating, same single undo chunk). ``require_preview=True``
-    restores the old behavior -- Create stays disabled until Preview is on.
-
-    Optional **Select Result**: pass ``select_result_checkbox`` plus a
-    ``result_provider`` callable (returning the operation's current result
-    node name(s)) and Preview handles the whole feature itself -- (de)selecting
-    the result on every preview build and on commit per the toggle, and wiring
-    the toggle live -- so a panel gets it for free, like the Preview/Create
-    buttons, instead of hand-wiring :func:`apply_result_selection`.
-
-    Canceling (unchecking) re-selects the enable-time selection by default --
-    components included, since most ops clear it -- without touching the undo
-    queue; opt out per-panel with ``reselect_on_disable=False``.
+    Parameters:
+        operation: The operation, ``perform_operation(objects, contract)``
+            (``contract`` is None on a commit); ``MUTATES_SELECTION`` /
+            ``PRESERVE_GEOMETRY`` make each pass's contract preserve the
+            captured objects' transforms.
     """
 
-    _instances: Set["Preview"] = set()
-
-    @classmethod
-    def cleanup_all_instances(cls) -> None:
-        for inst in list(cls._instances):
-            try:
-                inst.cleanup()
-            except Exception:
-                pass
-        cls._instances.clear()
-
-    def __init__(
-        self,
-        operation_instance,
-        preview_checkbox,
-        create_button,
-        finalize_func: Optional[Callable] = None,
-        message_func: Optional[Callable] = print,
-        enable_on_show: bool = False,
-        disable_on_hide: bool = True,
-        validation_func: Optional[Callable] = None,
-        select_result_checkbox=None,
-        result_provider: Optional[Callable] = None,
-        reselect_on_disable: bool = True,
-        require_preview: bool = False,
-        undo_message: Optional[str] = None,
-        restore_func: Optional[Callable] = None,
-    ):
-        if not hasattr(operation_instance, "perform_operation"):
-            raise ValueError(
-                "operation_instance must implement perform_operation(objects, contract)"
-            )
-        if preview_checkbox is None or create_button is None:
-            raise ValueError("preview_checkbox and create_button cannot be None")
-
+    def __init__(self, operation):
+        self.operation = operation
         self.logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
-        self.operation_instance = operation_instance
-        self.preview_checkbox = preview_checkbox
-        # Previews must start disabled on UI load; uitk state-restore skips
-        # widgets tagged this way.
-        self.preview_checkbox.exclude_from_reset = True
-        self.preview_checkbox.restore_state = False
-        self.create_button = create_button
-        self.finalize_func = finalize_func
-        self.message_func = message_func or self.logger.info
-        self.validation_func = validation_func
-        # Optional first-class "Select Result": when a panel supplies both the
-        # checkbox and a callable returning the operation's result node(s),
-        # Preview (de)selects that result on every preview build and on commit
-        # (per the toggle) and wires the toggle live -- no per-panel plumbing.
-        # See _apply_select_result.
-        self.select_result_checkbox = select_result_checkbox
-        self.result_provider = result_provider
-        # Unchecking Preview returns the user to their enable-time selection
-        # (components included) so a cancel lands them exactly where they
-        # started. Opt out per-panel with reselect_on_disable=False.
-        self.reselect_on_disable = reselect_on_disable
-        # Previewing is opt-in, not a prerequisite: Create commits straight onto
-        # the live selection when no preview is running (see _commit_direct), so
-        # the button is live from the start. The tools' .ui files ship it
-        # `enabled=false` (the old gated contract), so the state is asserted here
-        # rather than left to whatever each .ui happens to carry.
-        # require_preview=True restores the gate for panels that must not commit
-        # blind.
-        self.require_preview = require_preview
-        # The commit's undo-chunk name (blendertk's Preview takes the same);
-        # omitted, the operation's class name.
-        self.undo_message = undo_message
-        # Called after the rollback that DISCARDS the preview (an un-check or a
-        # failed pass; never a commit), for state the rollback cannot reach
-        # (blendertk's Preview takes the same hook). See _run_restore.
-        self.restore_func = restore_func
-        self._sync_create_enabled(False)
-
-        self.operated_objects: Set[str] = set()
-        self.operation_instance.operated_objects = self.operated_objects
         self._contract: Optional[CleanupContract] = None
         self._captured_objects: List[str] = []
         # {transform_uuid: shading-assignments} captured pristine at enable.
@@ -639,80 +505,141 @@ class Preview(_PreviewInternal):
         # forward preview op and the commit replay -- where assignment sticks.
         # See _reassert_shading_snapshot.
         self._shading_snapshot: dict = {}
-        self.is_enabled: bool = False
-        # Global re-entry guard: if perform_operation emits a signal that
-        # fires refresh() (e.g. cmds.select -> SelectionChanged ->
-        # PivotWatcher -> refresh), the inner call would corrupt the
-        # contract state we're mid-recording. Single Python flag is
-        # sufficient because Maya is single-threaded.
-        self._refresh_in_progress: bool = False
 
-        self.window = self._find_window()
-        self._setup_ui_connections()
-        self.init_show_hide_behavior(enable_on_show, disable_on_hide)
+    @property
+    def captured_objects(self) -> List[str]:
+        """The objects the preview (or the commit) captured, components
+        included."""
+        return list(self._captured_objects)
 
-        Preview._instances.add(self)
+    # ------------------------------------------------------ PreviewSession
+    @staticmethod
+    def selection() -> List[str]:
+        """The current selection, components included."""
+        return cmds.ls(selection=True) or []
 
-    # ------------------------------------------------------------------ setup
-    def _find_window(self):
-        try:
-            if hasattr(self.create_button, "window") and self.create_button.window():
-                return weakref.ref(self.create_button.window())
-            if (
-                hasattr(self.preview_checkbox, "window")
-                and self.preview_checkbox.window()
-            ):
-                return weakref.ref(self.preview_checkbox.window())
-        except Exception as e:
-            self.logger.warning(f"Could not weakref window: {e}")
-        return None
+    def begin(self, objects) -> None:
+        """Capture *objects* and their pristine per-face shading."""
+        self._captured_objects = list(objects)
+        self._shading_snapshot = self._capture_shading_snapshot(objects)
 
-    def _setup_ui_connections(self) -> None:
-        try:
-            self.preview_checkbox.toggled.connect(self.toggle)
-            self.create_button.clicked.connect(self.finalize_changes)
-            if (
-                self.select_result_checkbox is not None
-                and self.result_provider is not None
-            ):
-                # Live: toggling Select Result immediately (de)selects the
-                # current result -- it must NOT re-run the operation.
-                self.select_result_checkbox.toggled.connect(
-                    self._on_select_result_toggled
+    def run(self) -> None:
+        """One hermetic pass under a fresh contract.
+
+        If the operation declares ``MUTATES_SELECTION = True`` or
+        ``PRESERVE_GEOMETRY = True``, the contract preserves (duplicates+hides)
+        the captured selection's owning transform(s) so rollback can restore
+        originals that perform_operation deletes or bakes in place. The
+        selection is resolved to transforms because component selections (e.g.
+        Bridge's edges) can't be duplicated. Default is opt-in to avoid paying
+        duplication cost for ops that don't need it (e.g. ShadowRig on a 10k-node
+        hierarchy).
+        """
+        preserve = None
+        if getattr(self.operation, "MUTATES_SELECTION", False) or getattr(
+            self.operation, "PRESERVE_GEOMETRY", False
+        ):
+            # Resolve the captured selection to its owning transform(s).
+            # Component selections (e.g. Bridge's edges) can't be
+            # duplicated/UUID'd, and on a historyless mesh rollback's node-diff
+            # bakes the op's result when it deletes the auto-created orig-shape
+            # -- so the preserved geometry is what restores it. get_transform_node
+            # is idempotent for transform selections (Mirror, CutOnAxis), so this
+            # is safe for every preserve user.
+            resolved = NodeUtils.get_transform_node(
+                self._captured_objects, returned_type="str"
+            )
+            if resolved:
+                preserve = (
+                    list(resolved)
+                    if isinstance(resolved, (list, tuple))
+                    else [resolved]
                 )
-        except Exception as e:
-            self.logger.error(f"Failed to setup UI connections: {e}")
-            raise
+        self._contract = CleanupContract(preserve=preserve)
+        with self._contract:
+            self.operation.perform_operation(self._captured_objects, self._contract)
+            # Reassert per-face shading on the freshly-built preview mesh so
+            # a multi-material object doesn't flash bright green. Must run
+            # here (after the op, clean groups) not in rollback (bare mesh
+            # rebuild leaves malformed groups the next op would collapse).
+            self._reassert_shading_snapshot()
+            # Add the inputs AND everything the op just created to the
+            # isolation set. Must stay inside the contract -- see
+            # _update_isolation for why.
+            self._update_isolation(self._contract.snapshot_created)
 
-    def init_show_hide_behavior(
-        self, enable_on_show: bool, disable_on_hide: bool
-    ) -> None:
-        self.enable_on_show = enable_on_show
-        self.disable_on_hide = disable_on_hide
-        window = self.window() if self.window else None
-        if window:
-            try:
-                if hasattr(window, "on_show"):
-                    window.on_show.connect(self.conditionally_enable)
-                if hasattr(window, "on_hide"):
-                    window.on_hide.connect(self.conditionally_disable)
-            except Exception as e:
-                self.logger.warning(f"Show/hide signal setup failed: {e}")
+    def rollback(self) -> None:
+        """Reverse the last pass from its contract (recorded nowhere)."""
+        contract, self._contract = self._contract, None
+        if contract is not None:
+            contract.rollback()
 
-    def conditionally_enable(self) -> None:
-        if self.enable_on_show:
-            self.enable()
+    def discard(self, reselect: bool) -> None:
+        """After the discarding rollback: the per-face shading the geometry
+        rollback dropped, and with *reselect* the enable-time selection
+        (components included), recorded nowhere -- that selection already
+        sits at the top of the user's history."""
+        # No op follows a cancel, so the restored (in-place) shading is what
+        # the user is left looking at; it renders correctly even though a
+        # future op could collapse it -- acceptable for a cancelled preview.
+        self._reassert_shading_snapshot()
+        if reselect:
+            self._reselect_captured()
 
-    def conditionally_disable(self) -> None:
-        if self.disable_on_hide:
-            self.disable()
+    def commit(self) -> None:
+        """Roll the hermetic pass back (recorded nowhere, even inside the open
+        chunk) and replay it, recorded."""
+        self.rollback()
+        self._replay()
 
-    # -------------------------------------------------------- public lifecycle
-    def toggle(self, state: bool) -> None:
-        if state:
-            self.enable()
-        else:
-            self.disable()
+    def apply(self, objects) -> None:
+        """Capture *objects* and run the operation once, recorded: the same
+        replay the previewed commit uses, so its result and undo entry are
+        identical."""
+        self.begin(objects)
+        self._replay()
+
+    @staticmethod
+    def undo_step(name: str):
+        """One undo chunk named *name* (``CoreUtils.undo_chunk``)."""
+        return CoreUtils.undo_chunk(name)
+
+    @staticmethod
+    def unrecorded():
+        """Undo recording off, the queue kept (``CoreUtils.undo_disabled``)."""
+        return CoreUtils.undo_disabled()
+
+    def select_result(self, checkbox, results, committed: bool) -> None:
+        """:meth:`Preview.apply_result_selection` in object mode; re-asserted
+        on idle after a commit."""
+        Preview.apply_result_selection(
+            checkbox, results, object_mode=True, defer=committed
+        )
+
+    # ------------------------------------------------------------ internals
+    def _replay(self) -> None:
+        """Run the operation on the captured objects, inside the commit's undo
+        chunk. ``contract`` is ``None`` -- a commit has no rollback path, so
+        nothing is recorded."""
+        # Isolate Select: a commit has no contract to diff against, so the
+        # before-set is taken here -- and only when the user is actually
+        # isolated (the gate is one getPanel query; the snapshot is a full
+        # cmds.ls). Inside the chunk, so the membership commits and undoes
+        # atomically with the operation.
+        iso_before = (
+            frozenset(cmds.ls(long=True, allPaths=True) or [])
+            if DisplayUtils.get_isolated_panels()
+            else None
+        )
+        self.operation.perform_operation(self._captured_objects, None)
+        # Reassert per-face material on the freshly-built (clean) mesh so the
+        # COMMITTED result keeps every material -- inside the chunk so it
+        # commits/undoes atomically with the operation.
+        self._reassert_shading_snapshot()
+        if iso_before is not None:
+            self._update_isolation(
+                lambda: (frozenset(cmds.ls(long=True, allPaths=True) or []) - iso_before)
+            )
 
     @staticmethod
     def _capture_shading_snapshot(objects) -> dict:
@@ -760,405 +687,16 @@ class Preview(_PreviewInternal):
         except Exception:
             pass
 
-    def validate_operation(self, objects: List[Any]) -> bool:
-        if self.validation_func:
-            try:
-                return self.validation_func(objects)
-            except Exception as e:
-                self.logger.warning(f"Validation function failed: {e}")
-                return False
-        return True
-
-    def _gated_selection(self) -> Optional[List[str]]:
-        """The current selection, or ``None`` if the operation must not run.
-
-        Shared front gate for both entry points -- ``enable`` and the no-preview
-        commit (:meth:`_commit_direct`) -- so a bypassed commit is gated exactly
-        like a previewed one. Reports the reason through ``message_func``; the
-        caller only decides how to abort.
-        """
-        sel = cmds.ls(selection=True) or []
-        if not sel:
-            self.message_func("No objects selected.")
-            return None
-        if not self.validate_operation(sel):
-            self.message_func("Operation validation failed.")
-            return None
-        return sel
-
-    @_PreviewInternal._safe
-    def enable(self) -> None:
-        # Idempotent guard: if a previous enable already built a contract,
-        # calling again would overwrite self._contract and orphan the old
-        # one's created nodes. Trigger paths include redundant on_show
-        # firings (enable_on_show=True) or programmatic double-calls.
-        if self.is_enabled and self._contract is not None:
-            return
-
-        sel = self._gated_selection()
-        if sel is None:
-            self._set_checkbox(False)
-            return
-
-        # Optional one-shot precondition, run OUTSIDE any contract: state the
-        # operation needs in place that must not participate in rollback.
-        # Mirror uses it to break instance links -- forking a shape inside
-        # perform_operation is unreversible (rollback deletes the forked shape
-        # as a created node and the transform is left empty), but doing it once
-        # here keeps every later refresh/rollback cycle clean.
-        #
-        # Runs BEFORE the capture below for two reasons: the snapshots must
-        # reflect the state the preview actually starts from (a fork replaces
-        # the shape the shading snapshot is keyed to), and an aborted enable
-        # must not leave half-populated capture state behind. Failure aborts
-        # the enable -- if the precondition can't be met, previewing isn't safe.
-        prepare = getattr(self.operation_instance, "prepare_operation", None)
-        if callable(prepare):
-            try:
-                prepare(list(sel))
-            except Exception as e:
-                self.logger.exception(f"prepare_operation raised: {e}")
-                self.message_func(_PreviewInternal._format_op_error(e))
-                self._set_checkbox(False)
-                return
-
-        self._captured_objects = list(sel)
-        self._shading_snapshot = self._capture_shading_snapshot(sel)
-        self.operated_objects.clear()
-        self.operated_objects.update(str(s) for s in sel)
-
-        self._set_checkbox(True)
-        self._sync_create_enabled(True)
-        self.is_enabled = True
-
-        # Guard around the preview phase. enable() is user-initiated so
-        # _refresh_in_progress should be False; if a signal fired inside
-        # _run_preview_phase re-enters refresh, the inner call short-circuits.
-        if self._refresh_in_progress:
-            return
-        self._refresh_in_progress = True
-        try:
-            self._run_preview_phase()
-        finally:
-            self._refresh_in_progress = False
-
-    def _run_preview_phase(self) -> None:
-        """Build a fresh contract and run perform_operation under it.
-
-        If the operation_instance declares ``MUTATES_SELECTION = True`` or
-        ``PRESERVE_GEOMETRY = True``, the contract preserves (duplicates+hides)
-        the captured selection's owning transform(s) so rollback can restore
-        originals that perform_operation deletes or bakes in place. The
-        selection is resolved to transforms because component selections (e.g.
-        Bridge's edges) can't be duplicated. Default is opt-in to avoid paying
-        duplication cost for ops that don't need it (e.g. ShadowRig on a 10k-node
-        hierarchy).
-
-        Caller must hold ``_refresh_in_progress`` for the duration --
-        ``enable`` and ``refresh`` are the only callers. The flag covers
-        ``refresh``'s pre-phase rollback as well, so any *synchronous*
-        signal cascade fired during rollback (e.g. Qt connections that
-        valueChange a slider already wired to refresh) finds the flag
-        held and short-circuits. Maya scriptJob events (SelectionChanged,
-        etc.) fire on idle and are handled separately by PivotWatcher's
-        signature dedup -- those don't reach the flag.
-        """
-        preserve = None
-        if getattr(self.operation_instance, "MUTATES_SELECTION", False) or getattr(
-            self.operation_instance, "PRESERVE_GEOMETRY", False
-        ):
-            # Resolve the captured selection to its owning transform(s).
-            # Component selections (e.g. Bridge's edges) can't be
-            # duplicated/UUID'd, and on a historyless mesh rollback's node-diff
-            # bakes the op's result when it deletes the auto-created orig-shape
-            # -- so the preserved geometry is what restores it. get_transform_node
-            # is idempotent for transform selections (Mirror, CutOnAxis), so this
-            # is safe for every preserve user.
-            resolved = NodeUtils.get_transform_node(
-                self._captured_objects, returned_type="str"
-            )
-            if resolved:
-                preserve = (
-                    list(resolved)
-                    if isinstance(resolved, (list, tuple))
-                    else [resolved]
-                )
-        self._contract = CleanupContract(preserve=preserve)
-        try:
-            with self._contract:
-                self.operation_instance.perform_operation(
-                    self._captured_objects, self._contract
-                )
-                # Reassert per-face shading on the freshly-built preview mesh so
-                # a multi-material object doesn't flash bright green. Must run
-                # here (after the op, clean groups) not in rollback (bare mesh
-                # rebuild leaves malformed groups the next op would collapse).
-                self._reassert_shading_snapshot()
-                # Add the inputs AND everything the op just created to the
-                # isolation set. Must stay inside the contract -- see
-                # _update_isolation for why.
-                self._update_isolation(self._contract.snapshot_created)
-            # Select Result (first-class): apply after the operation, outside
-            # the contract -- a selection isn't node-diff-tracked either way.
-            # Inside the try so a failure surfaces via message_func.
-            self._apply_select_result(defer=False)
-        except Exception as e:
-            self.logger.exception(f"perform_operation raised: {e}")
-            self.message_func(_PreviewInternal._format_op_error(e))
-            # A failed phase is no preview: roll back whatever the op created
-            # before it raised and turn the preview OFF (checkbox included),
-            # returning the user to their selection. Left "on", the checked
-            # box showed a preview that wasn't there, and the partial nodes
-            # sat in the scene until the next refresh or cancel.
-            self._abort_preview()
-
-    def _abort_preview(self) -> None:
-        """Turn a failed preview off from INSIDE the refresh critical section
-        (``disable`` would short-circuit on the held flag): rollback, then
-        the same off-state ``disable`` leaves behind."""
-        if self._contract is not None:
-            try:
-                self._contract.rollback()
-            except Exception:
-                self.logger.exception("rollback after a failed preview raised")
-            self._contract = None
-        self._run_restore()
-        self._reassert_shading_snapshot()
-        if self.reselect_on_disable:
-            self._reselect_captured()
-        self.operated_objects.clear()
-        self._set_checkbox(False)
-        self._sync_create_enabled(False)
-        self.is_enabled = False
-
-    def _run_restore(self) -> None:
-        """Run ``restore_func`` after a discarding rollback, recorded nowhere on
-        the undo queue -- like the rollback it completes. A failure is logged,
-        never raised: the preview is off either way."""
-        if not self.restore_func:
-            return
-        prev = cmds.undoInfo(q=True, state=True)
-        cmds.undoInfo(stateWithoutFlush=False)
-        try:
-            self.restore_func()
-        except Exception as e:
-            self.logger.exception(f"restore_func raised: {e}")
-        finally:
-            cmds.undoInfo(stateWithoutFlush=prev)
-
-    @_PreviewInternal._safe
-    def refresh(self, *args) -> None:
-        """Roll back the previous preview and re-run perform_operation.
-
-        Both rollback and the new preview phase run inside one
-        ``_refresh_in_progress`` critical section. The Maya scriptJob path
-        (cmds.delete -> SelectionChanged -> PivotWatcher) is deferred to
-        idle and absorbed by PivotWatcher's signature dedup, not by this
-        flag. The flag handles the *synchronous* case: any Qt cross-wire
-        where rollback's scene mutations cause a connected widget to emit
-        a signal already bound to refresh, which would otherwise build a
-        fresh contract that the outer call overwrites and abandons (orphan
-        nodes + double perform_operation).
-        """
-        if not self.is_enabled or self._contract is None:
-            return
-        if self._refresh_in_progress:
-            return
-        self._refresh_in_progress = True
-        try:
-            self._contract.rollback()
-            self._run_preview_phase()
-        finally:
-            self._refresh_in_progress = False
-
-    @_PreviewInternal._safe
-    def disable(self) -> None:
-        """Roll back the preview without committing.
-
-        Guarded the same way as refresh so signal-fired re-entry during
-        rollback can't trigger a phantom refresh on an already-disabling
-        preview.
-        """
-        if self._refresh_in_progress:
-            return
-        self._refresh_in_progress = True
-        try:
-            had_preview = self.is_enabled and self._contract is not None
-            if self._contract is not None:
-                self._contract.rollback()
-                self._contract = None
-            if had_preview:
-                self._run_restore()
-            # Restore per-face material the geometry rollback dropped. No op
-            # follows a cancel, so the restored (in-place) shading is what the
-            # user is left looking at; it renders correctly even though a future
-            # op could collapse it -- acceptable for a cancelled preview.
-            self._reassert_shading_snapshot()
-            # Return the user to their enable-time selection (components
-            # included) -- most ops (e.g. polyBevel3) clear it, and a cancel
-            # should land the user exactly where they started so they can
-            # re-enable or continue. Suppressed from the undo queue: that
-            # selection already sits at the top of the user's history, so
-            # recording the re-select would add a redundant entry.
-            if had_preview and self.reselect_on_disable:
-                self._reselect_captured()
-            self.operated_objects.clear()
-            self._set_checkbox(False)
-            self._sync_create_enabled(False)
-            self.is_enabled = False
-        finally:
-            self._refresh_in_progress = False
-
-    @_PreviewInternal._safe
-    def finalize_changes(self) -> None:
-        """Commit -- with a live preview, or straight from the selection.
-
-        Previewing: roll back the hermetic version, then replay it inside an
-        ``openChunk``/``closeChunk`` pair so the committed work -- the
-        ``finalize_func`` step included -- is a single Ctrl+Z-able entry. Not
-        previewing: run the operation once on the current selection inside
-        that same chunk (:meth:`_commit_direct`) -- the preview is a
-        convenience, not a prerequisite. ``require_preview`` panels no-op
-        instead (their Create button is disabled anyway; this also covers a
-        programmatic call).
-
-        The flag is held across rollback AND the replay so a signal fired by
-        rollback (or the replay itself) can't re-enter refresh and corrupt the
-        chunk we're building.
-        """
-        if self._refresh_in_progress:
-            return
-        previewing = self.is_enabled and self._contract is not None
-        if not previewing and self.require_preview:
-            return
-
-        self._refresh_in_progress = True
-        try:
-            if previewing:
-                self._contract.rollback()  # recorded nowhere: undo is off for it
-                self._contract = None
-            # One entry for the commit AND its finalize step (Duplicate Radial's
-            # regroup): a finalize run after the chunk closed was an entry of its
-            # own, and the first Ctrl+Z took back only that.
-            cmds.undoInfo(
-                openChunk=True,
-                chunkName=self.undo_message
-                or type(self.operation_instance).__name__
-                or "PreviewCommit",
-            )
-            try:
-                if previewing:
-                    self._replay()
-                elif not self._commit_direct():
-                    return  # gate failed; nothing committed (reason already reported)
-
-                self.operated_objects.clear()
-                self._set_checkbox(False)
-                self._sync_create_enabled(False)
-                self.is_enabled = False
-                self._refresh_in_progress = False
-
-                if self.finalize_func:
-                    try:
-                        self.finalize_func()
-                    except Exception as e:
-                        self.logger.exception(f"finalize_func raised: {e}")
-            finally:
-                cmds.undoInfo(closeChunk=True)
-        finally:
-            self._refresh_in_progress = False
-
-        # Select Result on commit: AFTER finalize_func (which can change the
-        # selection -- e.g. discarding Curtain's auto-rail), so the result wins.
-        # Deferred so a post-commit selection restore can't clobber it.
-        self._apply_select_result(defer=True)
-
-    def _replay(self, pre_step: Optional[Callable] = None) -> None:
-        """Run the operation on the captured objects, inside the commit's undo
-        chunk (:meth:`finalize_changes`).
-
-        Shared by both commit paths. ``contract`` is ``None`` -- a commit has no
-        rollback path, so nothing is recorded. ``pre_step`` (the no-preview path)
-        runs before the operation and may populate ``_captured_objects``.
-        """
-        # Isolate Select: a commit has no contract to diff against, so the
-        # before-set is taken here -- and only when the user is actually
-        # isolated (the gate is one getPanel query; the snapshot is a full
-        # cmds.ls). Inside the chunk, so the membership commits and undoes
-        # atomically with the operation.
-        iso_before = (
-            frozenset(cmds.ls(long=True, allPaths=True) or [])
-            if DisplayUtils.get_isolated_panels()
-            else None
-        )
-        if pre_step is not None:
-            pre_step()
-        self.operation_instance.perform_operation(self._captured_objects, None)
-        # Reassert per-face material on the freshly-built (clean) mesh so the
-        # COMMITTED result keeps every material -- inside the chunk so it
-        # commits/undoes atomically with the operation.
-        self._reassert_shading_snapshot()
-        if iso_before is not None:
-            self._update_isolation(
-                lambda: (frozenset(cmds.ls(long=True, allPaths=True) or []) - iso_before)
-            )
-
-    def _commit_direct(self) -> bool:
-        """Commit with no preview running: gate, capture, run once, under undo.
-
-        The front half mirrors :meth:`enable` -- selection gate, validation, the
-        one-shot ``prepare_operation`` precondition, the shading snapshot -- so a
-        bypassed commit is gated exactly like a previewed one; the back half is
-        the same :meth:`_replay` the previewed commit uses, so the result and
-        its undo entry are identical either way.
-
-        ``prepare_operation`` runs INSIDE the chunk here (the previewed path runs
-        it at enable, outside): with no preview session to keep it out of, a
-        bypassed commit should revert whole on a single Ctrl+Z.
-
-        Returns False when the commit was abandoned at the gate -- the reason is
-        already reported through ``message_func``.
-        """
-        sel = self._gated_selection()
-        if sel is None:
-            return False
-
-        def prepare_and_capture():
-            prepare = getattr(self.operation_instance, "prepare_operation", None)
-            if callable(prepare):
-                prepare(list(sel))
-            # Capture AFTER prepare, same ordering rationale as enable(): the
-            # shading snapshot must key off the state the operation starts from
-            # (a shape fork replaces what it's keyed to).
-            self._captured_objects = list(sel)
-            self._shading_snapshot = self._capture_shading_snapshot(sel)
-            self.operated_objects.clear()
-            self.operated_objects.update(str(s) for s in sel)
-
-        self._replay(pre_step=prepare_and_capture)
-        return True
-
-    def _sync_create_enabled(self, previewing: bool) -> None:
-        """Create is only gated on the preview in ``require_preview`` mode;
-        otherwise it stays live so the user can commit without previewing."""
-        try:
-            self.create_button.setEnabled(previewing or not self.require_preview)
-        except Exception as e:  # duck-typed/dead widget -- never abort a commit
-            self.logger.debug(f"create_button.setEnabled failed: {e}")
-
     def _reselect_captured(self) -> None:
-        """Re-select the enable-time selection after a cancel (see disable)."""
+        """Re-select the enable-time selection after a cancel (see discard)."""
         alive = [o for o in self._captured_objects if cmds.objExists(o)]
         if not alive:
             return
-        prev = cmds.undoInfo(q=True, state=True)
-        cmds.undoInfo(stateWithoutFlush=False)
-        try:
-            cmds.select(alive, replace=True)
-        except Exception:
-            self.logger.debug("reselect on disable failed", exc_info=True)
-        finally:
-            cmds.undoInfo(stateWithoutFlush=prev)
+        with CoreUtils.undo_disabled():
+            try:
+                cmds.select(alive, replace=True)
+            except Exception:
+                self.logger.debug("reselect on disable failed", exc_info=True)
 
     # -------------------------------------------------------- isolate select
     @staticmethod
@@ -1213,7 +751,7 @@ class Preview(_PreviewInternal):
         # MUTATES_SELECTION ops (Mirror) may have deleted the captured names;
         # their post-op selection is the surviving result. add_to_isolation_set
         # filters by objExists, so dead names are no-ops.
-        if getattr(self.operation_instance, "MUTATES_SELECTION", False):
+        if getattr(self.operation, "MUTATES_SELECTION", False):
             try:
                 targets.extend(cmds.ls(selection=True) or [])
             except Exception:
@@ -1227,72 +765,17 @@ class Preview(_PreviewInternal):
             self.logger.debug("isolation node-diff failed", exc_info=True)
         DisplayUtils.add_to_isolation_set(targets)
 
-    # --------------------------------------------------------- select result
-    def _on_select_result_toggled(self, *args) -> None:
-        """Slot for the Select Result checkbox: (de)select the current result
-        now (a direct user action -- applied immediately, never a re-run)."""
-        self._apply_select_result(defer=False)
 
-    def _apply_select_result(self, defer: bool) -> None:
-        """Apply the *Select Result* toggle to the operation's current result.
+class Preview(uitk.PreviewController):
+    """Hermetic preview orchestrator (H1): ``Preview(slot, ui.chk000, ui.b000, ...)``.
 
-        First-class replacement for the per-panel hand-wiring: when the panel
-        passed ``select_result_checkbox`` + ``result_provider``, Preview
-        (de)selects the result on every preview build (``defer=False``) and on
-        commit (``defer=True``), per the toggle. No-op when the feature isn't
-        configured. ``object_mode=True`` is always safe here -- a result is
-        selected as an object, and it also clears any component selection the
-        op left behind (e.g. ``polySoftEdge``'s edges).
-        """
-        if self.select_result_checkbox is None or self.result_provider is None:
-            return
-        try:
-            Preview.apply_result_selection(
-                self.select_result_checkbox,
-                self.result_provider(),
-                object_mode=True,
-                defer=defer,
-            )
-        except Exception:
-            # Select Result is a cosmetic post-op convenience -- never let a
-            # provider or selection hiccup abort the operation or alarm the user.
-            self.logger.exception("Select Result apply failed")
+    :class:`uitk.PreviewController` bound to :class:`MayaPreviewSession`
+    (its session, plus the host's Select Result primitive; the signature and
+    every lifecycle method are the controller's). ``perform_operation`` on the operation instance must accept
+    ``(objects, contract)``. Mirror of blendertk's ``Preview``.
+    """
 
-    # ------------------------------------------------------------- internals
-    def _set_checkbox(self, checked: bool) -> None:
-        """Set checkbox state without triggering toggle()."""
-        self.preview_checkbox.blockSignals(True)
-        try:
-            self.preview_checkbox.setChecked(checked)
-        finally:
-            self.preview_checkbox.blockSignals(False)
-
-    def cleanup(self) -> None:
-        try:
-            Preview._instances.discard(self)
-            if self.is_enabled:
-                self.disable()
-        except Exception as e:
-            self.logger.error(f"Cleanup error: {e}")
-
-    def __del__(self):
-        self.cleanup()
-
-    # ----------------------------------------------------------- read-only API
-    @property
-    def enabled(self) -> bool:
-        return self.is_enabled
-
-    @property
-    def operated_object_count(self) -> int:
-        return len(self.operated_objects)
-
-    def get_operated_objects(self) -> List[str]:
-        return list(self.operated_objects)
-
-    @staticmethod
-    def cleanup_all_previews() -> None:
-        Preview.cleanup_all_instances()
+    SESSION_CLASS = MayaPreviewSession
 
     @staticmethod
     def apply_result_selection(
@@ -1322,6 +805,9 @@ class Preview(_PreviewInternal):
                 leave Maya restoring the pre-op selection (or settling the toggle)
                 *after* this returns; the idle re-read then wins. A live toggle is a
                 direct user action with nothing to clobber it, so it passes False.
+                The re-assert lands outside the commit's undo chunk, so it is
+                recorded nowhere: recorded, it was the first Ctrl+Z after a
+                commit, one that seemed to do nothing.
         """
         nodes = [results] if isinstance(results, str) else list(results or [])
 
@@ -1351,9 +837,13 @@ class Preview(_PreviewInternal):
                     cmds.select(alive, replace=True)
                 cmds.select(alive, deselect=True)
 
+        def _reassert():
+            with CoreUtils.undo_disabled():
+                _apply()
+
         _apply()  # immediate
         if defer:
             try:
-                cmds.evalDeferred(_apply, lowestPriority=True)
+                cmds.evalDeferred(_reassert, lowestPriority=True)
             except Exception:
                 pass

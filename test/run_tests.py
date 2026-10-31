@@ -146,7 +146,6 @@ GUI_REQUIRED = {
     "test_hdr_manager": "native-crashes mayapy (2026-07-17 full run)",
     "test_mat_marmoset_bridge": "native-crashes mayapy (2026-07-17 full run)",
     "test_maya_menu_handler": "builds native GUI menus; native-crashes mayapy",
-    "test_preview": "native-crashes mayapy (2026-07-17 full run)",
     "test_script_output": "Qt console embed; native-crashes mayapy",
     "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
     "test_uv_rizom_bridge": "native-crashes mayapy (2026-07-17 full run)",

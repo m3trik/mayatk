@@ -14,19 +14,103 @@ Covers the Preview orchestration contract:
 Selection-change / external-undo "auto-disable" and scriptJobs were removed
 when Preview moved to the hermetic snapshot/diff design, so those tests are
 gone (see the module docstring of ``core_utils/preview.py``).
+
+The widgets are Qt stand-ins (:class:`_CheckBox`, :class:`_PushButton`,
+:class:`_Window`) that behave as Qt's do where the Preview reads them -- a
+``setChecked`` that changes the state emits ``toggled``, ``blockSignals``
+mutes the widget -- so the module runs headless in mayapy (real Qt widgets
+native-crash it). The widget binding over real Qt widgets is uitk's
+``test_preview_controller.py``, which drives the controller over a fake
+session, not Maya's.
 """
 
 import unittest
-
-try:
-    from qtpy import QtWidgets
-except ImportError:
-    QtWidgets = None
 
 from base_test import MayaTkTestCase
 from mayatk.core_utils.preview import CleanupContract, Preview
 from mayatk.node_utils._node_utils import NodeUtils
 import maya.cmds as cmds
+
+
+class _Signal:
+    """A Qt signal stand-in, muted while its owner blocks signals."""
+
+    def __init__(self, owner=None):
+        self._slots = []
+        self._owner = owner
+
+    def connect(self, fn):
+        self._slots.append(fn)
+
+    def emit(self, *args):
+        if self._owner is not None and self._owner.signals_blocked:
+            return
+        for fn in list(self._slots):
+            fn(*args)
+
+
+class _Widget:
+    """What a Qt widget offers the Preview beyond its own signal."""
+
+    def __init__(self, window=None):
+        self.signals_blocked = False
+        self._window = window
+
+    def blockSignals(self, block):
+        previous, self.signals_blocked = self.signals_blocked, bool(block)
+        return previous
+
+    def window(self):
+        return self._window
+
+
+class _CheckBox(_Widget):
+    """A QCheckBox stand-in: a ``setChecked`` that changes the state emits
+    ``toggled``, as Qt's does; ``click`` is the user's."""
+
+    def __init__(self, window=None, checked=False):
+        super().__init__(window)
+        self.toggled = _Signal(self)
+        self._checked = bool(checked)
+
+    def setChecked(self, checked):
+        checked = bool(checked)
+        if checked != self._checked:
+            self._checked = checked
+            self.toggled.emit(checked)
+
+    def isChecked(self):
+        return self._checked
+
+    def click(self):
+        self.setChecked(not self._checked)
+
+
+class _PushButton(_Widget):
+    """A QPushButton stand-in: a disabled button ignores its click."""
+
+    def __init__(self, window=None):
+        super().__init__(window)
+        self.clicked = _Signal(self)
+        self._enabled = True
+
+    def setEnabled(self, enabled):
+        self._enabled = bool(enabled)
+
+    def isEnabled(self):
+        return self._enabled
+
+    def click(self):
+        if self._enabled:
+            self.clicked.emit()
+
+
+class _Window:
+    """A panel window's show / hide signals (uitk ``MainWindow``'s)."""
+
+    def __init__(self):
+        self.on_show = _Signal()
+        self.on_hide = _Signal()
 
 
 class MockOperation:
@@ -53,7 +137,6 @@ class MockOperation:
             cmds.move(0, 1, 0, obj, r=True)
 
 
-@unittest.skipIf(QtWidgets is None, "Qt not available")
 class TestPreview(MayaTkTestCase):
     """Lifecycle + rollback behaviour of the Preview orchestrator."""
 
@@ -62,9 +145,8 @@ class TestPreview(MayaTkTestCase):
         self.cube = cmds.polyCube(name="test_cube")[0]
         self.sphere = cmds.polySphere(name="test_sphere")[0]
 
-        self.window = QtWidgets.QMainWindow()
-        self.chk = QtWidgets.QCheckBox("Preview")
-        self.btn = QtWidgets.QPushButton("Create")
+        self.chk = _CheckBox()
+        self.btn = _PushButton()
 
         self.op = MockOperation()
         self.preview = Preview(
@@ -76,8 +158,6 @@ class TestPreview(MayaTkTestCase):
             self.preview.cleanup()
         except Exception:
             pass
-        if hasattr(self, "window"):
-            self.window.close()
         super().tearDown()
 
     def _y(self, node):
@@ -195,8 +275,8 @@ class TestPreview(MayaTkTestCase):
         """reselect_on_disable=False leaves the op's final selection alone."""
         preview = Preview(
             MockOperation(),
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             message_func=lambda m: None,
             reselect_on_disable=False,
         )
@@ -240,8 +320,8 @@ class TestPreview(MayaTkTestCase):
 
         preview = Preview(
             _CreateOp(),
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             message_func=lambda m: None,
         )
         try:
@@ -283,8 +363,8 @@ class TestPreview(MayaTkTestCase):
         messages = []
         preview = Preview(
             MockOperation(),
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             message_func=messages.append,
             validation_func=lambda objs: False,
         )
@@ -312,7 +392,7 @@ class TestPreview(MayaTkTestCase):
         # that isn't there, and the user is back on their selection.
         self.assertFalse(self.preview.is_enabled)
         self.assertFalse(self.chk.isChecked())
-        self.assertIsNone(self.preview._contract)
+        self.assertIsNone(self.preview.session._contract)
         self.assertEqual(cmds.ls(selection=True), [self.cube])
 
     def test_operation_failure_on_enable_unchecks_and_rolls_back(self):
@@ -401,7 +481,6 @@ class TestPreview(MayaTkTestCase):
         self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
 
-@unittest.skipIf(QtWidgets is None, "Qt not available")
 class TestPreviewBypass(MayaTkTestCase):
     """Committing WITHOUT a preview (the default) and the ``require_preview`` opt-in.
 
@@ -414,8 +493,8 @@ class TestPreviewBypass(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.cube = cmds.polyCube(name="bypass_cube")[0]
-        self.chk = QtWidgets.QCheckBox("Preview")
-        self.btn = QtWidgets.QPushButton("Create")
+        self.chk = _CheckBox()
+        self.btn = _PushButton()
         self.messages = []
 
     def _preview(self, op=None, **kwargs):
@@ -554,7 +633,6 @@ class TestPreviewBypass(MayaTkTestCase):
         self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
 
 
-@unittest.skipIf(QtWidgets is None, "Qt not available")
 class TestPreviewRestoreFunc(MayaTkTestCase):
     """``restore_func`` (blendertk's Preview takes it too): called once after
     the rollback that DISCARDS the preview -- an un-check or a failed pass --
@@ -569,8 +647,8 @@ class TestPreviewRestoreFunc(MayaTkTestCase):
     def _preview(self, op=None, restore=None):
         preview = Preview(
             op or MockOperation(),
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             restore_func=restore or self._restore,
             message_func=lambda m: None,
         )
@@ -618,6 +696,102 @@ class TestPreviewRestoreFunc(MayaTkTestCase):
         preview.disable()
         self.assertEqual(cmds.getAttr(f"{self.cube}.translateX"), 5.0)
         self.assertEqual(cmds.undoInfo(q=True, undoName=True), before)
+
+
+class TestPreviewWindowHooks(MayaTkTestCase):
+    """The panel window's show / hide hooks (``enable_on_show``,
+    ``disable_on_hide``) and the checkbox wiring a user drives."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="hook_cube")[0]
+        self.window = _Window()
+
+    def _preview(self, op=None, **kwargs):
+        kwargs.setdefault("message_func", lambda m: None)
+        chk, btn = _CheckBox(self.window), _PushButton(self.window)
+        preview = Preview(op or MockOperation(), chk, btn, **kwargs)
+        self.addCleanup(preview.cleanup)
+        return preview, chk, btn
+
+    def _y(self):
+        return cmds.xform(self.cube, query=True, worldSpace=True, translation=True)[1]
+
+    def test_enable_on_show_previews_as_the_window_shows(self):
+        preview, chk, _btn = self._preview(enable_on_show=True)
+        cmds.select(self.cube)
+        self.window.on_show.emit()
+        self.assertTrue(preview.is_enabled)
+        self.assertTrue(chk.isChecked())
+        self.assertAlmostEqual(self._y(), 1.0, places=4)
+        self.window.on_show.emit()  # a second show builds no second pass
+        self.assertAlmostEqual(self._y(), 1.0, places=4)
+
+    def test_a_show_previews_nothing_by_default(self):
+        preview, chk, _btn = self._preview()
+        cmds.select(self.cube)
+        self.window.on_show.emit()
+        self.assertFalse(preview.is_enabled)
+        self.assertFalse(chk.isChecked())
+
+    def test_a_hide_discards_the_preview_by_default(self):
+        preview, chk, _btn = self._preview()
+        cmds.select(self.cube)
+        preview.enable()
+        self.window.on_hide.emit()
+        self.assertFalse(preview.is_enabled)
+        self.assertFalse(chk.isChecked())
+        self.assertAlmostEqual(self._y(), 0.0, places=4)
+
+    def test_disable_on_hide_false_keeps_the_preview(self):
+        preview, chk, _btn = self._preview(disable_on_hide=False)
+        cmds.select(self.cube)
+        preview.enable()
+        self.window.on_hide.emit()
+        self.assertTrue(preview.is_enabled)
+        self.assertAlmostEqual(self._y(), 1.0, places=4)
+
+    def test_the_users_clicks_preview_and_discard(self):
+        op = MockOperation()
+        preview, chk, _btn = self._preview(op)
+        cmds.select(self.cube)
+        chk.click()
+        self.assertTrue(preview.is_enabled)
+        self.assertEqual(op.perform_count, 1)
+        chk.click()
+        self.assertFalse(preview.is_enabled)
+        self.assertAlmostEqual(self._y(), 0.0, places=4)
+
+    def test_a_programmatic_enable_runs_one_pass(self):
+        """Checking the box FOR the user must not re-enter the preview."""
+        op = MockOperation()
+        preview, chk, _btn = self._preview(op)
+        cmds.select(self.cube)
+        preview.enable()
+        self.assertTrue(chk.isChecked())
+        self.assertEqual(op.perform_count, 1)
+        preview.disable()
+        self.assertFalse(chk.isChecked())
+        self.assertAlmostEqual(self._y(), 0.0, places=4)
+
+    def test_refresh_with_no_preview_does_nothing(self):
+        op = MockOperation()
+        preview, _chk, _btn = self._preview(op)
+        cmds.select(self.cube)
+        preview.refresh()
+        self.assertEqual(op.perform_count, 0)
+        self.assertAlmostEqual(self._y(), 0.0, places=4)
+
+    def test_the_create_button_commits_one_undo_step(self):
+        preview, chk, btn = self._preview(undo_message="Hook Commit")
+        cmds.select(self.cube)
+        chk.click()
+        btn.click()
+        self.assertFalse(preview.is_enabled)
+        self.assertAlmostEqual(self._y(), 1.0, places=4)
+        self.assertEqual(cmds.undoInfo(q=True, undoName=True), "Hook Commit")
+        cmds.undo()
+        self.assertAlmostEqual(self._y(), 0.0, places=4)
 
 
 class TestCleanupContractAttrRestore(MayaTkTestCase):
@@ -688,7 +862,6 @@ class TestCleanupContractAttrRestore(MayaTkTestCase):
         )
 
 
-@unittest.skipIf(QtWidgets is None, "Qt not available")
 class TestPreviewEdgeCases(MayaTkTestCase):
     """Constructor guards + cleanup."""
 
@@ -697,23 +870,23 @@ class TestPreviewEdgeCases(MayaTkTestCase):
             pass
 
         with self.assertRaises(ValueError) as ctx:
-            Preview(BadOperation(), QtWidgets.QCheckBox(), QtWidgets.QPushButton())
+            Preview(BadOperation(), _CheckBox(), _PushButton())
         self.assertIn("perform_operation", str(ctx.exception))
 
     def test_none_checkbox_raises(self):
         with self.assertRaises(ValueError):
-            Preview(MockOperation(), None, QtWidgets.QPushButton())
+            Preview(MockOperation(), None, _PushButton())
 
     def test_none_button_raises(self):
         with self.assertRaises(ValueError):
-            Preview(MockOperation(), QtWidgets.QCheckBox(), None)
+            Preview(MockOperation(), _CheckBox(), None)
 
     def test_cleanup_disables_active_preview_and_deregisters(self):
         """cleanup() rolls back an active preview and drops the instance from
         the class registry (replacing the old scriptJob-teardown contract)."""
         cube = cmds.polyCube(name="cleanup_cube")[0]
-        chk = QtWidgets.QCheckBox()
-        btn = QtWidgets.QPushButton()
+        chk = _CheckBox()
+        btn = _PushButton()
         preview = Preview(MockOperation(), chk, btn, message_func=lambda m: None)
 
         cmds.select(cube)
@@ -733,8 +906,8 @@ class TestPreviewEdgeCases(MayaTkTestCase):
         )
 
     def test_cleanup_all_instances_clears_registry(self):
-        chk = QtWidgets.QCheckBox()
-        btn = QtWidgets.QPushButton()
+        chk = _CheckBox()
+        btn = _PushButton()
         preview = Preview(MockOperation(), chk, btn, message_func=lambda m: None)
         self.assertIn(preview, Preview._instances)
 
@@ -742,7 +915,6 @@ class TestPreviewEdgeCases(MayaTkTestCase):
         self.assertEqual(len(Preview._instances), 0)
 
 
-@unittest.skipIf(QtWidgets is None, "Qt not available")
 class TestPreviewSelectResult(MayaTkTestCase):
     """First-class *Select Result* on the Preview orchestrator.
 
@@ -755,11 +927,11 @@ class TestPreviewSelectResult(MayaTkTestCase):
     """
 
     def _preview(self, result_provider, checkbox=None):
-        chk = checkbox if checkbox is not None else QtWidgets.QCheckBox()
+        chk = checkbox if checkbox is not None else _CheckBox()
         preview = Preview(
             MockOperation(),
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             message_func=lambda m: None,
             select_result_checkbox=chk,
             result_provider=result_provider,
@@ -772,12 +944,12 @@ class TestPreviewSelectResult(MayaTkTestCase):
         preview, chk = self._preview(lambda: mesh)
         chk.setChecked(True)
         cmds.select(clear=True)
-        preview._apply_select_result(defer=False)
+        preview._apply_select_result()
         self.assertIn(mesh, cmds.ls(selection=True) or [])
 
         chk.setChecked(False)
         cmds.select(mesh)
-        preview._apply_select_result(defer=False)
+        preview._apply_select_result()
         self.assertNotIn(mesh, cmds.ls(selection=True) or [])
 
     def test_toggle_applies_live(self):
@@ -796,11 +968,11 @@ class TestPreviewSelectResult(MayaTkTestCase):
         # edges); 'off' must still fully clear it (object_mode collapses the
         # component selection onto the object, then deselects).
         mesh = cmds.polyPlane(name="sr_comp")[0]
-        chk = QtWidgets.QCheckBox()
+        chk = _CheckBox()
         chk.setChecked(False)
         preview, _ = self._preview(lambda: mesh, checkbox=chk)
         cmds.select(f"{mesh}.e[0:5]")
-        preview._apply_select_result(defer=False)
+        preview._apply_select_result()
         self.assertEqual(cmds.ls(selection=True) or [], [])
 
     def test_unconfigured_is_noop(self):
@@ -808,24 +980,24 @@ class TestPreviewSelectResult(MayaTkTestCase):
         # selection (backward compatible for panels that don't opt in).
         preview = Preview(
             MockOperation(),
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             message_func=lambda m: None,
         )
         self.addCleanup(preview.cleanup)
         mesh = cmds.polyPlane(name="sr_noop")[0]
         cmds.select(mesh)
-        preview._apply_select_result(defer=False)
+        preview._apply_select_result()
         self.assertIn(mesh, cmds.ls(selection=True) or [])
 
     def test_provider_error_is_safe(self):
         def boom():
             raise RuntimeError("provider blew up")
 
-        chk = QtWidgets.QCheckBox()
+        chk = _CheckBox()
         chk.setChecked(True)
         preview, _ = self._preview(boom, checkbox=chk)
-        preview._apply_select_result(defer=False)  # must not raise
+        preview._apply_select_result()  # must not raise
 
     def test_honored_through_full_lifecycle(self):
         """Real enable -> commit: Select Result governs the selection on the
@@ -844,11 +1016,11 @@ class TestPreviewSelectResult(MayaTkTestCase):
                 cmds.select(f"{self.result}.e[0:3]")  # leftover component sel
 
         op = _Op()
-        chk = QtWidgets.QCheckBox()  # starts OFF
+        chk = _CheckBox()  # starts OFF
         preview = Preview(
             op,
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             message_func=lambda m: None,
             select_result_checkbox=chk,
             result_provider=lambda: op.result,
@@ -911,6 +1083,34 @@ class TestPreviewSelectResult(MayaTkTestCase):
             fn()
         self.assertNotIn(mesh_long, cmds.ls(selection=True, long=True) or [])  # settled
 
+    def test_primitive_deferred_reassert_is_recorded_nowhere(self):
+        """The idle re-assert after a commit runs outside the commit's undo
+        chunk: recorded, it became the first Ctrl+Z after Create, one that
+        seemed to do nothing."""
+        mesh = cmds.polyPlane(name="sr_unrecorded")[0]
+        captured = []
+        orig = cmds.evalDeferred
+        cmds.evalDeferred = lambda fn, **kw: captured.append(fn)
+        try:
+            Preview.apply_result_selection(
+                _CheckBox(checked=True), mesh, object_mode=True, defer=True
+            )
+        finally:
+            cmds.evalDeferred = orig
+        self.assertTrue(captured, "defer must schedule an idle re-assert")
+        cmds.select(clear=True)
+        cmds.move(5, 0, 0, mesh)  # the user's last recorded action
+        for fn in captured:
+            fn()
+        self.assertIn(mesh, cmds.ls(selection=True) or [])
+        cmds.undo()
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{mesh}.translateX"),
+            0.0,
+            places=4,
+            msg="the first Ctrl+Z undid the re-assert instead of the user's move",
+        )
+
 
 class TestPreviewPrepareOperation(MayaTkTestCase):
     """``prepare_operation`` — the one-shot precondition hook.
@@ -936,8 +1136,8 @@ class TestPreviewPrepareOperation(MayaTkTestCase):
     def _preview(self, op):
         preview = Preview(
             op,
-            QtWidgets.QCheckBox(),
-            QtWidgets.QPushButton(),
+            _CheckBox(),
+            _PushButton(),
             message_func=lambda m: None,
         )
         self.addCleanup(preview.cleanup)
@@ -1008,7 +1208,9 @@ class TestPreviewPrepareOperation(MayaTkTestCase):
 
         self.assertFalse(preview.is_enabled, "enable should have aborted")
         self.assertEqual(op.perform_count, 0, "operation ran despite a failed prepare")
-        self.assertFalse(preview.operated_objects, "stale capture state after abort")
+        self.assertFalse(
+            preview.session._captured_objects, "stale capture state after abort"
+        )
 
     def test_hook_runs_before_capture(self):
         """The hook precedes the snapshots, so they reflect the state the
@@ -1018,7 +1220,7 @@ class TestPreviewPrepareOperation(MayaTkTestCase):
 
         class _Order(MockOperation):
             def prepare_operation(inner_self, objects):
-                seen["captured_at_prepare"] = list(preview._captured_objects)
+                seen["captured_at_prepare"] = list(preview.session._captured_objects)
 
         op = _Order()
         preview = self._preview(op)
@@ -1028,7 +1230,7 @@ class TestPreviewPrepareOperation(MayaTkTestCase):
         self.assertEqual(
             seen["captured_at_prepare"], [], "capture ran before prepare_operation"
         )
-        self.assertTrue(preview._captured_objects, "capture never ran")
+        self.assertTrue(preview.session._captured_objects, "capture never ran")
 
 
 if __name__ == "__main__":

@@ -728,6 +728,19 @@ MOVED_NAMES = {
     # ``ShotStore`` is pythontk's one store; its Maya-only member went to the
     # host adapter the store is injected with.
     "ShotStore.undo_queue_top": ("mayatk.MayaShotsHost.undo_queue_top", "0.30.0"),
+    # Preview is uitk's PreviewController bound to MayaPreviewSession; the
+    # controller keeps one name per answer, and the session holds the capture
+    # (a preview's ``preview.session.captured_objects``; its len() the count).
+    "Preview.enabled": ("mayatk.Preview.is_enabled", "0.30.0"),
+    "Preview.cleanup_all_previews": ("mayatk.Preview.cleanup_all_instances", "0.30.0"),
+    "Preview.operated_object_count": (
+        "mayatk.core_utils.preview.MayaPreviewSession.captured_objects",
+        "0.30.0",
+    ),
+    "Preview.get_operated_objects": (
+        "mayatk.core_utils.preview.MayaPreviewSession.captured_objects",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

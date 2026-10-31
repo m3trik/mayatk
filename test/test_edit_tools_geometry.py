@@ -1012,6 +1012,32 @@ class TestBevelPreviewRollback(MayaTkTestCase):
             "committed mesh has unshaded (bright green) faces",
         )
 
+    def test_a_failed_commit_keeps_the_multi_material_shading(self):
+        """A commit rolls the preview back (which drops per-face shading) and
+        replays; a replay that raises leaves the rolled-back mesh, so the
+        failure path must reassert the shading as a discard does, or the mesh
+        is left without its second material."""
+        cube = self._historyless_cube("bvl_failed_commit")
+        sg_a = self._assign_material(cube, "bvlFailA")
+        sg_b = self._assign_material(f"{cube}.f[1]", "bvlFailB")
+
+        class _FailsOnCommit(_BevelPreviewOp):
+            def perform_operation(self, objects, contract):
+                if contract is None:  # the commit replay
+                    raise RuntimeError("the commit replay failed")
+                super().perform_operation(objects, contract)
+
+        pv = self._make_preview(_FailsOnCommit(width=0.2))
+        cmds.select(f"{cube}.e[0]")
+        pv.enable()
+        pv.finalize_changes()
+
+        self.assertFalse(pv.is_enabled)
+        sgs = set(self._shading_engines(cube))
+        self.assertIn(sg_a, sgs, "the failed commit lost the primary material")
+        self.assertIn(sg_b, sgs, "the failed commit lost the per-face material")
+        self.assertEqual(self._green_face_count(cube), 0)
+
 
 class TestEditUtilsMirror(MayaTkTestCase):
     """EditUtils.mirror — the actual mirror operation (not just _resolve_pivot).
