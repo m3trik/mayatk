@@ -180,6 +180,20 @@ class TestSelfContainedFbx(MayaTkTestCase):
         self.assertTrue(ok and os.path.isfile(fbx))
         embedded = {row["name"]: row["bytes"] for row in ptk.FbxMedia.embedded(fbx)}
         self.assertEqual(embedded.get(f"{track}.wav"), os.path.getsize(wav), embedded)
+        # The record's digest of the track is the SHA-256 of the bytes inside
+        # -- what Unity hashes an extracted or library clip to before it
+        # stands in for the track (ptk.AudioUtils.media_digests). Added:
+        # 2026-10-31
+        import hashlib
+
+        inside = os.path.join(self.out, "inside")
+        os.makedirs(inside)
+        written = ptk.FbxMedia.extract(fbx, inside, names=[f"{track}.wav"])
+        with open(written[f"{track}.wav"], "rb") as fh:
+            self.assertEqual(
+                ptk.FbxMedia.record(fbx, ptk.SceneRecords.AUDIO.key)["media"],
+                {track: hashlib.sha256(fh.read()).hexdigest()},
+            )
 
     def test_processed_textures_stage_in_scratch_for_an_fbx(self):
         """The texture passes' copies are read by the write and embedded: a

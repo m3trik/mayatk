@@ -871,9 +871,12 @@ class AudioClips(ptk.LoggingMixin):
                 one.
 
         Returns:
-            The record (``{"version", "events": [...], "fps"}``: the frames
-            count at the scene's rate, which travels with them), or ``None``
-            when the carrier is missing or no track has keys.
+            The record (``{"version", "events": [...], "fps", "media"}``: the
+            frames count at the scene's rate, which travels with them, and
+            ``media`` digests each played track's file by its name --
+            ``ptk.AudioUtils.media_digests``, the content a same-named clip
+            must match to stand in for it), or ``None`` when the carrier is
+            missing or no track has keys.
         """
         if cmds is None:
             return None
@@ -914,8 +917,13 @@ class AudioClips(ptk.LoggingMixin):
         scoped = cls._scope_events(events, takes, origin)
         if not scoped:
             return None
+        # Each played track's file as the SHA-256 of the bytes the FBX embeds
+        # under its name (FbxUtils.embed_dependencies reads the same
+        # track_files): Unity reuses a same-named clip only when it hashes
+        # alike -- blendertk's producer too.
+        media = ptk.AudioUtils.media_digests(scoped, _audio_utils.track_files)
         return ptk.SceneRecords.AUDIO.make(
-            {"events": scoped, "fps": _audio_utils.get_fps()}
+            {"events": scoped, "fps": _audio_utils.get_fps(), "media": media}
         )
 
     @classmethod

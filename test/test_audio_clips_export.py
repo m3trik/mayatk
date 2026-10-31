@@ -259,6 +259,31 @@ class TestAudioClipsExport(MayaTkTestCase):
             "legacy internal source attr should be dropped",
         )
 
+    def test_the_record_digests_each_played_tracks_file_by_its_name(self):
+        """Each played track's file rides as the SHA-256 of its bytes under its
+        event's name (``ptk.AudioUtils.media_digests``): what Unity compares a
+        same-named clip against before it reuses one -- two models embedding a
+        different ``door.wav`` bound one clip (2026-10-19). A track with no
+        file on disk is left out. Added: 2026-10-31"""
+        import hashlib
+
+        self._seed_tracks()
+        wav = self.temp_path("footstep_take3.wav")
+        with open(wav, "wb") as fh:
+            fh.write(b"footstep bytes")
+        audio_utils.set_path("footstep", wav)
+        audio_utils.set_path("jump", self.temp_path("gone.wav"))  # never written
+
+        record = AudioClips.export_record(ptk.ExportContext())
+        self.assertIsNotNone(record)
+        self.assertEqual(
+            record.payload.get("media"),
+            {"footstep": hashlib.sha256(b"footstep bytes").hexdigest()},
+        )
+        self.assertEqual(
+            ptk.SceneRecords.problems(ptk.SceneRecords.AUDIO, record.payload), []
+        )
+
     def test_prepare_for_export_is_idempotent(self):
         """Repeated calls overwrite cleanly; no duplicate attrs."""
         self._seed_tracks()
