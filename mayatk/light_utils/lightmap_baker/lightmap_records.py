@@ -44,7 +44,6 @@ import contextlib
 import hashlib
 import json
 import os
-import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -876,29 +875,14 @@ class LightmapRecords(ptk.LoggingMixin):
     @classmethod
     def _keep_bake_state(cls, before: Dict[str, Any], objects: List[str]) -> None:
         """Give *objects* back how they were baked, across a commit that only
-        re-packed them (``LightmapBaker.combine``): ``baked_at``,
-        ``lighting`` (and the lighting state it names), ``stale`` and
-        ``untracked`` from *before* (:meth:`bake_state`, read before that
-        commit). One *before* never saw stays untracked: a re-pack vouches
-        for no map. Logged, never raised."""
-        kept = ("baked_at", "lighting", "stale", "untracked")
+        re-packed them (``LightmapBaker.combine``; the rule is
+        ``ptk.BakeBaseline.keep_baked``). *before*: :meth:`bake_state`, read
+        before that commit. Logged, never raised."""
         try:
             spec = ptk.SceneRecords.LIGHTMAP_BAKE_STATE
             store = cls._data_nodes()
-            record = ptk.BakeBaseline.decode(spec.load(store, None))
-            for obj in objects:
-                entry = record["objects"].get(obj)
-                if entry is None:
-                    continue
-                was = before["objects"].get(obj)
-                if was is None:
-                    entry.update(baked_at=None, lighting=None, untracked=True)
-                    continue
-                entry.update({key: was[key] for key in kept})
-                state = before["lightings"].get(was["lighting"] or "")
-                if state is not None:
-                    record["lightings"][was["lighting"]] = state
-            spec.save(store, ptk.BakeBaseline.encode(record))
+            record = ptk.BakeBaseline.keep_baked(spec.load(store, None), before, objects)
+            spec.save(store, record)
         except Exception as error:
             cls.logger.warning("Lightmap bake baseline not kept (%s).", error)
 
@@ -1958,26 +1942,16 @@ class LightmapRecords(ptk.LoggingMixin):
         project whose materials share a texture set name the same atlas, and
         the second's bake replaced the first's (2026-10-21). A file this
         scene wrote and no longer reads (a revert) stays its own to replace.
-        Absolute paths; empty when *folder* does not exist.
+        Absolute paths; empty when *folder* does not exist. The rule is
+        ``ptk.FileDependencies.strangers``.
         """
-        try:
-            names = os.listdir(folder)
-        except OSError:
+        if not os.path.isdir(folder):
             return set()
         claims = cls.claims() if claims is None else claims
-        writers = cls._writers()
-        pattern = re.compile(
-            rf"{re.escape(stem)}(_\d+)?{re.escape(ext)}", re.IGNORECASE
+        writers = cls._writers()  # read once: one record load, not one per file
+        return ptk.FileDependencies.strangers(
+            folder, stem, ext, claims, lambda key: cls.wrote(key, writers)
         )
-        out: Set[str] = set()
-        for name in names:
-            key = name.lower()
-            if not pattern.fullmatch(name) or key in claims:
-                continue
-            if cls.wrote(key, writers):
-                continue
-            out.add(os.path.abspath(os.path.join(folder, name)))
-        return out
 
     @classmethod
     def foreign_writer(

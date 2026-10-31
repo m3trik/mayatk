@@ -2128,47 +2128,20 @@ class FbxUtils(ptk.HelpMixin):
         class does not have resolves to ``None`` with a WARNING: that is a
         misspelt row, and skipping it quietly would stop a record shipping (or
         a stager finishing) with no sign of why.  A column the row leaves
-        ``None`` resolves to ``None`` quietly: a declared one-way stage.
+        ``None`` resolves to ``None`` quietly: a declared one-way stage. The
+        rule is ``ptk.SceneRecords.resolve_row``, logged here.
         """
-        import importlib
-
-        try:
-            owner = getattr(importlib.import_module(module_path), cls_name)
-        except Exception:  # an uninstalled subsystem is fine
-            logger.debug("%s unavailable; skipped.", label, exc_info=True)
-            return None
-        resolved = []
-        for method in methods:
-            if not method:  # a column the row leaves empty: a one-way stage
-                resolved.append(None)
-                continue
-            fn = getattr(owner, method, None)
-            if fn is None:
-                logger.warning(
-                    "%s names %s.%s.%s, which does not exist; skipped.",
-                    label,
-                    module_path,
-                    cls_name,
-                    method,
-                )
-            resolved.append(fn)
-        return tuple(resolved)
+        return ptk.SceneRecords.resolve_row(
+            label, module_path, cls_name, *methods, log=logger
+        )
 
     @classmethod
     def producers(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]:
         """:attr:`PRODUCERS` resolved to callables, unimportable ones skipped;
         *only* (specs or keys) narrows the table."""
-        wanted = (
-            None if only is None else {ptk.SceneRecords.resolve(k).key for k in only}
+        return ptk.SceneRecords.resolved_producers(
+            cls.PRODUCERS, cls.HOST, only, log=logger
         )
-        table: Dict[Any, Callable] = {}
-        for spec, row in ptk.SceneRecords.producer_rows(cls.PRODUCERS, cls.HOST).items():
-            if wanted is not None and spec.key not in wanted:
-                continue
-            resolved = cls._resolve_row(f"Producer for {spec.key!r}", *row)
-            if resolved and resolved[0] is not None:
-                table[spec] = resolved[0]
-        return table
 
     @classmethod
     def export_context(
@@ -2283,13 +2256,7 @@ class FbxUtils(ptk.HelpMixin):
         them; ``None`` = all) resolved to callables, then every session stager
         -- those always run, a preview that must detach before the write is
         one."""
-        table: Dict[str, Tuple[Optional[Callable], Optional[Callable]]] = {}
-        for name, row in ptk.SceneRecords.stager_rows(cls.STAGERS, cls.HOST).items():
-            if names is not None and name not in names:
-                continue
-            resolved = cls._resolve_row(f"Stager {name!r}", *row)
-            if resolved is not None:
-                table[name] = resolved
+        table = ptk.SceneRecords.resolved_stagers(cls.STAGERS, cls.HOST, names, log=logger)
         table.update(cls._session_stagers)
         return table
 

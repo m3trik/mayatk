@@ -14,6 +14,10 @@ To expose a new RizomUV knob:
 The registry is intentionally non-exhaustive -- it covers the params real
 RizomUV bridge implementations actually expose (SideFX Labs, the C4D
 bridge, the 3ds Max bridge), not every flag in the Lua API.
+
+This copy is the SSoT: blendertk's ``uv_utils.rizom_bridge.parameters`` is
+the same text, host names in prose aside, and ``m3trik/scripts/
+check_dcc_twins.py`` fails the moment the two differ. Edit here, then mirror.
 """
 
 from __future__ import annotations
@@ -393,8 +397,9 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # These only show in the panel when the ``send`` preset is active --
     # the ``send.lua`` body references each placeholder so the existing
     # ``_refresh_param_visibility`` scanner picks them up. The bridge's
-    # ``send_to_rizomuv`` flow substitutes the boolean values into
-    # ``templates/send_wrapper.lua``; the round-trip flow ignores them.
+    # one-way send substitutes the boolean values into its load script
+    # (mayatk: ``templates/send_wrapper.lua``; blendertk:
+    # ``build_send_script``); the round-trip flow ignores them.
     "LOAD_UVS": AttributeSpec(
         key="LOAD_UVS",
         label="Load UVs",
@@ -421,8 +426,9 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="bool",
         default=True,
         tooltip=(
-            "Map source groups (Maya transforms / FBX hierarchies) into\n"
-            "Rizom island groups. Off = every mesh imports as a flat list."
+            "Give each exported object (and any group above it the export\n"
+            "carries) its own Rizom island group. Off = every mesh imports\n"
+            "as a flat list."
         ),
     ),
     "LOAD_TEXTURES": AttributeSpec(
@@ -431,7 +437,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="bool",
         default=True,
         tooltip=(
-            "Auto-collect file textures from the selection's shading networks\n"
+            "Auto-collect file textures from the selection's materials\n"
             "and bind them in Rizom (ZomLoadTexture) so they show on the\n"
             "model in the 3D view. Off = open with no textures."
         ),
@@ -467,7 +473,7 @@ _PRESET_IGNORES_RE = re.compile(r"^--\s*@ignores:\s*(.+?)\s*$", re.MULTILINE)
 # param token under different field names for different Rizom versions -- e.g.
 # ``SpacingSize=__PACK_SPACING__`` (<= 2021) vs ``PaddingSize=__PACK_SPACING__``
 # (>= 2022), the probed rename (2020.1: SpacingSize/MarginSize safe,
-# PaddingSize access-violates). Re-probe with test/rizom_headless_probe.py.
+# PaddingSize access-violates). Re-probe with mayatk/test/rizom_headless_probe.py.
 _INLINE_MIN_LINE_RE = re.compile(r"--\s*@min_rizom_line:\s*(\d+(?:\.\d+)*)")
 _INLINE_MAX_LINE_RE = re.compile(r"--\s*@max_rizom_line:\s*(\d+(?:\.\d+)*)")
 
@@ -484,15 +490,16 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
 # Pack gutter tokens that are COMPUTED, not exposed. They render into
 # ``ZomPack.SpacingSize`` / ``PaddingSize`` (island-to-island) and
-# ``MarginSize`` (tile border) -- the same two gutters Maya's own pack
-# operation feeds to ``u3dLayout`` as ``shellSpacing`` / ``tileMargin``.
+# ``MarginSize`` (tile border) -- the same two gutters the host's own pack
+# operation uses (Maya feeds them to ``u3dLayout`` as ``shellSpacing`` /
+# ``tileMargin``; Blender's ``pack_islands`` takes the island margin alone).
 #
-# Why derived: a Rizom round-trip and an in-Maya repack must land on the
+# Why derived: a Rizom round-trip and an in-host repack must land on the
 # same gutter, or re-packing a Rizom result silently reflows the layout.
 # Two hand-dialed spinboxes made that agreement the user's problem; one
 # ecosystem rule (:meth:`UvUtils.calculate_uv_padding`) makes it structural.
-# The ratio mirrors the pack op exactly: tile margin is HALF the island
-# spacing (see ``UvUtils.unwrap_cylinder`` / the ``tb000`` pack slot).
+# The ratio mirrors Maya's pack exactly: tile margin is HALF the island
+# spacing (``UvUtils._pack_shells``).
 #
 # Resolution-invariant by construction: normalized padding is
 # ``(map_size / 256) / map_size`` == 1/256 for every map size, so the value
@@ -597,10 +604,11 @@ class Parameters(ParamRegistry):
         half of it, matching the ``shellSpacing`` / ``tileMargin`` pair the
         pack slot passes.
 
-        Imported lazily: this module is otherwise Maya-free (the panel
-        imports it to build widgets), and ``_uv_utils`` pulls ``maya.cmds``.
+        Imported lazily and relatively (the same text in blendertk's copy):
+        this module is otherwise Maya-free (the panel imports it to build
+        widgets), and ``_uv_utils`` pulls ``maya.cmds``.
         """
-        from mayatk.uv_utils._uv_utils import UvUtils
+        from .._uv_utils import UvUtils
 
         try:
             map_size = int(values.get("PACK_RESOLUTION") or 0)

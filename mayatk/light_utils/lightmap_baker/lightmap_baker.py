@@ -206,33 +206,6 @@ class _InPlacePlan:
         return [obj for objs in self.in_place.values() for obj in objs]
 
 
-@dataclass
-class _AtlasFiles:
-    """The atlases a scene's objects read, each owned by an atlas group --
-    what :meth:`LightmapBaker._atlas_files` reads once for the in-place plan
-    and the split check.
-
-    Attributes:
-        markers: ``{reader: its marker record}``.
-        entries: ``{object: baseline entry}`` of every object still recorded.
-        by_file: ``{normcased path: [readers]}``, readers sorted.
-        spelled: ``{normcased path: the path as read}``.
-        lone: The one-reader maps an atlas bake wrote (a group of one), and
-            those no record speaks for beside an atlas their group owns.
-        group: ``{object: atlas group}`` (:meth:`LightmapBaker._atlas_keys`)
-            for every reader and every object asked about.
-        owned: ``{atlas group: {normcased paths}}`` -- each atlas belongs to
-            the group most of its readers are in.
-    """
-
-    markers: Dict[str, Dict[str, Any]]
-    entries: Dict[str, Dict[str, Any]]
-    by_file: Dict[str, List[str]]
-    spelled: Dict[str, str]
-    lone: set
-    group: Dict[str, str]
-    owned: Dict[str, set]
-
 
 @dataclass
 class _AtlasBake:
@@ -3109,7 +3082,9 @@ class LightmapBaker(ptk.LoggingMixin):
                 plan.repack[os.path.basename(spelled[f])] = why
         return plan
 
-    def _atlas_files(self, objects: List[str] = ()) -> Optional[_AtlasFiles]:
+    def _atlas_files(
+        self, objects: List[str] = ()
+    ) -> Optional["ptk.BakeBaseline.AtlasFiles"]:
         """The atlases the scene's objects read and the atlas group owning
         each, with *objects*' groups read beside theirs; ``None`` when every
         map is its object's own (nothing to write into, nothing split).
@@ -3122,51 +3097,9 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         markers = dict(LightmapRecords._marker_records())
         path_of = {t: p for t, _n, p in LightmapRecords._reads() if p}
-        by_file: Dict[str, List[str]] = {}
-        spelled: Dict[str, str] = {}
-        for reader in sorted(markers):
-            path = path_of.get(reader)
-            if path:
-                key = os.path.normcase(os.path.abspath(path))
-                by_file.setdefault(key, []).append(reader)
-                spelled.setdefault(key, path)
-        atlases = {f for f, readers in by_file.items() if len(readers) > 1}
-        record = LightmapRecords.bake_state()["objects"]
-        entries = {k: e for k, e in record.items() if e["removed_at"] is None}
-        # An atlas bake gives a group of one its own map. Alone it is no atlas
-        # to write into, but a group reading it beside another map is split
-        # all the same: one material in two shading groups, or a duplicate.
-        lone = {
-            f
-            for f, readers in by_file.items()
-            if len(readers) == 1
-            and (entries.get(readers[0]) or {}).get("packing") == "atlas"
-        }
-        if not atlases and len(lone) < 2:
-            return None
-        # A one-reader map whose packing no record speaks for (baked before
-        # change tracking, then tracked as it stood) is a split-off only
-        # beside an atlas its group owns: a group that owns none was baked per
-        # object, and stays so.
-        unknown = {
-            f
-            for f, readers in by_file.items()
-            if len(readers) == 1 and not (entries.get(readers[0]) or {}).get("packing")
-        }
-        readers = [r for f in sorted(atlases | lone | unknown) for r in by_file[f]]
-        group = self._atlas_keys(list(dict.fromkeys(readers + list(objects))))
-        owned: Dict[str, set] = {}
-        for f in atlases:
-            votes: Dict[str, int] = {}
-            for reader in by_file[f]:
-                votes[group[reader]] = votes.get(group[reader], 0) + 1
-            owned.setdefault(min(votes, key=lambda g: (-votes[g], g)), set()).add(f)
-        for f in sorted(unknown):
-            if group[by_file[f][0]] in owned:
-                lone.add(f)
-        for f in lone:
-            owned.setdefault(group[by_file[f][0]], set()).add(f)
-        return _AtlasFiles(markers, entries, by_file, spelled, lone, group, owned)
+        return ptk.BakeBaseline.atlas_files(
+            markers, path_of, LightmapRecords.bake_state(), self._atlas_keys, objects
+        )
 
     def _splits(self) -> Dict[str, Tuple[List[str], List[str]]]:
         """``{atlas group: (map paths, objects)}`` -- each group that reads
@@ -3176,18 +3109,7 @@ class LightmapBaker(ptk.LoggingMixin):
         :meth:`combine` packs into one atlas, and what the Manage table names
         *split*. Read-only."""
         found = self._atlas_files()
-        if found is None:
-            return {}
-        out: Dict[str, Tuple[List[str], List[str]]] = {}
-        for key, files in found.owned.items():
-            if len(files) < 2:
-                continue
-            files = sorted(files, key=lambda f: (-len(found.by_file[f]), f))
-            readers = sorted(
-                r for f in files for r in found.by_file[f] if found.group[r] == key
-            )
-            out[key] = ([found.spelled[f] for f in files], readers)
-        return out
+        return {} if found is None else found.splits()
 
     def _split_fields(self) -> Dict[str, Dict[str, Tuple[str, ...]]]:
         """``ptk.StaleReport``'s ``split`` and ``split_materials`` from

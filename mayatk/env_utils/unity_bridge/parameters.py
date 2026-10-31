@@ -11,8 +11,10 @@ script. Visibility gates on the selected combo entry: the export/Unity params
 show for Copy to Project, the SCRIPTS checklist + SCRIPTS_ACTION for Manage
 Unity Scripts.
 
-Mirrors :mod:`mayatk.env_utils.blender_bridge.parameters` in shape; the blendertk
-``unity_bridge`` counterpart mirrors this file.
+Mirrors :mod:`mayatk.env_utils.blender_bridge.parameters` in shape. This copy is
+the SSoT: blendertk's ``env_utils.unity_bridge.parameters`` is the same text, host
+names in prose aside, and ``extapps/test/test_vendor_sync.py`` fails the moment
+the two differ. Edit here, then mirror.
 """
 
 from __future__ import annotations

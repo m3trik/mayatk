@@ -431,34 +431,19 @@ class BakeSessionStore(_BakeSessionStoreInternal):
 
     @classmethod
     def peek(cls, session_id: Optional[str] = None) -> Optional[dict]:
-        """Return the latest session (or the one matching *session_id*)."""
-        sessions = cls.load()
-        if not sessions:
-            return None
-        if session_id is None:
-            return sessions[-1]
-        for session in reversed(sessions):
-            if session.get("id") == session_id:
-                return session
-        return None
+        """Return the latest session (or the one matching *session_id*;
+        ``ptk.SceneRecords.peek_entry``)."""
+        return ptk.SceneRecords.peek_entry(cls.load(), session_id)
 
     @classmethod
     def pop(cls, session_id: Optional[str] = None) -> Optional[dict]:
-        """Remove and return the latest session (or the matching one)."""
+        """Remove and return the latest session (or the matching one;
+        ``ptk.SceneRecords.pop_entry``), saving only when one was taken."""
         sessions = cls.load()
-        if not sessions:
-            return None
-        if session_id is None:
-            session = sessions.pop()
-        else:
-            session = None
-            for i in range(len(sessions) - 1, -1, -1):
-                if sessions[i].get("id") == session_id:
-                    session = sessions.pop(i)
-                    break
-            if session is None:
-                return None
-        cls.save(sessions)
+        count = len(sessions)
+        session = ptk.SceneRecords.pop_entry(sessions, session_id)
+        if len(sessions) != count:
+            cls.save(sessions)
         return session
 
     @classmethod
