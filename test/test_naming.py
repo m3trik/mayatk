@@ -826,6 +826,62 @@ class TestNamingEdgeCases(MayaTkTestCase):
         self.assertNotIn("polyCube1", {f.split("|")[-1] for f in found})
         self.assertNotIn("time1", {f.split("|")[-1] for f in found})
 
+    # -- S1-D / S2-C: two phases in every operation, nothing stranded ----------
+
+    def test_a_locked_node_in_a_location_batch_strands_nothing(self):
+        """Regression: the park ran before the skip filter and caught nothing:
+        RuntimeError, and the others left as p0000000000, p0000000001."""
+        a = cmds.group(em=True, n="a")
+        lk = cmds.group(em=True, n="lk")
+        b = cmds.group(em=True, n="b")
+        for i, node in enumerate((a, lk, b)):
+            cmds.move(i, 0, 0, node)
+        cmds.lockNode(lk, lock=True)
+        try:
+            with _Captured() as log:
+                Naming.append_location_based_suffix([a, lk, b])
+            leafs = {n.split("|")[-1] for n in cmds.ls(type="transform")}
+            self.assertFalse([n for n in leafs if "park" in n or n.startswith("p000")])
+            self.assertIn("lk", leafs)
+            self.assertLessEqual({"a_01", "b_03"}, leafs)
+            self.assertEqual(len(log.lines("Skipped")), 1, log.texts)
+        finally:
+            cmds.lockNode(lk, lock=False)
+
+    def test_a_swap_renames_both(self):
+        """Regression: obj1 -> obj2 / obj2 -> obj1 gave obj3, obj1."""
+        u1, u2 = _uuid(cmds.group(em=True, n="obj1")), _uuid(cmds.group(em=True, n="obj2"))
+        Naming.rename(["obj1", "obj2"], "obj2|obj1", "obj1|obj2")
+        self.assertEqual((_name(u1), _name(u2)), ("obj2", "obj1"))
+
+    # -- E: what Maya will not rename is skipped, in one line ------------------
+
+    def test_locked_and_default_nodes_are_skipped_in_one_line(self):
+        ok = cmds.group(em=True, n="okCube")
+        lk = cmds.group(em=True, n="lockedCube")
+        cmds.lockNode(lk, lock=True)
+        try:
+            with _Captured() as log:
+                result = Naming.rename(
+                    ["|persp", "lambert1", "time1", lk, ok], "**_x"
+                )
+            self.assertEqual(log.lines("Could not rename"), [])
+            self.assertEqual(len(log.lines("Skipped")), 1, log.texts)
+            self.assertEqual(result[-1], "okCube_x")
+            self.assertEqual(len(result), 5)
+        finally:
+            cmds.lockNode(lk, lock=False)
+
+    # -- F: a shape follows its transform -------------------------------------
+
+    def test_a_shape_selected_with_its_transform_follows_it(self):
+        """Regression: select -hi, then Suffix By Type named the shape
+        'seatShape_GEO'; Maya carries a shape along with its transform."""
+        seat = cmds.polyCube(n="seat")[0]
+        cmds.select(seat, hi=True)
+        Naming.suffix_by_type(cmds.ls(selection=True, long=True))
+        self.assertEqual(cmds.listRelatives("|seat_GEO", shapes=True), ["seat_GEOShape"])
+
     # -- G: a numbered duplicate is re-affixed, not decorated -----------------
 
     def test_suffix_by_type_re_affixes_a_numbered_duplicate(self):
@@ -835,6 +891,52 @@ class TestNamingEdgeCases(MayaTkTestCase):
         ud, ui = _uuid(dup), _uuid(idx)
         Naming.suffix_by_type([dup, idx])
         self.assertEqual((_name(ud), _name(ui)), ("crate1_GEO", "wall_01_GEO"))
+
+    # -- K / L: every planned name is legalized -------------------------------
+
+    def test_strip_leading_keeps_the_digit(self):
+        """Regression: stripping 'a' from 'a1box' gave '_box'."""
+        u = _uuid(cmds.group(em=True, n="a1box"))
+        Naming.strip_chars(cmds.ls(u), 1)
+        self.assertEqual(_name(u), "_1box")
+
+    def test_every_planned_name_is_legalized(self):
+        """A leading digit gets '_' (Maya itself drops it: '1box' -> 'box');
+        a name with nothing legal left is skipped, with a warning."""
+        u = _uuid(cmds.group(em=True, n="c4"))
+        Naming.rename(cmds.ls(u), "1box")
+        self.assertEqual(_name(u), "_1box")
+        u = _uuid(cmds.group(em=True, n="c7"))
+        with _Captured() as log:
+            Naming.rename(cmds.ls(u), "---")
+        self.assertEqual(_name(u), "c7")
+        self.assertTrue(log.lines("no letters or digits"), log.texts)
+        u = _uuid(cmds.group(em=True, n="c6"))
+        with _Captured() as log:
+            Naming.rename(cmds.ls(u), "crate_#")
+        self.assertTrue(log.lines("not a counter"), log.texts)
+
+    # -- M: the dry run predicts Maya's numbering -----------------------------
+
+    def test_a_dry_run_predicts_the_live_numbering(self):
+        """Regression: the preview read 'box, box, box'; live gave box1, box2."""
+        cmds.group(em=True, n="box")
+        cubes = [cmds.group(em=True, n=f"pCube{i}") for i in (1, 2, 3)]
+        mat = cmds.shadingNode("lambert", asShader=True, n="mat")
+        g = cmds.group(em=True, n="g")
+        kid = cmds.group(em=True, n="kid", parent=g)
+        targets = cubes + [mat, kid]
+        uids = [_uuid(t) for t in targets]
+        dry = Naming.rename(targets, "box", dry_run=True)
+        with _Captured() as log:
+            live = Naming.rename(cmds.ls(uids, long=True), "box")
+        live_leafs = [_name(u) for u in uids]
+        # DAG siblings of 'box' number on; the DG node collides with every
+        # node name; the child of 'g' has no sibling 'box'.
+        self.assertEqual(live_leafs, ["box1", "box2", "box3", "box4", "box"])
+        self.assertEqual(dry, live_leafs)
+        self.assertEqual([n.split("|")[-1] for n in live], live_leafs)
+        self.assertEqual(log.lines("instead of"), [])
 
     def test_a_frozen_scope_survives_a_parent_rename(self):
         """Regression: Apply after the user renamed a parent found nothing in

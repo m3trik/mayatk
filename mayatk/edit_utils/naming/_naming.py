@@ -79,6 +79,14 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         "objectSet": {"type": "objectSet"},
     }
 
+    #: What a rename pattern holding ``#`` is told: Maya's own ``rename``
+    #: counts with a trailing ``#``, this tool does not (a taken name is
+    #: numbered as Maya numbers it).
+    HASH_NOTE = (
+        "'#' is not a counter here: it is replaced by '_'. A name already taken "
+        "is numbered the way Maya numbers it (box, box1, box2)."
+    )
+
     @ptk.ClassProperty
     def SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]:
         """``(keyword, affix, label, type key)`` -- the live convention, joined
@@ -194,6 +202,8 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             rename(['pCube1'], r'*\\1_GEO', r'Cube(\\d+)', regex=True) # Backref: 'pCube1' becomes 'p1_GEO'.
         """
         objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True, long=True)
+        if "#" in to:
+            cls.logger.warning(cls.HASH_NOTE)
 
         # Map each short name to a LIST of (original_long_path, uuid) pairs.
         # The short-name key must match ``find_str_and_format``'s oldName output
@@ -542,22 +552,9 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
                 )
                 continue
 
-            if trailing:
-                new_name = s[:-num_chars]
-            else:
-                temp_name = s[num_chars:]
-                # Maya does not allow names starting with a digit
-                if temp_name and temp_name[0].isdigit():
-                    temp_name = "_" + temp_name[1:]
-                new_name = temp_name
-
-            # Ensure name is not empty and legal
-            if not new_name or not (new_name[0].isalpha() or new_name[0] == "_"):
-                cls.logger.warning(
-                    f"Skipped '{s}': '{new_name}' is not a legal Maya identifier."
-                )
-                continue
-
+            # A digit left in front is kept: the plan step legalizes it
+            # ('a1box' minus 'a' -> '_1box'), and skips a name left empty.
+            new_name = s[:-num_chars] if trailing else s[num_chars:]
             plan.append((cls._key(obj), s, new_name))
 
         return cls._apply_plan(plan, "Strip Chars", dry_run)
@@ -1046,14 +1043,8 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             (cls._key(str(obj)), cls._leaf(str(obj)), newNames[obj])
             for obj in all_ordered_objs
         ]
-        if not dry_run:
-            # Park every node that changes on a placeholder first so a target
-            # name freed by a later rename in the batch cannot collide into a
-            # '1' suffix. Unchanged entries are never renamed back by the plan,
-            # so they must keep their name here.
-            for key, old, new in plan:
-                if new != old:
-                    cls._rename_node(key, "p0000000000")
+        # Two phases (no target collides with a name the batch still holds)
+        # are the shared plan step's, after its skip filter.
         return cls._apply_plan(plan, "Suffix By Location", dry_run)
 
     # ------------------------------------------------------------------
@@ -1087,6 +1078,24 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         """Resolve a plan key back to the node's current full path."""
         return (cmds.ls(key, long=True) or [key])[0]
 
+    @staticmethod
+    def legalize(name: str) -> str:
+        """*name* as a Maya node name, or ``""`` when it holds no name at all.
+
+        Every operation's planned names pass through here (the shared plan
+        step): each character outside letters, digits and ``_`` becomes ``_``,
+        and a leading digit gets a ``_`` in front -- Maya's own rename drops
+        it (``1box`` -> ``box``). A name of underscores alone (``---``) or
+        nothing is no name: the plan step skips it, with a warning. ``#`` is
+        replaced like any other character (see :attr:`HASH_NOTE`).
+
+        Example:
+            legalize("1box") --> '_1box'
+            legalize("---") --> ''
+        """
+        legal = ptk.StrUtils.to_identifier(name)
+        return legal if legal.strip("_") else ""
+
     @classmethod
     def _rename_node(cls, key: str, new_name: str) -> str:
         """The :class:`pythontk.RenamePlan` strategy: rename one node, in its
@@ -1096,39 +1105,192 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         return cls._leaf(str(cmds.rename(path, target)))
 
     @classmethod
+    def _park(cls, key: str, index: int) -> None:
+        """The two-phase run's placeholder (:meth:`pythontk.RenamePlan.apply`'s ``park``)."""
+        cls._rename_node(key, f"naming_park_{index}")
+
+    @classmethod
     def _node_link(cls, key: str, name: str) -> str:
         """Render a report item as a link that selects the node in the viewport."""
         return cls.log_link(name, "select", node=cls._path(key))
+
+    @staticmethod
+    def _uniquify(name: str, taken) -> str:
+        """Maya's rule for a taken *name*, measured in Maya 2025: one more than
+        the highest number any ``<base><N>`` in the pool carries (the name's
+        own counts; none is 0), padded as the name was -- so past ``box`` and
+        ``box2`` comes ``box3`` (never the free ``box1``), and ``box_01`` gives
+        ``box_02``."""
+        base, digits = re.match(r"^(.*?)(\d*)$", name).groups()
+        pattern = re.compile(re.escape(base) + r"(\d+)$")
+        top = int(digits or 0)
+        for other in taken:
+            m = pattern.match(other)
+            if m:
+                top = max(top, int(m.group(1)))
+        return f"{base}{str(top + 1).zfill(len(digits))}"
+
+    @classmethod
+    def _predict(cls, plan) -> List[str]:
+        """The names Maya gives *plan*'s entries on collision, in order
+        (:meth:`pythontk.RenamePlan.predict`), so a dry run previews the live
+        run. Maya's pools, measured: a DAG node's name must be free among its
+        siblings and among every DG node's; a DG node's among every node's
+        (DAG nodes included, at any depth); each namespace is its own."""
+        if not plan:
+            return []
+        paths = {key: cls._path(key) for key, _old, _new in plan}
+        dag = set(cmds.ls(list(paths.values()), dag=True, long=True) or [])
+        scene = {}
+
+        def every():
+            if not scene:
+                scene["all"] = cmds.ls(long=True) or []
+                scene["dag"] = set(cmds.ls(dag=True, long=True) or [])
+            return scene["all"], scene["dag"]
+
+        def scopes(key):
+            path = paths[key]
+            ns = cls._namespace(path)
+            if path in dag:
+                siblings = ("siblings", path.rpartition("|")[0], ns)
+                return [siblings, ("dg", ns)], [siblings, ("all", ns)]
+            return [("all", ns)], [("dg", ns), ("all", ns)]
+
+        def names(pool):
+            kind, ns = pool[0], pool[-1]
+            if kind == "siblings":
+                parent = pool[1]
+                members = (
+                    cmds.listRelatives(parent, children=True, fullPath=True)
+                    if parent
+                    else cmds.ls(assemblies=True, long=True)
+                ) or []
+            else:
+                nodes, dag_nodes = every()
+                members = nodes if kind == "all" else [n for n in nodes if n not in dag_nodes]
+            return [cls._leaf(m) for m in members if cls._namespace(m) == ns]
+
+        return ptk.RenamePlan.predict(plan, scopes, names, cls._uniquify)
+
+    @classmethod
+    def _followers(cls, plan) -> set:
+        """The keys of the shapes in *plan* whose parent transform is in it too.
+
+        Maya renames a shape along with its transform (``seat`` ->
+        ``seat_GEO`` carries ``seatShape`` to ``seat_GEOShape``), so renaming
+        the shape as well only decorated it (``seatShape_GEO``, from a
+        ``select -hi`` or a Find of ``*seat*``). A shape not named after its
+        transform keeps its name, as in Maya (:meth:`conform_shape_names`
+        repairs those).
+        """
+        keys = {key for key, _old, _new in plan}
+        paths = [cls._path(key) for key in keys]
+        shapes = (cmds.ls(paths, shapes=True, long=True) or []) if paths else []
+        followers = set()
+        for shape in shapes:
+            parents = cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+            if any(cls._key(parent) in keys for parent in parents):
+                followers.add(cls._key(shape))
+        return followers
+
+    @classmethod
+    def _locked(cls, plan) -> set:
+        """The keys of *plan*'s nodes Maya will not rename: read-only
+        (referenced) and lockNode-locked nodes, and Maya's default and
+        undeletable ones (the startup cameras, ``lambert1``, ``time1``, the
+        managers)."""
+        by_path = {cls._path(key): key for key, _old, _new in plan}
+        nodes = [n for n in by_path if cmds.objExists(n)]
+        if not nodes:
+            return set()
+        blocked = set(cmds.ls(nodes, readOnly=True, long=True) or [])
+        blocked.update(cmds.ls(defaultNodes=True, long=True) or [])
+        blocked.update(cmds.ls(undeletable=True, long=True) or [])
+        locks = cmds.lockNode(nodes, query=True, lock=True) or []
+        blocked.update(n for n, locked in zip(nodes, locks) if locked)
+        return {key for path, key in by_path.items() if path in blocked}
+
+    @staticmethod
+    def _listed(items, limit: int = 10) -> str:
+        """``a, b, …`` -- a tally line's names, the first *limit* of them."""
+        shown = ", ".join(items[:limit])
+        return f"{shown}, …" if len(items) > limit else shown
 
     @classmethod
     def _apply_plan(cls, plan, title: str, dry_run: bool) -> List[str]:
         """Apply ``(key, old_leaf, new_leaf)`` entries and report; returns the resulting node names.
 
-        Live: the node's shortest unique name after the rename (the
-        ``cmds.rename`` return, resolved by UUID so it is authoritative even
-        after later entries changed the hierarchy). Dry run: the planned leaf.
-        Read-only nodes (referenced, locked) are skipped and tallied in one
-        line rather than failing one by one.
+        The plan step every operation shares, so each behaves the same:
+
+        1. A shape whose transform is in the batch follows it and is dropped
+           (:meth:`_followers`).
+        2. Each new name is legalized (:meth:`legalize`); one with no name
+           left is skipped, all of them in one warning.
+        3. What Maya will not rename is skipped, in one line (:meth:`_locked`).
+        4. The names Maya will number on a collision are predicted
+           (:meth:`_predict`) and planned as such, so a dry run shows what the
+           live run does; they are reported in one line.
+        5. The batch runs in two phases (:meth:`pythontk.RenamePlan.apply`
+           with ``park``), so no rename meets a name the batch still holds and
+           nothing is ever left on a placeholder.
+
+        Returns, parallel to *plan*: live, each node's shortest unique name
+        after the rename (resolved by UUID, so it is authoritative after later
+        entries changed the hierarchy); on a dry run, the predicted leaf (the
+        old leaf for a node skipped or following its transform).
         """
-        read_only = set(cmds.ls(readOnly=True, long=True) or [])
-        skipped = {key for key, _old, _new in plan if cls._path(key) in read_only}
-        if skipped:
-            names = [old for key, old, _new in plan if key in skipped]
-            cls.logger.info(
-                f"Skipped {len(names)} read-only node(s): {', '.join(names[:10])}"
-                f"{', …' if len(names) > 10 else ''}"
+        plan = list(plan)
+        followers = cls._followers(plan)
+        staged, nameless = [], []
+        for key, old, new in plan:
+            if key in followers:
+                continue
+            if new != old:
+                legal = cls.legalize(new)
+                if not legal:
+                    nameless.append(f"{old} → '{new}'")
+                    continue
+                new = legal
+            staged.append((key, old, new))
+        if nameless:
+            cls.logger.warning(
+                f"Skipped {len(nameless)} name(s) with no letters or digits left: "
+                f"{cls._listed(nameless)}"
             )
+        locked = cls._locked(staged)
+        if locked:
+            names = [old for key, old, _new in staged if key in locked]
+            cls.logger.info(
+                f"Skipped {len(names)} node(s) Maya will not rename (default, "
+                f"locked or read-only): {cls._listed(names)}"
+            )
+        live = [entry for entry in staged if entry[0] not in locked]
+        predicted = cls._predict(live)
+        numbered = [
+            f"{old} → {got}"
+            for (_key, old, new), got in zip(live, predicted)
+            if got != new
+        ]
+        if numbered:
+            cls.logger.warning(
+                f"{len(numbered)} name(s) already taken, numbered as Maya numbers "
+                f"them: {cls._listed(numbered)}"
+            )
+        live = [(key, old, got) for (key, old, _new), got in zip(live, predicted)]
         ptk.RenamePlan.apply(
-            [e for e in plan if e[0] not in skipped],
+            live,
             cls._rename_node,
             title=title,
             dry_run=dry_run,
             logger=cls.logger,
             link=cls._node_link,
             unit="object",
+            park=cls._park,
         )
         if dry_run:
-            return [old if key in skipped else new for key, old, new in plan]
+            planned = {key: new for key, _old, new in live}
+            return [planned.get(key, old) for key, old, _new in plan]
         return [(cmds.ls(key) or [key])[0] for key, _old, _new in plan]
 
 
