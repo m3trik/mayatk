@@ -63,6 +63,22 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
     #: (blendertk's lists its gaps).
     UNSUPPORTED_TYPES: Dict[str, str] = {}
 
+    #: The DG node families of :attr:`SUFFIX_BINDINGS`, ``{type key: cmds.ls
+    #: filter}``: with the DAG transforms, what the Scene scope holds (a type
+    #: key with no row here names a transform, a joint or a constraint). Never
+    #: a script node, a renderer singleton or construction history.
+    _DG_FAMILIES: Dict[str, Dict[str, object]] = {
+        "displayLayer": {"type": "displayLayer"},
+        "cluster": {"type": "cluster"},
+        "lattice": {"type": "ffd"},
+        "skinCluster": {"type": "skinCluster"},
+        "blendShape": {"type": "blendShape"},
+        "material": {"materials": True},
+        "shadingEngine": {"type": "shadingEngine"},
+        "texture": {"textures": True},
+        "objectSet": {"type": "objectSet"},
+    }
+
     @ptk.ClassProperty
     def SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]:
         """``(keyword, affix, label, type key)`` -- the live convention, joined
@@ -256,21 +272,40 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         return [renamed.get(key, obj) for key, obj in zip(obj_keys, objects)]
 
     @classmethod
+    def _user_nodes(cls) -> List[str]:
+        """The user's own nodes, referenced ones included: every DAG transform
+        and the DG families :attr:`SUFFIX_BINDINGS` names (:attr:`_DG_FAMILIES`),
+        less Maya's default and undeletable nodes (the startup cameras, the
+        managers). What Find searches."""
+        found = list(cmds.ls(type="transform", long=True) or [])
+        keys = {tk for _kw, _ck, tk in cls.SUFFIX_BINDINGS}
+        for key, family in cls._DG_FAMILIES.items():
+            if key in keys:
+                found += cmds.ls(long=True, **family) or []
+        skip = set(cmds.ls(defaultNodes=True, long=True) or [])
+        skip.update(cmds.ls(undeletable=True, long=True) or [])
+        return [n for n in dict.fromkeys(found) if n not in skip]
+
+    @classmethod
     def scene_objects(cls) -> List[str]:
         """Every renameable node in the scene — the naming tools' "Scene" scope.
 
-        Excludes Maya's built-ins (default, undeletable — the startup cameras
-        and managers — and read-only nodes) and shapes (a shape follows its
-        transform's name; renaming both would double-suffix).
+        An allowlist of the user's objects: the DAG transforms (groups,
+        meshes, curves, cameras, lights, joints, constraints, ...) and the DG
+        node families the Suffix By Type bindings name (materials, shading
+        groups, textures, sets, display layers, deformers). Never a script
+        node, a renderer's singleton (renaming ``defaultArnoldRenderOptions``
+        made MtoA create a fresh one: the render settings were lost) or
+        construction history. Maya's default, undeletable and read-only nodes
+        are left out, and shapes (a shape follows its transform's name;
+        renaming both would double-suffix).
 
         Returns:
             list[str]: Long names.
         """
-        skip = set(cmds.ls(defaultNodes=True, long=True) or [])
-        skip.update(cmds.ls(undeletable=True, long=True) or [])
-        skip.update(cmds.ls(readOnly=True, long=True) or [])
-        skip.update(cmds.ls(shapes=True, long=True) or [])
-        return [n for n in cmds.ls(long=True) or [] if n not in skip]
+        nodes = cls._user_nodes()
+        read_only = set(cmds.ls(nodes, readOnly=True, long=True) or []) if nodes else set()
+        return [n for n in nodes if n not in read_only]
 
     @classmethod
     def scope_objects(cls, scene: bool = False) -> List[str]:
@@ -278,12 +313,13 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         node (*scene*, :meth:`scene_objects`), else the current selection.
 
         Returns:
-            list[str]: Long names, so a plan frozen now still resolves each
-            node unambiguously when it is applied later.
+            list[str]: Node UUIDs, which every operation takes as it takes a
+            name: a plan frozen now (a dry run's Apply) still finds each node
+            after a rename moved its path -- a parent's included.
         """
-        if scene:
-            return cls.scene_objects()
-        return cmds.ls(selection=True, long=True) or []
+        nodes = cls.scene_objects() if scene else cmds.ls(selection=True, long=True)
+        # ls([]) lists the whole scene: never hand it nothing.
+        return list(dict.fromkeys(cmds.ls(nodes, uuid=True) or [])) if nodes else []
 
     @classmethod
     def select_by_name(
@@ -295,9 +331,12 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
     ) -> Tuple[List[str], int]:
         """Select the scene nodes whose name matches *pattern* (Find).
 
-        Matches each node's leaf name (no path, no namespace) through
-        :func:`pythontk.find_str`; the matches replace the selection, and none
-        found clears it.
+        Searches the user's own nodes -- what the Scene scope holds
+        (:meth:`scene_objects`), referenced nodes included -- never Maya's
+        defaults, history or system nodes. Matches each node's leaf name (no
+        path) through :func:`pythontk.find_str`, without its namespace unless
+        *pattern* names one (``ns:*``); the matches replace the selection, and
+        none found clears it.
 
         Parameters:
             pattern: ``*`` / ``|`` wildcards (``startswith*``, ``*contains*``,
@@ -313,15 +352,23 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         cmds.select(clear=True)  # first, so the outliner never shows a stale mix
         if locators_only:
             shapes = cmds.ls(type="locator", long=True) or []
-            # listRelatives([]) falls back to the selection -- never pass it nothing.
-            objects = (
-                cmds.listRelatives(shapes, parent=True, fullPath=True) or []
-                if shapes
-                else []
+            # listRelatives([]) falls back to the selection -- never pass it
+            # nothing. allParents: an instanced locator has a parent per instance.
+            objects = list(
+                dict.fromkeys(
+                    cmds.listRelatives(shapes, allParents=True, fullPath=True) or []
+                    if shapes
+                    else []
+                )
             )
         else:
-            objects = cmds.ls(long=True) or []
-        names = [cls._leaf(o) for o in objects]
+            objects = cls._user_nodes()
+        # A namespace named: match it too ('ns:*'). A regex group's '(?:' or
+        # '(?i:' names none.
+        if ":" in (re.sub(r"\(\?[A-Za-z-]*:", "(", pattern) if regex else pattern):
+            names = [o.split("|")[-1] for o in objects]
+        else:
+            names = [cls._leaf(o) for o in objects]
         hits = set(ptk.find_str(pattern, names, regex=regex, ignore_case=ignore_case))
         found = [o for o, name in zip(objects, names) if name in hits]
         if found:
@@ -521,9 +568,13 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         """Rename objects following the given case.
 
         Parameters:
-            objects (str/list): The objects to rename. default:all scene objects
-            case (str): Desired case using python case operators.
-                    valid: 'upper', 'lower', 'capitalize', 'swapcase', 'title'. default:'capitalize'
+            objects (str/list): The objects to rename. default: the Scene
+                scope (:meth:`scene_objects`).
+            case (str): Desired case, a :meth:`pythontk.StrUtils.set_case` case:
+                    'upper', 'lower', 'capitalize', 'swapcase', 'title' (Python's,
+                    which lower every other letter), or 'upper_first' /
+                    'upper_initials' (first letters raised, the rest kept).
+                    default:'capitalize'
             dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
@@ -532,7 +583,7 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         Example:
             set_case(cmds.ls(sl=1), 'upper')
         """
-        objects = cmds.ls(objects, long=True) if objects else cmds.ls(long=True)
+        objects = cmds.ls(objects, long=True) if objects else cls.scene_objects()
         plan = []
         for obj in objects:
             leaf = cls._leaf(obj)

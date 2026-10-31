@@ -698,8 +698,10 @@ class TestNamingToolApi(MayaTkTestCase):
         a = cmds.polyCube(n="scopeA")[0]
         cmds.polyCube(n="scopeB")
         cmds.select(a)
-        self.assertEqual(Naming.scope_objects(), cmds.ls(a, long=True))
-        names = {n.split("|")[-1] for n in Naming.scope_objects(scene=True)}
+        self.assertEqual(Naming.scope_objects(), cmds.ls(a, uuid=True))  # frozen by UUID
+        names = {
+            n.split("|")[-1] for n in cmds.ls(Naming.scope_objects(scene=True), long=True)
+        }
         self.assertLessEqual({"scopeA", "scopeB"}, names)
         cmds.select(clear=True)
         self.assertEqual(Naming.scope_objects(), [])
@@ -707,6 +709,7 @@ class TestNamingToolApi(MayaTkTestCase):
     def test_select_by_name_selects_the_matches(self):
         cube = cmds.polyCube(n="findMe")[0]
         loc = cmds.spaceLocator(n="findLoc")[0]
+        cmds.group(em=True, n="other")  # searched, never matched
         found, searched = Naming.select_by_name("findMe|findLoc")  # exact terms
         self.assertEqual(sorted(found), sorted(cmds.ls([cube, loc], long=True)))
         self.assertEqual(sorted(cmds.ls(selection=True, long=True)), sorted(found))
@@ -800,6 +803,60 @@ class TestNamingEdgeCases(MayaTkTestCase):
         cmds.namespace(setNamespace=":other")
         Naming.rename(["|rootobj"], "moved")
         self.assertEqual(cmds.ls(uid, long=True), ["|moved"])
+
+    # -- S1-B: the Scene scope is the user's objects ---------------------------
+
+    def test_scene_scope_holds_the_users_objects_only(self):
+        """Regression: the Scene scope was every DG node minus a few, so it
+        renamed script nodes, renderer singletons and construction history."""
+        cube = cmds.polyCube(n="crate")[0]  # also makes polyCube1 history
+        mat = cmds.shadingNode("lambert", asShader=True, n="crateMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, n="crateSG")
+        layer = cmds.createDisplayLayer(empty=True, n="propsLayer")
+        cmds.scriptNode(n="myScriptNode", beforeScript="pass", sourceType="python")
+        cmds.scriptNode(n="uiConfigurationScriptNode", beforeScript="pass")
+        cmds.createNode("unknown", n="pluginSingleton")
+        names = {n.split("|")[-1] for n in Naming.scene_objects()}
+        self.assertLessEqual({cube, mat, sg, layer}, names)
+        for system in ("polyCube1", "myScriptNode", "uiConfigurationScriptNode",
+                       "pluginSingleton", "time1", "lambert1", "persp"):
+            self.assertNotIn(system, names)
+        found, searched = Naming.select_by_name("*")
+        self.assertEqual(searched, len(Naming._user_nodes()))
+        self.assertNotIn("polyCube1", {f.split("|")[-1] for f in found})
+        self.assertNotIn("time1", {f.split("|")[-1] for f in found})
+
+    def test_a_frozen_scope_survives_a_parent_rename(self):
+        """Regression: Apply after the user renamed a parent found nothing in
+        scope -- the frozen long names had gone stale."""
+        g = cmds.group(em=True, n="grp")
+        kid = cmds.group(em=True, n="kid", parent=g)
+        cmds.select(kid)
+        frozen = Naming.scope_objects()
+        cmds.rename(g, "group_renamed_by_user")
+        Naming.rename(frozen, "**_v2")
+        self.assertTrue(cmds.objExists("|group_renamed_by_user|kid_v2"))
+
+    # -- S3: Find --------------------------------------------------------------
+
+    def test_find_matches_a_namespace_the_pattern_names(self):
+        cmds.namespace(add="ns")
+        cmds.group(em=True, n="ns:box")
+        cmds.group(em=True, n="box")
+        found, _searched = Naming.select_by_name("ns:*")
+        self.assertEqual(found, ["|ns:box"])
+        found, _searched = Naming.select_by_name("box")
+        self.assertEqual(sorted(found), ["|box", "|ns:box"])
+        # A regex group's '(?:' is no namespace: the leaf is matched as ever.
+        found, _searched = Naming.select_by_name("(?:box)", regex=True)
+        self.assertEqual(sorted(found), ["|box", "|ns:box"])
+
+    def test_locators_only_finds_every_instance(self):
+        loc = cmds.spaceLocator(n="aim")[0]
+        inst = cmds.instance(loc, n="aimInst")[0]
+        found, searched = Naming.select_by_name("aim*", locators_only=True)
+        self.assertEqual(sorted(found), sorted(cmds.ls([loc, inst], long=True)))
+        self.assertEqual(searched, 2)
 
 
 if __name__ == "__main__":
