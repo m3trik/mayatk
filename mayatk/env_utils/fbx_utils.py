@@ -359,8 +359,45 @@ class FbxUtils(ptk.HelpMixin):
         shipped = None if selection_only else cmds.ls(assemblies=True, long=True) or []
         with cls.embed_media_write_cwd(), cls.offsets_folded(shipped, plan):
             cmds.file(file_path, **kwargs)
+        cls.finish_write(file_path)
         logger.info(f"Exported FBX: {file_path}")
         return file_path
+
+    @staticmethod
+    def finish_write(
+        file_path: str, logger: Optional[logging.Logger] = None
+    ) -> Dict[str, int]:
+        """The repair every Maya FBX write takes before anything reads the file.
+
+        Maya writes a ``(0, 0, 0)`` normal, binormal and tangent for each corner
+        of a zero-area face (an extrude never moved), and a reader that checks --
+        Substance Painter's (Assimp) -- then drops that mesh's whole normal
+        layer, every hard edge with it. :meth:`ptk.FbxMedia.repair_null_normals`
+        fills them in the written file; the scene is never touched. Run by
+        :meth:`export` and the Scene Exporter's write, before the GLB build or a
+        bridge reads the file.
+
+        Parameters:
+            file_path: The FBX just written.
+            logger: Where a repair is reported; this module's otherwise.
+
+        Returns:
+            ``{mesh: vectors filled}``; ``{}`` when nothing needed it or the
+            file is not a binary FBX.
+        """
+        log = logger or logging.getLogger(__name__)
+        try:
+            filled = ptk.FbxMedia.repair_null_normals(file_path)
+        except ValueError:  # not a binary FBX (an ASCII write): nothing to read
+            return {}
+        if filled:
+            log.warning(
+                "Zero-area faces wrote null normals; filled so FBX readers keep "
+                "the mesh's normals (Maya's Mesh > Cleanup, Faces with zero "
+                "geometry area, fixes the mesh itself): "
+                + ", ".join(f"{mesh} ({count})" for mesh, count in sorted(filled.items()))
+            )
+        return filled
 
     @staticmethod
     def drop_rig_apparatus(

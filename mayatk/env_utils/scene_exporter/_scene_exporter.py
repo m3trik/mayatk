@@ -725,6 +725,7 @@ class SceneExporter(ptk.SceneExporterBase):
                             type=file_format,
                             exportSelected=True,
                         )
+                    FbxUtils.finish_write(fbx_write_path, logger=self.logger)
                     if drop_rig_apparatus:
                         # Before the GLB conversion reads the file, so both
                         # deliverables ship the same nodes and FBX2glTF --
