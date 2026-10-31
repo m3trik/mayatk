@@ -16,10 +16,14 @@ Also added: auto-load of the mtoa (Arnold) plugin via
 the class touch ``aiSkyDomeLight``.
 """
 
+import inspect
+import os
+import tempfile
 import unittest
 from unittest import mock
 
 import maya.cmds as cmds
+import pythontk as ptk
 
 from base_test import MayaTkTestCase
 from mayatk.light_utils.hdr_manager import HdrManager
@@ -446,6 +450,52 @@ class TestKnobs(unittest.TestCase):
             },
         )
 
+
+class TestImportHdrs(unittest.TestCase):
+    """``HdrManager.import_hdrs`` -- the HDR Manager's Add, for a script too:
+    ``ptk.FileUtils.import_files`` into the texture folder it is handed, each
+    file's integrity checked. Same signature as blendertk's (tentacle's one panel
+    calls it on both). Added: 2026-10-29"""
+
+    def test_it_imports_into_the_folder_given(self):
+        folder = tempfile.mkdtemp(prefix="mtk_hdr_import_")
+        self.addCleanup(os.rmdir, folder)
+        with mock.patch.object(
+            ptk.FileUtils, "import_files", return_value={"added": ["x.hdr"]}
+        ) as run:
+            result = HdrManager.import_hdrs(
+                ["a.hdr"], folder, mode="move", on_conflict="overwrite", strict=True
+            )
+        run.assert_called_once_with(
+            ["a.hdr"],
+            folder,
+            mode="move",
+            on_conflict="overwrite",
+            validate=ptk.ImgUtils.validate_image_integrity,
+            strict=True,
+        )
+        self.assertEqual(result, {"added": ["x.hdr"]})
+
+    def test_copy_without_a_project_says_so_and_link_needs_none(self):
+        # import_files' own refusal, worded for the user: the host only delegates.
+        with self.assertRaisesRegex(ValueError, "set a project"):
+            HdrManager.import_hdrs(["a.hdr"], "")
+        with mock.patch.object(ptk.FileUtils, "import_files") as run:
+            HdrManager.import_hdrs(["a.hdr"], None, mode="link")
+        run.assert_called_once()
+
+    def test_the_signature_is_the_mirrors(self):
+        params = inspect.signature(HdrManager.import_hdrs).parameters
+        self.assertEqual(
+            [(p.name, p.default) for p in params.values()],
+            [
+                ("paths", inspect.Parameter.empty),
+                ("folder", inspect.Parameter.empty),
+                ("mode", "copy"),
+                ("on_conflict", "reuse"),
+                ("strict", False),
+            ],
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
