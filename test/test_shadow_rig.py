@@ -1673,6 +1673,49 @@ class TestIntensityAndGround(MayaTkTestCase):
         for got, want in zip(values, (-0.5, 0.5)):
             self.assertAlmostEqual(got, want, places=5)
 
+    def test_a_ground_set_after_a_unit_switch_is_in_the_rigs_unit(self):
+        """Regression: the rig's stamps are in the unit its expression was made
+        in (``rig_unit``), and a ground height set after the user switched
+        Maya's working unit was written in the new unit -- 0.02 m stamped as
+        0.02 cm, so the plane sat 2 cm too low and the record said 0.0002 m.
+        The value is converted at entry and the edit runs in the rig's unit.
+        Fixed: 2026-10-31."""
+        self.addCleanup(cmds.currentUnit, linear="cm")
+        cmds.currentUnit(linear="m")
+
+        ShadowRig.set_ground_height([self.plane], 0.02)
+
+        self.assertAlmostEqual(self._get("groundHeight"), 2.0, places=5)
+        self.assertAlmostEqual(
+            self._get("translateY"), 0.02 + ShadowRig.GROUND_OFFSET / 100, places=6
+        )
+        self.assertAlmostEqual(ShadowRig.plane_record(self.plane)["ground"], 0.02, places=6)
+
+    def test_a_recalculate_and_a_rebuild_after_a_unit_switch_keep_the_rigs_numbers(self):
+        """Regression: a Recalculate's refit and a Rebuild after the user
+        switched Maya's working unit wrote working-unit numbers into stamps
+        the expression (frozen in the rig's unit) reads. Each plane's edit now
+        runs in its rig's unit. Fixed: 2026-10-31."""
+        stamps = ("basePlaneSize", "groundHeight", "footprintRadius")
+        before = {a: self._get(a) for a in stamps if cmds.objExists(f"{self.plane}.{a}")}
+        self.assertTrue(before)
+        self.addCleanup(cmds.currentUnit, linear="cm")
+        cmds.currentUnit(linear="m")
+
+        ShadowRig.refresh_silhouette([self.plane], refit=True)
+        for attr, value in before.items():
+            self.assertAlmostEqual(self._get(attr), value, places=4, msg=f"refit {attr}")
+
+        original = self.rig.texture_path  # setUp removes it; a rebuild keeps the name
+        rig = ShadowRig.rebuild(self.plane)
+        if os.path.normcase(rig.texture_path) != os.path.normcase(original):
+            self.addCleanup(os.remove, rig.texture_path)
+        for attr, value in before.items():
+            self.assertAlmostEqual(
+                cmds.getAttr(f"{rig.shadow_plane}.{attr}"), value, places=4,
+                msg=f"rebuild {attr}",
+            )
+
     def test_one_undo_step(self):
         self._cut("opacity")
         cmds.setAttr(f"{self.plane}.opacity", 0.8)
