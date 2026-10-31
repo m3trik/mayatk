@@ -11,9 +11,10 @@ module owns; the install strategy (symlink-first, copytree fallback,
 :mod:`pythontk.net_utils.rpc.installer`.
 
 A freshly installed plugin is picked up on Painter's next launch (or via
-**Python ▸ Reload Plugins Folder** in a running Painter). If Painter
-doesn't auto-enable it, tick ``substance_rpc`` once in the **Python**
-menu -- Painter remembers the choice.
+**Python ▸ Reload Plugins Folder** in a running Painter). Painter starts a
+``plugins/`` module at launch only when its own switch for it reads ``on``
+(default off), so the install sets that switch the first time; the user can
+still turn it off in Painter's **Python** menu, and that choice stands.
 
 **Vendored twin -- keep code-identical.** This file is duplicated at
 ``mayatk/mat_utils/substance_bridge/substance_rpc/installer.py`` (the SSoT: edit it there)
@@ -107,6 +108,13 @@ class _InstallerInternal(object):
         return fallback if fallback.is_dir() else None
 
 
+#: Painter's own settings store, and the switch that makes it start a
+#: ``plugins/`` module at launch (``resources/python/startup/
+#: painter_plugins_ui.py``: ``launch_at_start``, default off).
+PAINTER_SETTINGS = ("Adobe", "Adobe Substance 3D Painter")
+LAUNCH_AT_START_KEY = f"python_plugins/{PLUGIN_NAME}/launch_at_start"
+
+
 class Installer(_InstallerInternal):
     """Installer — module namespace."""
 
@@ -171,11 +179,36 @@ class Installer(_InstallerInternal):
         dest_root = Installer.user_plugin_dir()
         if not dest_root:
             return None
-        return PluginInstaller.install_plugin(
+        installed = PluginInstaller.install_plugin(
             plugin_src=_InstallerInternal._plugin_source_dir(),
             dest=dest_root / PLUGIN_NAME,
             force=force,
         )
+        if installed:
+            Installer.enable_launch_at_start()
+        return installed
+
+    @staticmethod
+    def painter_settings():
+        """Painter's own QSettings store, or ``None`` without Qt."""
+        try:
+            from qtpy import QtCore
+        except Exception:
+            return None
+        return QtCore.QSettings(*PAINTER_SETTINGS)
+
+    @staticmethod
+    def enable_launch_at_start() -> bool:
+        """Turn on Painter's switch to start the plugin at launch, unless the
+        user has set it either way: without it a fresh install's first send
+        found no server (Painter starts a ``plugins/`` module only when the
+        switch reads ``on``). Returns True when this call set it."""
+        settings = Installer.painter_settings()
+        if settings is None or settings.contains(LAUNCH_AT_START_KEY):
+            return False
+        settings.setValue(LAUNCH_AT_START_KEY, "on")
+        settings.sync()
+        return True
 
     @staticmethod
     def uninstall() -> bool:
