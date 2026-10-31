@@ -100,7 +100,9 @@ _DEFAULT_FBX_OPTIONS: Dict[str, Any] = {
     "FBXExportReferencedAssetsContent": False,
     "FBXExportScaleFactor": 1.0,
     "FBXExportShapes": False,
-    "FBXExportSmoothMesh": False,
+    # True ships the base cage of a Smooth Mesh Preview object, as the USD
+    # carrier and the Scene Exporter do; False shipped its subdivided mesh.
+    "FBXExportSmoothMesh": True,
     "FBXExportUpAxis": "y",
     "FBXExportUseSceneName": False,
 }

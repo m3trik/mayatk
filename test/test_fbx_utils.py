@@ -540,6 +540,35 @@ class TestFbxUtilsExport(MayaTkTestCase):
         self.assertTrue(nulls, "the FBX carried no normal layer to check")
         self.assertEqual(set(nulls.values()), {0}, f"null vectors shipped: {nulls}")
 
+    def test_the_substance_bridge_ships_the_base_cage_of_a_smooth_preview_mesh(self):
+        """Regression: the bridge wrote ``FBXExportSmoothMesh False``, which
+        exports the SUBDIVIDED mesh of an object with Smooth Mesh Preview on (a
+        cube shipped 98 vertices), while its USD carrier and the Scene Exporter
+        ship the base cage. Fixed: 2026-10-31."""
+        from mayatk.mat_utils.substance_bridge._substance_bridge import (
+            _DEFAULT_FBX_OPTIONS,
+        )
+
+        cube = cmds.polyCube(name="cage_cube")[0]
+        cmds.setAttr(f"{cube}Shape.displaySmoothMesh", 2)
+        out = FbxUtils.export(
+            os.path.join(self.tempdir, "cage.fbx"),
+            objects=[cube],
+            selection_only=True,
+            options=dict(_DEFAULT_FBX_OPTIONS),
+        )
+
+        def vertices(nodes):
+            for node in nodes:
+                if node["name"] == "Vertices":
+                    return len(node["props"][0]) // 3
+                found = vertices(node["children"])
+                if found is not None:
+                    return found
+            return None
+
+        self.assertEqual(vertices(ptk.FbxFile.load(out, decode_arrays=True).roots), 8)
+
     def test_export_all_does_not_require_selection(self):
         cmds.polyCube(name="fbx_all_cube")
         cmds.select(clear=True)
