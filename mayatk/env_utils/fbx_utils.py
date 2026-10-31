@@ -2592,8 +2592,13 @@ class FbxUtils(ptk.HelpMixin):
         """Publish the opted-in records (the session stagers stage first,
         inside :meth:`publish`), then realize the declared takes.  Always
         publishes, even with no producer opted in: the commit restamps the
-        handoff block, so an FBX written by File > Export or the Game Exporter
-        describes exactly the channels it carries.  Stands down while a
+        handoff block, so an FBX written by File > Export (any ``cmds.file``
+        write) describes exactly the channels it carries.  The FBX plug-in's
+        own ``FBXExport`` command -- the Game Exporter's write -- fires no
+        scene event, so it never reaches this hook (measured 2026-10-31).
+        An Export Selection is
+        scoped to what it writes (:meth:`_raw_export_scope`), so the file
+        ships the records of the selection alone.  Stands down while a
         bracket is open -- the bracket already did all of it.
 
         A write that splits takes also stages the curve-proxy transport, as
@@ -2605,13 +2610,27 @@ class FbxUtils(ptk.HelpMixin):
         if FbxUtils._export_depth:
             return
         FbxUtils._bracket_state()["hook_snapshot"] = FbxUtils.publish(
-            only=sorted(FbxUtils._session_producers)
+            FbxUtils.export_context(scope=FbxUtils._raw_export_scope()),
+            only=sorted(FbxUtils._session_producers),
         )
         FbxUtils._warn_ascii_carrier()
         if FbxUtils.apply_takes_from_node():
             FbxUtils._bracket_state()["hook_stagers"] = FbxUtils.stage(
                 ("render_effects",)
             )
+
+    @staticmethod
+    def _raw_export_scope() -> Optional[Tuple[str, ...]]:
+        """The roots the write this hook fires for ships: the selection of an
+        Export Selection, ``None`` (the whole scene) for any other write.
+
+        ``MFileIO.exportType`` says which (1 for ``file -exportSelected``, 0
+        for ``-exportAll``; measured 2026-10-31); API 2.0 has no binding."""
+        import maya.OpenMaya as om1
+
+        if om1.MFileIO.exportType() != om1.MFileIO.kExportTypeSelected:
+            return None
+        return tuple(cmds.ls(selection=True, long=True) or ())
 
     @staticmethod
     def _warn_ascii_carrier() -> None:
