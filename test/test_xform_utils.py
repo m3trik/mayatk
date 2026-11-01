@@ -3113,6 +3113,10 @@ class TestTransformPanelOps(MayaTkTestCase):
         self.assertEqual(XformUtils.move_to_target([self._cube("mt_g")]), [])
 
     def test_match_scale_from_the_ordered_selection(self):
+        # A session preference: left on, every later module ran with ordered
+        # selection tracked (test_components' transfer read another first).
+        tracked = cmds.selectPref(query=True, trackSelectionOrder=True)
+        self.addCleanup(cmds.selectPref, trackSelectionOrder=tracked)
         cmds.selectPref(trackSelectionOrder=True)
         a, b = self._cube("ms_a"), self._cube("ms_b", 4)
         cmds.scale(2, 3, 4, b)
