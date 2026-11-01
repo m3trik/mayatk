@@ -232,6 +232,9 @@ DEFAULT_INCLUDE = {
     "ui_utils.hotkey_collisions": "HotkeyCollisions",
     "ui_utils.maya_native_menus": "MayaNativeMenus",
     "ui_utils.maya_ui_handler": "MayaUiHandler",
+    # What a uitk marking menu needs from Maya (uitk.MarkingMenuHost); tentacle's
+    # launcher builds its menu with it. Mirror of btk.BlenderMarkingMenuHost.
+    "ui_utils.maya_marking_menu_host": "MayaMarkingMenuHost",
     "ui_utils.node_icons": "NodeIcons",
     "ui_utils.style_setter._style_setter": "StyleSetter",
     # Transform utils
