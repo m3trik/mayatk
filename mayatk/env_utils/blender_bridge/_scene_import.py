@@ -2955,7 +2955,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         group nothing changed in keeps its shading untouched.
 
         Shading is re-asserted for every member of a group that DID change, from
-        assignments captured before the first re-parent. An instanced shape is shaded
+        assignments captured before the first re-parent -- per face, so a member
+        split across materials keeps the split. An instanced shape is shaded
         per instance PATH and adding an instance renumbers those entries, so the
         members that arrived correctly shaded are the ones at risk: on the production
         module, 105 rebuilt instances stranded 321 paths, and Maya's own exporter
@@ -3033,14 +3034,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 + ", ".join(problems)
             )
 
-        def shading_groups(transform: str) -> List[str]:
-            shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
-            sgs: List[str] = []
-            for shape in shapes:
-                for sg in cmds.listConnections(shape, type="shadingEngine") or []:
-                    if sg not in sgs:
-                        sgs.append(sg)
-            return sgs
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        def as_sets(shading: dict) -> dict:
+            """A shading snapshot comparable regardless of face order."""
+            return {sg: faces and set(faces) for sg, faces in shading.items()}
 
         def instance_paths(transform: str) -> int:
             """How many transforms already share *transform*'s shape (-1: none)."""
@@ -3077,15 +3075,15 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             # shape is shaded PER INSTANCE PATH (``instObjGroups[i]``), and adding an
             # instance renumbers those entries -- so this has to be captured up front
             # and re-asserted below, or members that arrived correctly shaded lose it.
-            wanted_sg = {}
-            for transform in members:
-                sgs = shading_groups(transform)
-                if sgs:
-                    wanted_sg[transform] = sgs[0]
+            # The WHOLE assignment, per face: a linked duplicate split Wood + Metal by
+            # faces kept only its first group and came back one material (measured).
+            # A transform reads and writes its own instance path, and the members
+            # share one topology, so the face indices carry across the re-parent.
+            wanted = {t: MatUtils.get_shading_assignments(t) for t in members}
             # What a member that arrived with NO shading takes: any member's, not the
             # master's, because the master is chosen for its geometry and may itself
             # be one the importer left unshaded.
-            group_sg = next((wanted_sg[t] for t in members if t in wanted_sg), None)
+            group_shading = next((wanted[t] for t in members if wanted[t]), None)
             changed = False
             for transform in rest:
                 try:
@@ -3118,13 +3116,30 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             # the ones the importer de-shared) takes the GROUP's; the texture
             # manifest replay that follows still overrides by material -> objects.
             for transform in members:
-                sg = wanted_sg.get(transform) or group_sg
-                if not sg or not cmds.objExists(sg):
+                shading = wanted[transform] or group_shading
+                if not shading:
                     continue
-                try:
-                    cmds.sets(transform, edit=True, forceElement=sg)
-                except Exception as error:  # noqa: BLE001 -- collect, then fail loud
-                    failures.append(f"{transform}: shading re-assign: {error}")
+                # A path that already reads EXACTLY as wanted (usually the master)
+                # is left alone: re-assigning a dense split is Maya's costliest
+                # step here. Exact, so an overlapping whole + per-face state is
+                # never taken for correct.
+                if as_sets(MatUtils.get_shading_assignments(transform)) == as_sets(
+                    shading
+                ):
+                    continue
+                MatUtils.apply_shading_assignments(transform, shading)
+                # The primitive is best-effort, so read the path back: a split is
+                # judged by its faces (a whole-object group beside one is only the
+                # base coat), a single material by its group.
+                got = MatUtils.get_shading_assignments(transform)
+                split = {sg: faces for sg, faces in shading.items() if faces}
+                lost = (
+                    [sg for sg, f in split.items() if not set(f) <= set(got.get(sg) or ())]
+                    if split
+                    else [sg for sg in shading if sg not in got]
+                )
+                if lost:
+                    failures.append(f"{transform}: shading re-assign lost {lost}")
         if failures:
             raise RuntimeError("Instance rebuild failed for: " + "; ".join(failures))
         if rebuilt or shared_already:

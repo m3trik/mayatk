@@ -68,6 +68,27 @@ class TestMatUtils(MayaTkTestCase):
         self.assertEqual(data.get(self.sg2), [1])
         self.assertCountEqual(data.get(self.sg1), [0, 2, 3, 4, 5])
 
+    def test_get_shading_assignments_reads_only_its_own_path(self):
+        """The snapshot is this object's own membership: a mesh sharing the groups
+        never leaks in, and each instance path of a shared shape reads its own (the
+        Blender bridge's instance replay snapshots per path). The members are
+        filtered BEFORE the flatten: flattening a group's scene-wide membership
+        cost 0.68 s a snapshot beside 500 split meshes (measured)."""
+        shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+        other = cmds.group(empty=True, name="test_cube_instance")
+        cmds.parent(shape, other, add=True, shape=True)
+        cmds.sets(f"{self.cube}.f[0:2]", edit=True, forceElement=self.sg1)
+        cmds.sets(f"{self.cube}.f[3:5]", edit=True, forceElement=self.sg2)
+        cmds.sets(other, edit=True, forceElement=self.sg1)
+        cmds.sets(f"{self.sphere}.f[0:9]", edit=True, forceElement=self.sg2)
+
+        got = MatUtils.get_shading_assignments(self.cube)
+        self.assertEqual(
+            {sg: faces and sorted(faces) for sg, faces in got.items()},
+            {self.sg1: [0, 1, 2], self.sg2: [3, 4, 5]},
+        )
+        self.assertEqual(MatUtils.get_shading_assignments(other), {self.sg1: None})
+
     def test_get_apply_round_trip(self):
         """Per-face assignments survive a get -> apply onto an identical mesh."""
         cmds.sets(self.cube, edit=True, forceElement=self.sg1)

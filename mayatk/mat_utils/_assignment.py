@@ -286,15 +286,27 @@ class _AssignmentInternal:
         owners = set(cmds.ls(shape, long=True) or [])
         owners.update(cmds.listRelatives(shape, parent=True, fullPath=True) or [])
 
+        def may_own(member: str) -> bool:
+            # A set spells its members shortest-unique: a `|`-bounded tail of
+            # the long path, so this cheap test keeps every member that can be ours.
+            base = member.split(".f[")[0]
+            return any(o == base or o.endswith("|" + base) for o in owners)
+
         result: Dict[str, Optional[List[int]]] = {}
         for sg in set(cmds.listConnections(shape, type="shadingEngine") or []):
             whole = False
             faces: List[int] = []
-            for m in (
-                cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []
-            ):
-                if m.split(".f[")[0] not in owners:
-                    continue  # a different object that shares this shading group
+            # This object's members FIRST, then flatten only those: a shading
+            # group's members span the scene (a different object that shares it),
+            # and flattening them all made one snapshot cost every face the group
+            # holds (measured: 0.68 s a call beside 500 split meshes).
+            near = [m for m in cmds.sets(sg, q=True) or [] if may_own(m)]
+            own = [
+                m
+                for m in ((cmds.ls(near, long=True) or []) if near else [])
+                if m.split(".f[")[0] in owners
+            ]
+            for m in (cmds.ls(own, long=True, flatten=True) or []) if own else []:
                 if ".f[" in m:
                     faces.append(int(m.split(".f[", 1)[1].rstrip("]")))
                 else:
