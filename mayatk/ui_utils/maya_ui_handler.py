@@ -33,7 +33,7 @@ class MayaUiHandler(UiHandler):
         ``switchboard`` is optional. When omitted, a fresh ``Switchboard``
         is constructed so the handler can be stood up by a shelf script
         without any prior setup. Production callers (e.g. tentacle's
-        ``tcl_maya``) still pass an explicit instance to share state
+        launcher) still pass an explicit instance to share state
         with the rest of the application.
         """
         if switchboard is None:
@@ -157,7 +157,7 @@ class MayaUiHandler(UiHandler):
         Overrides :meth:`UiHandler.instance` so a shelf-style call works
         regardless of prior setup state:
 
-        - **Pre-existing handler** (e.g. tentacle's ``tcl_maya`` already
+        - **Pre-existing handler** (e.g. tentacle's launcher already
           ran ``MayaUiHandler.instance(switchboard=tentacle_sb)``): the
           existing instance is returned, even when this call is made
           without a switchboard argument. The base implementation keys

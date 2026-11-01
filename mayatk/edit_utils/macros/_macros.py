@@ -179,7 +179,7 @@ class MacroManager(ptk.HelpMixin):
     # ------------------------------------------------------------------
     # The methods below are the single source of truth for discovering,
     # querying, applying, clearing, and persisting macro bindings. Both the
-    # ``MacroManager`` UI panel and the tentacle launch path (``TclMaya``
+    # ``MacroManager`` UI panel and the tentacle launch path (``Tcl.build``
     # applies the active preset on construction, via ``apply_saved_macros``)
     # are thin consumers; nothing here imports Qt or the switchboard. A
     # *binding* is a ``{"key": <maya-token>, "cat": <category>}`` dict; a
