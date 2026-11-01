@@ -476,22 +476,6 @@ class LightmapBaker(ptk.LoggingMixin):
     #: GPU only -- a CPU bake ignores :attr:`adaptive`. Cycles adapts on every
     #: one (blendertk's).
     ADAPTIVE_DEVICES: Tuple[str, ...] = ("AUTO", "GPU")
-    #: Retired built-in tier names -> the current one, warning until they go.
-    #: ``"quest"`` (until 2026-09-23) named one headset for a tier that serves
-    #: every mobile / standalone-VR target; a script or the panel's preset
-    #: pointer may still say it. :meth:`from_preset` resolves only a name the
-    #: store lacks, so a user preset saved under a retired name still wins.
-    #: Re-dated from 0.21.0 on 2026-10-24: a saved preset pointer is saved
-    #: data, which gets the longest window (CODE_STANDARD section 0).
-    _resolve_retired_preset = staticmethod(
-        ptk.Deprecation.values(
-            {"quest": "mobile"},
-            what="LightmapBaker preset",
-            remove_in="0.30.0",
-            since="2026-09-23",
-            reason="The tier was renamed; its settings are unchanged.",
-        )
-    )
 
     @staticmethod
     def preset_store() -> "ptk.PresetStore":
@@ -503,17 +487,6 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         builtin = os.path.join(os.path.dirname(__file__), "presets")
         return ptk.PresetStore("lightmap", package="mayatk", builtin_dir=builtin)
-
-    @classmethod
-    def preset_name(cls, name: str) -> str:
-        """*name* as the preset store knows it now: itself when the store has
-        it -- a user preset saved under a retired tier name still wins -- else
-        the tier a retired name became (with a notice), else unchanged. What
-        :meth:`from_preset` loads, and the panel's Preset pointer follows.
-        Mirror of blendertk's."""
-        if cls.preset_store().exists(name):
-            return name
-        return cls._resolve_retired_preset(name)
 
     @classmethod
     def from_preset(cls, name: str, **overrides) -> "LightmapBaker":
@@ -529,11 +502,11 @@ class LightmapBaker(ptk.LoggingMixin):
 
         Built-ins (resolution / samples; the JSON in ``presets/`` is the
         source): ``preview`` (256/2), ``mobile`` (1024/4, the default tier),
-        ``desktop`` (2048/4) and ``hero`` (4096/6). A retired tier name
-        (``quest``) still resolves, with a notice.
+        ``desktop`` (2048/4) and ``hero`` (4096/6). A name the store lacks
+        raises -- the retired ``quest`` (``mobile`` since 2026-09-23) too,
+        since 0.30.0.
         """
         store = cls.preset_store()
-        name = cls.preset_name(name)
         if not store.exists(name):
             raise ValueError(
                 f"Unknown lightmap preset {name!r}. Available: {store.list()}"

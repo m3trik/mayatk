@@ -308,32 +308,28 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertNotIn("version", self.exporter.task_manager.task_definitions)
         self.assertIn("n", SceneExporter.NAME_TOKENS)
 
-    def test_retired_version_and_timestamp_inputs_resolve_for_one_release(self):
-        """A headless caller's Version pattern still lands the same file -- its
-        {stem} IS the filename pattern -- and the log names the replacement."""
+    def test_the_removed_version_input_is_refused_before_the_export(self):
+        """A headless caller's ``tasks["version"]`` folded into the name with a
+        notice until pythontk 0.19.0. Now ``perform_export`` refuses the run
+        (``ExportRun.from_tasks``' error note): the log names the key and the
+        counter that replaces it, and no path resolves -- never an unversioned
+        write under a name the caller did not ask for."""
         _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
 
-        # perform_export's tasks["version"] -- stamped before the early abort,
-        # folded once at the entry point (retired 2026-09-23, it warns), and
-        # the log names the pattern that says the same thing.
-        with (
-            self.assertWarns(DeprecationWarning) as retired,
-            self.assertLogs(self.exporter.logger, level="WARNING") as caught,
-        ):
-            self.exporter.perform_export(
+        with self.assertLogs(self.exporter.logger, level="ERROR") as caught:
+            result = self.exporter.perform_export(
                 export_dir=self.temp_dir,
                 objects=[],
                 tasks={"version": "{stem}_v{n:03d}"},
             )
-        self.assertIn("tasks['version']", str(retired.warning))
+        self.assertIs(result, False)
+        messages = [r.getMessage() for r in caught.records]
         self.assertTrue(
-            any("{scene}_v{n:03d}" in r.getMessage() for r in caught.records),
-            [r.getMessage() for r in caught.records],
+            any("tasks['version']" in m and "*_v{n:03d}" in m for m in messages),
+            messages,
         )
-        self.assertEqual(
-            os.path.basename(self.exporter.export_path), "test_scene_v001.fbx"
-        )
-        self.assertTrue(self.exporter.task_manager.run.versioned)
+        self.assertFalse(getattr(self.exporter, "export_path", None))
+        self.assertEqual(os.listdir(self.temp_dir), [])
 
     def test_characters_illegal_in_a_filename_are_dropped(self):
         """A '?' the user typed cannot reach the write — nothing else emits one."""

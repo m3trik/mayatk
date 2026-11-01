@@ -446,10 +446,6 @@ The JSON files in
 [`presets/`](../mayatk/light_utils/lightmap_baker/presets) are the source of
 these numbers.
 
-**mobile** was named **quest**. `from_preset("quest")` still builds it, with
-a deprecation notice, until mayatk 0.30.0, and the panel moves a selection
-saved as **quest** onto **mobile**.
-
 ## Exclude set
 
 The Exclude set is a plain `objectSet` named `lightmapBaker_exclude`

@@ -6823,24 +6823,23 @@ class TestOptimizeLevelResolution(MayaTkTestCase):
             mtk.AnimUtils.resolve_optimize_level("extremes"),
         )
 
-    def test_retired_unbake_level_warns_and_resolves(self):
+    def test_the_removed_unbake_level_is_refused(self):
         """``"unbake"`` was the level's name until 2026-09-02 -- it read as
-        reversing a bake, which is SmartBake.restore, when it only thins one.
-        A saved template or preset may still say it, so it resolves to
-        ``"extremes"`` -- through ``ptk.Deprecation.values`` since 2026-09-21,
-        which warns and names the release it stops working in (it resolved
-        silently before). The method's old name, ``unbake_keys``, had no
-        caller and is gone."""
-        with self.assertWarns(DeprecationWarning) as caught:
-            level = mtk.AnimUtils.normalize_optimize_level("  Unbake ")
-        self.assertEqual(level, "extremes")
-        message = str(caught.warning)
-        self.assertIn("'unbake'", message)
-        self.assertIn("mayatk 0.30.0", message)
-        self.assertIn("'extremes'", message)
-        with self.assertWarns(DeprecationWarning):
-            kwargs = mtk.AnimUtils.resolve_optimize_level("unbake")
-        self.assertEqual(kwargs, mtk.AnimUtils.resolve_optimize_level("extremes"))
+        reversing a bake, which is SmartBake.restore, when it only thins one --
+        and resolved to ``"extremes"`` with a notice until 0.30.0. Now it is an
+        unknown level: refused by name like any other, with the live levels
+        listed, never standing in for ``"extremes"``. The method's old name,
+        ``unbake_keys``, had no caller and is gone too."""
+        for call in (
+            mtk.AnimUtils.normalize_optimize_level,
+            mtk.AnimUtils.resolve_optimize_level,
+        ):
+            with self.subTest(call=call.__name__):
+                with self.assertRaises(ValueError) as caught:
+                    call("  Unbake ")
+                message = str(caught.exception)
+                self.assertIn("Unknown optimize level '  Unbake '", message)
+                self.assertIn("extremes", message)
         self.assertNotIn("unbake", mtk.AnimUtils.OPTIMIZE_LEVELS)
         self.assertFalse(hasattr(mtk.AnimUtils, "unbake_keys"))
 

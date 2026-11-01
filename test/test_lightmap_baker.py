@@ -18,7 +18,6 @@ import json
 import shutil
 import tempfile
 import unittest
-import warnings
 from unittest import mock
 
 import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
@@ -3894,26 +3893,17 @@ class TestLightmapPresets(unittest.TestCase):
         with self.assertRaises(ValueError):
             LightmapBaker.from_preset("does_not_exist")
 
-    def test_the_renamed_quest_tier_still_builds_mobile_with_a_notice(self):
-        """``quest`` was renamed ``mobile``: a script that names the old tier
-        keeps baking at the same dials, and is told the new name."""
-        with self.assertWarns(DeprecationWarning) as caught:
-            baker = LightmapBaker.from_preset("quest", resolution=1536)
-        self.assertIn("mobile", str(caught.warning))
-        mobile = LightmapBaker.from_preset("mobile")
-        self.assertEqual(baker.resolution, 1536)  # an override still wins
-        self.assertEqual(
-            (baker.samples, baker.gi_depth, baker.gi_samples),
-            (mobile.samples, mobile.gi_depth, mobile.gi_samples),
-        )
-
-    def test_a_user_preset_named_like_a_renamed_tier_shadows_the_alias(self):
-        """The alias only stands in for a name the store no longer has."""
-        self._store_with("quest", {"resolution": 512, "samples": 3})
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", DeprecationWarning)
-            baker = LightmapBaker.from_preset("quest")
-        self.assertEqual((baker.resolution, baker.samples), (512, 3))
+    def test_the_removed_quest_tier_is_refused(self):
+        """``quest`` was renamed ``mobile`` on 2026-09-23 and built it with a
+        notice until 0.30.0. Now it is a name the store lacks: refused like any
+        unknown preset, naming the tiers that exist, never baking as
+        ``mobile`` in its place."""
+        with self.assertRaises(ValueError) as caught:
+            LightmapBaker.from_preset("quest", resolution=1536)
+        message = str(caught.exception)
+        self.assertIn("Unknown lightmap preset 'quest'", message)
+        self.assertIn("mobile", message)
+        self.assertFalse(hasattr(LightmapBaker, "preset_name"))
 
     def _store_with(self, name, data):
         """Point the preset store at a scratch user tier holding *data* as *name*.
@@ -6415,13 +6405,6 @@ class TestPanelApi(MayaTkTestCase):
         self.assertEqual(sorted(cmds.ls(selection=True, long=True)), sorted([a, hidden]))
         self.assertEqual(LightmapBaker.select([]), [])
         self.assertEqual(cmds.ls(selection=True), [])
-
-    def test_the_preset_pointer_follows_a_renamed_tier(self):
-        self.assertEqual(LightmapBaker.preset_name("mobile"), "mobile")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            self.assertEqual(LightmapBaker.preset_name("quest"), "mobile")
-            self.assertEqual(LightmapBaker.from_preset("quest").resolution, 1024)
 
     def test_the_samples_range_holds_every_shipped_tier(self):
         store = LightmapBaker.preset_store()

@@ -268,6 +268,11 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
+    # The lightmap tier alias and the Get Scene Info section key, their
+    # deprecation windows closed (2026-11-01): a tier name is looked up as
+    # given, and the removed key's table is the Materials section.
+    "LightmapBaker.preset_name": ("mayatk.LightmapBaker.from_preset", "0.30.0"),
+    "SceneInfoSection.CATEGORIES": ("mayatk.SceneInfoSection.MATERIALS", "0.30.0"),
     # Removed with no caller left (2026-11-01): Maya's own MQtUtil.findControl
     # (with shiboken6.wrapInstance) embeds a native control.
     "wrap_control": ("maya.OpenMayaUI.MQtUtil.findControl", "0.30.0"),

@@ -14,8 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Set, Any, Tuple
 
-import pythontk as ptk
-
 
 @dataclass
 class AuditProfile:
@@ -533,10 +531,6 @@ class SceneInfoSection:
     TEXTURES = "textures"
     PIPELINE = "pipeline"
     ASSUMPTIONS = "assumptions"
-    #: RETIRED (until 2026-09-24) -- the section was a five-row "materials
-    #: correlated with high-slot meshes" table; :attr:`MATERIALS` replaced it.
-    #: :meth:`normalize` still resolves it, warning until 0.30.0.
-    CATEGORIES = "categories"
 
     ALL: Tuple[str, ...] = (
         OVERVIEW,
@@ -596,18 +590,6 @@ class SceneInfoSection:
         PIPELINE,
     }
 
-    #: Re-dated from 0.21.0 on 2026-10-24: a saved section list is saved data,
-    #: which gets the longest window (CODE_STANDARD section 0).
-    _resolve_retired = staticmethod(
-        ptk.Deprecation.values(
-            {"categories": "materials"},
-            what="SceneInfoSection key",
-            remove_in="0.30.0",
-            since="2026-09-24",
-            reason="The Materials section lists every material with its cost.",
-        )
-    )
-
     @classmethod
     def normalize(cls, sections: Optional[List[str]]) -> List[str]:
         """Coerce a caller-supplied sections argument to a stable,
@@ -616,8 +598,9 @@ class SceneInfoSection:
         ``None`` expands to all sections in :attr:`ALL` order. Unknown
         keys are dropped silently — that matches "best effort"
         semantics and means a downstream UI can pass through whatever
-        the user picked without pre-filtering. A retired key resolves to
-        its replacement (with a deprecation warning).
+        the user picked without pre-filtering. A removed key is unknown
+        too: ``"categories"`` (whose table :attr:`MATERIALS` replaced)
+        stopped resolving in 0.30.0.
 
         Caller order is preserved so an option-box exposing section
         reordering would Just Work without touching this code.
@@ -628,7 +611,6 @@ class SceneInfoSection:
         seen: Set[str] = set()
         out: List[str] = []
         for key in sections:
-            key = cls._resolve_retired(key)
             if key in valid and key not in seen:
                 out.append(key)
                 seen.add(key)
