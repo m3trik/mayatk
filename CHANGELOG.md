@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-11-01 -- `MayaMarkingMenuHost.report(message, error=False)`: a launcher tells the user through Maya (`ui_utils/maya_marking_menu_host.py`).** An in-view message over the viewport (none in batch) and a `# Result:` / `# Error:` line in the script editor; tentacle's one `Tcl.reload` reports through it instead of a Maya-only `_report_maya`. `start(app=)` and `teardown()` keep the plain-Qt answers (`uitk.MarkingMenuLaunchHost`): Maya's Qt is up, and nothing outside the menu needs releasing before a reload. `is_batch` notes that it asks what `Tcl.HEADLESS["maya"]` asks before mayatk is imported.
+  - Test(s): `test_maya_marking_menu_host.py` (a report reaches the viewport and the script editor; without a viewport, the script editor still; no teardown, no Qt start) (red first).
 - **2026-10-31 - `FbxUtils.embed_dependencies` lists the `materials` record's maps among the files it embeds (`env_utils/fbx_utils.py`, docstring).** pythontk's dependency pass now embeds every map the record names, including an openPBRSurface's, which no FBX slot carries.
   - Test(s): docstring only; the 17 modules `affected_tests.py` selects: 2155 tests, 0 failures, 2 skipped.
 - **2026-10-31 -- Docs: the `ui_utils` row names `MayaMarkingMenuHost`, the `uitk.MarkingMenuHost` adapter (`docs/README.md`).**

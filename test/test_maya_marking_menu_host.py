@@ -63,6 +63,39 @@ class TestMayaMarkingMenuHost(unittest.TestCase):
         queued[0]()
         self.assertEqual(built, [True])
 
+    def test_a_report_reaches_mayas_viewport_and_its_script_editor(self):
+        """A rebuild has retired the menu, so the launcher's report goes through Maya:
+        an in-view message and a ``# Result:`` line."""
+        import io
+        from contextlib import redirect_stdout
+
+        from mayatk.ui_utils import maya_marking_menu_host as module
+
+        cmds = mock.Mock()
+        with mock.patch.object(module, "cmds", cmds), redirect_stdout(io.StringIO()) as out:
+            self.host.report("Tentacle reloaded (3 modules).")
+        cmds.inViewMessage.assert_called_once()
+        self.assertEqual(
+            cmds.inViewMessage.call_args.kwargs.get("amg"), "Tentacle reloaded (3 modules)."
+        )
+        self.assertIn("# Result: Tentacle reloaded (3 modules). #", out.getvalue())
+
+    def test_a_report_without_a_viewport_still_reaches_the_script_editor(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from mayatk.ui_utils import maya_marking_menu_host as module
+
+        cmds = mock.Mock()
+        cmds.inViewMessage.side_effect = RuntimeError("batch")
+        with mock.patch.object(module, "cmds", cmds), redirect_stdout(io.StringIO()) as out:
+            self.host.report("Tentacle reload FAILED", error=True)
+        self.assertIn("Tentacle reload FAILED", out.getvalue())
+
+    def test_maya_holds_nothing_to_tear_down_and_needs_no_qt_start(self):
+        self.host.teardown()
+        self.host.start(app="tentacle")
+
     def test_attach_puts_the_collision_checker_on_the_shortcut_editors(self):
         from mayatk.ui_utils.hotkey_collisions import HotkeyCollisions
 

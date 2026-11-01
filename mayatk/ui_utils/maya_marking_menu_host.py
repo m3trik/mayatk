@@ -2,9 +2,11 @@
 # coding=utf-8
 """What a uitk marking menu needs from Maya: :class:`MayaMarkingMenuHost`.
 
-Maya is a Qt application, so most of ``uitk.MarkingMenuHost`` keeps the plain-Qt answers
-(``uitk.PureMarkingMenuHost``): its viewport keystrokes reach the menu's application shortcut,
-Qt sees its mouse, and its windows stack as Qt windows. What Maya answers differently:
+Maya is a Qt application, so most of ``uitk.MarkingMenuHost`` and
+``uitk.MarkingMenuLaunchHost`` keep the plain-Qt answers (``uitk.PureMarkingMenuHost``): Qt
+is already up (``start``), its viewport keystrokes reach the menu's application shortcut, Qt
+sees its mouse, its windows stack as Qt windows, and nothing outside the menu needs releasing
+before a reload (``teardown``). What Maya answers differently:
 
 * **main_window** -- Maya's main window, the parent every tool window shows over;
 * **shortcut_window_name** -- ``"MayaWindow"``, the always-up owner of application shortcuts;
@@ -14,8 +16,11 @@ Qt sees its mouse, and its windows stack as Qt windows. What Maya answers differ
   menu there and faulted Maya);
 * **defer** -- ``maya.utils.executeDeferred`` (``userSetup.py`` runs before the UI exists),
   and a quiet no-op in batch / ``maya.standalone``, which has no GUI Qt to build on;
+* **report** -- an in-view message over the viewport and a line in the script editor;
 * **attach** -- the hotkey-collision checker on the shortcut editors.
 """
+
+import html
 
 try:
     import maya.cmds as cmds
@@ -26,7 +31,8 @@ from uitk import PureMarkingMenuHost
 
 
 class MayaMarkingMenuHost(PureMarkingMenuHost):
-    """Maya's answers to ``uitk.MarkingMenuHost`` (see the module docstring)."""
+    """Maya's answers to ``uitk.MarkingMenuHost`` and ``uitk.MarkingMenuLaunchHost`` (see
+    the module docstring)."""
 
     preload_only_from_host_loop = True
     shortcut_window_name = "MayaWindow"
@@ -44,6 +50,8 @@ class MayaMarkingMenuHost(PureMarkingMenuHost):
     @staticmethod
     def is_batch() -> bool:
         """True under ``maya -batch`` / ``maya.standalone`` (no GUI, no real Qt)."""
+        # The same question tentacle's launcher asks before importing mayatk at all
+        # (``Tcl.HEADLESS["maya"]``): keep the two answering alike.
         try:
             return bool(cmds.about(batch=True))
         except Exception:  # cmds unavailable/uninitialized — assume interactive
@@ -75,6 +83,16 @@ class MayaMarkingMenuHost(PureMarkingMenuHost):
             return fn()
         executeDeferred(fn)
         return None
+
+    def report(self, message: str, error: bool = False) -> None:
+        """Tell the user *message* through Maya: an in-view message over the viewport (none
+        in batch) and a ``# Result:`` / ``# Error:`` line in the script editor. A
+        ``message_box`` would render on the menu a rebuild has just retired."""
+        try:
+            cmds.inViewMessage(amg=html.escape(message), pos="topCenter", fade=True)
+        except Exception:  # no viewport (batch) -- the script editor still gets it
+            pass
+        print(f"# {'Error' if error else 'Result'}: {message} #")
 
     def main_window(self):
         """Maya's main window (a ``QMainWindow``), or None (the menu logs a failure)."""
