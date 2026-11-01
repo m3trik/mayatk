@@ -20,7 +20,6 @@ import pythontk as ptk
 import maya.cmds as cmds
 
 from base_test import MayaTkTestCase
-from mayatk.mat_utils import emissive_groups as _maya_half
 from mayatk.mat_utils.emissive_groups import EmissiveGroups
 from mayatk.node_utils.data_nodes import DataNodes
 

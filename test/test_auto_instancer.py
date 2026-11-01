@@ -2,7 +2,6 @@ import unittest
 import sys
 import os
 import random
-import math
 from collections import defaultdict
 
 # Add test directory to path to import base_test
@@ -73,7 +72,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         cmds.parent(c1, g1)
 
         # Duplicate to create Group2 -> Cube2
-        g2 = cmds.duplicate(g1, name="Group2")[0]
+        cmds.duplicate(g1, name="Group2")
 
         # Clear selection to force AutoInstancer to check all nodes
         cmds.select(clear=True)
@@ -120,7 +119,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         cmds.parent(s1, g1)
 
         # Duplicate
-        g2 = cmds.duplicate(g1, name="Root2")[0]
+        cmds.duplicate(g1, name="Root2")
 
         # Clear selection
         cmds.select(clear=True)
@@ -1093,7 +1092,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
             is_static=False,
             search_radius_mult=2.0,
         )
-        instances = instancer.run([combined])
+        instancer.run([combined])
 
         # Verification
         # We expect:
@@ -1664,7 +1663,6 @@ class TestRealWorldPhotoScenario(MayaTkTestCase):
         # 2. Combine everything into one mesh to simulate raw import
         # Flatten hierarchy first
         all_grps = [base1, base2, c1, c2, c3, c4, c5, case]
-        all_shapes = []
         for grp in all_grps:
             cmds.parent((cmds.listRelatives(str(grp), children=True) or []), world=True)
             cmds.delete(grp)

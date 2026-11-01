@@ -9,8 +9,7 @@ Tests specifically for the logging and error reporting logic in MaterialUpdater.
 import logging
 import os
 import shutil
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import maya.cmds as cmds
 import pythontk as ptk
 from base_test import MayaTkTestCase

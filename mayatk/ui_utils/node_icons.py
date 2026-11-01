@@ -90,7 +90,7 @@ class NodeIcons:
         if icon_file is None:
             return None
 
-        from qtpy.QtGui import QIcon, QPixmap
+        from qtpy.QtGui import QIcon
 
         icon = QIcon(f":/{icon_file}")
         if icon.isNull():

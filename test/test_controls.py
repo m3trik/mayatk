@@ -184,7 +184,7 @@ class TestControlsExtended(MayaTkTestCase):
 
     def test_create_with_axis(self):
         """Test creating controls with different axes."""
-        ctrl_z = mtk.Controls.diamond(name="testAxisZ", axis="z")
+        mtk.Controls.diamond(name="testAxisZ", axis="z")
 
         ctrl_x_nofreeze = mtk.Controls.diamond(name="testAxisX", axis="x", freeze=False)
         rot = cmds.xform(ctrl_x_nofreeze, q=True, ro=True)

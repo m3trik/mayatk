@@ -66,7 +66,7 @@ class TestWheelRig(MayaTkTestCase):
         a wheelRigId would generate a new name, orphaning old expressions.
         Fixed: 2025-02-23
         """
-        rig1 = WheelRig(self.control, self.wheels, rig_name="persist_rig")
+        WheelRig(self.control, self.wheels, rig_name="persist_rig")
         self.assertEqual(cmds.getAttr(f"{self.control}.wheelRigId"), "persist_rig")
 
         # Re-instantiate WITHOUT passing rig_name — should recover from attr
@@ -77,7 +77,7 @@ class TestWheelRig(MayaTkTestCase):
     def test_freeze_transforms_default(self):
         """freeze_transforms=True (default) should zero out non-zero transforms."""
         cmds.xform(self.control, translation=[1, 2, 3], worldSpace=True)
-        rig = WheelRig(self.control, self.wheels, rig_name="freeze_rig")
+        WheelRig(self.control, self.wheels, rig_name="freeze_rig")
 
         # After construction with default freeze_transforms=True the
         # translate values should be frozen (zeroed).
@@ -89,7 +89,7 @@ class TestWheelRig(MayaTkTestCase):
     def test_freeze_transforms_false(self):
         """freeze_transforms=False should preserve existing transforms."""
         cmds.xform(self.control, translation=[1, 2, 3], worldSpace=True)
-        rig = WheelRig(
+        WheelRig(
             self.control,
             self.wheels,
             rig_name="nofreeze_rig",

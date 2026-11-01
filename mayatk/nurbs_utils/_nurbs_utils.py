@@ -7,13 +7,12 @@ try:
 except ImportError:
     cmds = mel = om = None
 
-from typing import List, Tuple, Union, Optional
+from typing import List
 
 import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.core_utils.components import Components as components
 from mayatk.core_utils.mash import MashToolkit
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -336,8 +335,6 @@ class NurbsUtils(ptk.HelpMixin):
         # cmds.spaceLocator(position=p4)
         p5 = ptk.get_center_of_two_points(p4, p1)
         # cmds.spaceLocator(position=p5)
-        p6 = ptk.get_center_of_two_points(p3, p5)
-        # cmds.spaceLocator(position=p6)
 
         # add weighting to the curve points.
         p1w, p3w, p4w, p2w = [

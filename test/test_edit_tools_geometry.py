@@ -25,7 +25,7 @@ from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.core_utils.preview import Preview, OperationError
 
-from base_test import MayaTkTestCase, QuickTestCase, skipIfBatch
+from base_test import MayaTkTestCase, skipIfBatch
 
 
 class TestBevel(MayaTkTestCase):
