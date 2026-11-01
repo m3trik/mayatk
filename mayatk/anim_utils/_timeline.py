@@ -28,6 +28,11 @@ class _TimelineInternal:
         )
 
     @staticmethod
+    def _get_current_frame():
+        """Body of :meth:`AnimUtils.get_current_frame`."""
+        return float(cmds.currentTime(query=True))
+
+    @staticmethod
     def _set_current_frame(time, update, relative, snap_mode, invert_snap):
         """Body of :meth:`AnimUtils.set_current_frame`."""
         current_time = cmds.currentTime(query=True)
@@ -75,13 +80,13 @@ class _TimelineInternal:
             )
             if not curves:
                 cmds.warning("No animation curves in the scene.")
-                return False
+                return None
             result = cls.get_keyframe_times(curves, from_curves=True, as_range=True)
         else:
             result = cls.get_keyframe_times(objects, as_range=True)
         if result is None:
             cmds.warning("No keyframes found on the given objects.")
-            return False
+            return None
 
         start, end = result
         start -= padding
@@ -93,7 +98,7 @@ class _TimelineInternal:
             animationStartTime=start,
             animationEndTime=end,
         )
-        return True
+        return start, end
 
     @staticmethod
     def _get_timeline_selection():

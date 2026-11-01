@@ -537,7 +537,7 @@ class ChannelBox:
 
         Maya empties the channel box while it is not shown -- tabbed behind
         the Outliner, say -- selection included (measured, Maya 2025), so a
-        channel selection made in a panel such as mayatk's Channels cannot be
+        channel selection made in a panel such as tentacle's Channels cannot be
         put in it.  The panel registers instead, and
         :meth:`stand_in_selection` reports its selection to whatever reads
         "the selected channels" (:meth:`Attributes.get_selected_channels`).

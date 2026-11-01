@@ -101,6 +101,12 @@ class ScriptJobManager:
     None — obtain the singleton via :meth:`instance`.
     """
 
+    #: The events after which the session's workspace may have changed: what a
+    #: workspace readout refreshes on. Maya fires its own. Twin of blendertk's
+    #: ``ScriptJobManager.WORKSPACE_EVENTS`` (scene open / save there: Blender has
+    #: no workspace event).
+    WORKSPACE_EVENTS = ("workspaceChanged",)
+
     _instance: Optional["ScriptJobManager"] = None
 
     @classmethod

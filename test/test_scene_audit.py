@@ -791,15 +791,24 @@ class TestAuditReport(_AuditCase):
         (action,) = [a for a in report.fix_actions if a.kind == "unloaded_references"]
         self.assertIn("1 unloaded reference", action.message)
 
-    def test_retired_categories_key_resolves_to_materials(self):
+    def test_the_removed_categories_key_is_dropped_like_any_unknown_key(self):
+        """``"categories"`` -- a five-row table the Materials section replaced --
+        resolved to ``"materials"`` with a notice until 0.30.0. Now it is an
+        unknown key, and ``SceneInfoSection.normalize`` drops unknown keys (its
+        best-effort contract): the report is its header alone, with no
+        Materials section standing in for it."""
         cube = cmds.polyCube()[0]
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             html = SceneAnalyzer.format_audit_html(
                 objects=[cube], sections=["categories"]
             )
-        self.assertEqual(list(html), ["_header", "materials"])
-        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
+        self.assertEqual(list(html), ["_header"])
+        self.assertEqual(
+            SceneInfoSection.normalize(["categories", "materials"]), ["materials"]
+        )
+        self.assertFalse(any(issubclass(w.category, DeprecationWarning) for w in caught))
+        self.assertFalse(hasattr(SceneInfoSection, "CATEGORIES"))
 
 
 class TestSceneRepair(MayaTkTestCase):

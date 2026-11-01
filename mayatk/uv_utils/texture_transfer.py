@@ -679,9 +679,159 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
     #: the target's, a copy of the source's, or the target's own, re-used.
     ASSIGN_FROM = ("target", "source", "in_place")
 
+    #: Maya's words for what :meth:`selection_sides` reads -- the selection
+    #: ORDER -- and for a mesh's UV channels: what the Texture Combine panel's
+    #: Transfer mode says (tentacle's shared panel; blendertk's twin speaks of
+    #: the active object and UV maps). Keys: ``uv`` (a channel, title case),
+    #: ``uv_current`` (the one a mesh reads), ``uv_linked`` (the one its
+    #: textures read), ``group`` (what nests meshes), ``instances`` (meshes
+    #: sharing the source's UVs), ``first`` / ``last`` (the Source row's two
+    #: picks) with ``first_who`` / ``last_who`` (who each names) and
+    #: ``pick_first`` / ``pick_last`` (how to make each pick).
+    TERMS: Dict[str, str] = {
+        "uv": "UV Set",
+        "uv_current": "current",
+        "uv_linked": "the set the mesh's textures are uvLink-ed to",
+        "group": "group",
+        "instances": "instances",
+        "first": "First Selected Mesh",
+        "first_who": "the first-selected object",
+        "last": "All But Last Selected",
+        "last_who": "the last-selected mesh",
+        "pick_first": "Select the source first (a mesh or a group), then the "
+        "target(s).",
+        "pick_last": "Select the source mesh(es) first, then the target last.",
+    }
+
     def __init__(self, log_level="INFO"):
         super().__init__()
         self.logger.setLevel(log_level)
+
+    # ------------------------------------------------------------ the panel
+    # What the Texture Combine panel's Transfer mode asks beside the transfer:
+    # the shader types it offers and its reading of the selection.
+
+    @staticmethod
+    def shader_types() -> Dict[str, str]:
+        """``{assign_shader_type: label}``: the shader types a transfer (or a
+        combine) can rebuild its material on, in ``ShaderConverter.TARGETS``
+        order. Twin of blendertk's, which has none."""
+        return {
+            name: ShaderConverter.TARGET_LABELS.get(name, node_type)
+            for name, node_type in ShaderConverter.TARGETS.items()
+        }
+
+    @staticmethod
+    def meshes(objects) -> List[str]:
+        """Mesh transforms (long names) under *objects*: groups expand,
+        intermediates skip, order kept. Twin of blendertk's (mesh objects and
+        their children)."""
+        out: List[str] = []
+        for o in objects or ():
+            for shape in (
+                cmds.listRelatives(
+                    o, allDescendents=True, type="mesh", fullPath=True, ni=True
+                )
+                or []
+            ):
+                xf = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+                if xf not in out:
+                    out.append(xf)
+        return out
+
+    @classmethod
+    def capture_sources(cls) -> List[str]:
+        """The selected meshes (groups expanded) as what a caller stores to
+        transfer FROM later -- :meth:`selection_sides`'s *stored*: long names.
+        Twin of blendertk's (object names)."""
+        return cls.meshes(cmds.ls(selection=True, long=True, type="transform") or [])
+
+    @staticmethod
+    def live_sources(names) -> List[str]:
+        """Those of the stored *names* still in the scene, order kept. Twin of
+        blendertk's (which returns the objects)."""
+        return [n for n in names or () if cmds.objExists(n)]
+
+    @classmethod
+    def auto_source(cls, meshes, stored=()) -> Tuple[str, Optional[str]]:
+        """Source: Auto's reading of a selection's *meshes*: ``(mode, target)``.
+
+        ``"last"`` with the mesh combined from all the others (three or more:
+        :meth:`find_combined`) as the target; ``"stored"`` when the live
+        *stored* source meshes, none of them selected, pair with the selection
+        at matching topology; ``"uvset"`` for one mesh (its textures move
+        between its own UV sets); else ``"first"``. *target* is ``None``
+        unless the mode is ``"last"``. Twin of blendertk's.
+        """
+        if len(meshes) >= 3:
+            try:
+                found = cls.find_combined(meshes)
+            except ValueError:
+                found = None
+            if found:
+                return "last", found[0]
+        if stored and meshes and not set(stored) & set(meshes):
+            try:
+                pairs = cls.pair_sources(list(meshes), list(stored))
+                if all(cls.topology_matches(t, s)[0] for t, s in pairs.items()):
+                    return "stored", None
+            except ValueError:
+                pass
+        if len(meshes) == 1:
+            return "uvset", None
+        return "first", None
+
+    @classmethod
+    def selection_sides(
+        cls, mode: str = "auto", stored=()
+    ) -> Tuple[str, Optional[List[str]], List[str]]:
+        """Read the selection into a transfer's sides: ``(mode, source, targets)``.
+
+        Maya's convention is the selection ORDER (``orderedSelection``); each
+        side is mesh transforms (:meth:`meshes`: a group gives its meshes):
+
+        * ``"first"`` -- the first-selected object is the source, every other
+          selected mesh a target;
+        * ``"last"`` -- the last-selected mesh is the target of every other;
+        * ``"stored"`` -- the live *stored* meshes are the source, the
+          selected meshes not among them the targets;
+        * ``"uvset"`` (any other) -- no source: each selected mesh moves its
+          textures between its own UV sets;
+        * ``"auto"`` -- resolved first (:meth:`auto_source`); a combined target
+          it finds stands in for the last-selected mesh.
+
+        Twin of blendertk's, which reads the ACTIVE object instead.
+
+        Parameters:
+            mode: The Source row's pick.
+            stored: Stored source names (:meth:`capture_sources`); the ones
+                gone from the scene are skipped (:meth:`live_sources`).
+
+        Returns:
+            ``(mode, source, targets)``: the mode resolved; *source* is
+            ``None`` for ``"uvset"``.
+        """
+        ordered = cmds.ls(orderedSelection=True, long=True, type="transform") or []
+        if not ordered:
+            ordered = cmds.ls(selection=True, long=True, type="transform") or []
+        stored = cls.live_sources(stored)
+        if mode == "auto":
+            meshes = cls.meshes(ordered)
+            mode, target = cls.auto_source(meshes, stored)
+            if target is not None:
+                ordered = [m for m in meshes if m != target] + [target]
+        if mode == "first":
+            source = cls.meshes(ordered[:1])
+            targets = [m for m in cls.meshes(ordered[1:]) if m not in source]
+        elif mode == "last":
+            targets = cls.meshes(ordered[-1:])
+            source = [m for m in cls.meshes(ordered[:-1]) if m not in targets]
+        elif mode == "stored":
+            source = stored
+            targets = [m for m in cls.meshes(ordered) if m not in source]
+        else:
+            source, targets = None, cls.meshes(ordered)
+        return mode, source, targets
 
     # -------------------------------------------------------------- main
     def transfer(

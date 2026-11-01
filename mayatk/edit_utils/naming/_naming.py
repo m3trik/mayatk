@@ -7,14 +7,12 @@ except ImportError:
 
 from typing import List, Union, Optional, Dict, Tuple
 import re
-import string
 
 import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.xform_utils._xform_utils import XformUtils
 
 
 class Naming(ptk.HelpMixin, ptk.LoggingMixin):
@@ -55,6 +53,36 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         ("shading_group_suffix", "shadingEngine", "shadingEngine"),
         ("texture_suffix", "texture", "texture"),
         ("set_suffix", "objectSet", "objectSet"),
+    )
+
+    #: The convention entries this host has no type for, ``{convention key:
+    #: why}``: :meth:`suffix_by_type` never applies them, and the Naming panel
+    #: greys their rows. Every entry names a Maya node type, so none here
+    #: (blendertk's lists its gaps).
+    UNSUPPORTED_TYPES: Dict[str, str] = {}
+
+    #: The DG node families of :attr:`SUFFIX_BINDINGS`, ``{type key: cmds.ls
+    #: filter}``: with the DAG transforms, what the Scene scope holds (a type
+    #: key with no row here names a transform, a joint or a constraint). Never
+    #: a script node, a renderer singleton or construction history.
+    _DG_FAMILIES: Dict[str, Dict[str, object]] = {
+        "displayLayer": {"type": "displayLayer"},
+        "cluster": {"type": "cluster"},
+        "lattice": {"type": "ffd"},
+        "skinCluster": {"type": "skinCluster"},
+        "blendShape": {"type": "blendShape"},
+        "material": {"materials": True},
+        "shadingEngine": {"type": "shadingEngine"},
+        "texture": {"textures": True},
+        "objectSet": {"type": "objectSet"},
+    }
+
+    #: What a rename pattern holding ``#`` is told: Maya's own ``rename``
+    #: counts with a trailing ``#``, this tool does not (a taken name is
+    #: numbered as Maya numbers it).
+    HASH_NOTE = (
+        "'#' is not a counter here: it is replaced by '_'. A name already taken "
+        "is numbered the way Maya numbers it (box, box1, box2)."
     )
 
     @ptk.ClassProperty
@@ -172,6 +200,8 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             rename(['pCube1'], r'*\\1_GEO', r'Cube(\\d+)', regex=True) # Backref: 'pCube1' becomes 'p1_GEO'.
         """
         objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True, long=True)
+        if "#" in to:
+            cls.logger.warning(cls.HASH_NOTE)
 
         # Map each short name to a LIST of (original_long_path, uuid) pairs.
         # The short-name key must match ``find_str_and_format``'s oldName output
@@ -250,21 +280,113 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         return [renamed.get(key, obj) for key, obj in zip(obj_keys, objects)]
 
     @classmethod
+    def _user_nodes(cls) -> List[str]:
+        """The user's own nodes, referenced ones included: every DAG transform
+        and the DG families :attr:`SUFFIX_BINDINGS` names (:attr:`_DG_FAMILIES`),
+        less Maya's default and undeletable nodes (the startup cameras, the
+        managers). What Find searches."""
+        found = list(cmds.ls(type="transform", long=True) or [])
+        keys = {tk for _kw, _ck, tk in cls.SUFFIX_BINDINGS}
+        for key, family in cls._DG_FAMILIES.items():
+            if key in keys:
+                found += cmds.ls(long=True, **family) or []
+        skip = set(cmds.ls(defaultNodes=True, long=True) or [])
+        skip.update(cmds.ls(undeletable=True, long=True) or [])
+        return [n for n in dict.fromkeys(found) if n not in skip]
+
+    @classmethod
     def scene_objects(cls) -> List[str]:
         """Every renameable node in the scene — the naming tools' "Scene" scope.
 
-        Excludes Maya's built-ins (default, undeletable — the startup cameras
-        and managers — and read-only nodes) and shapes (a shape follows its
-        transform's name; renaming both would double-suffix).
+        An allowlist of the user's objects: the DAG transforms (groups,
+        meshes, curves, cameras, lights, joints, constraints, ...) and the DG
+        node families the Suffix By Type bindings name (materials, shading
+        groups, textures, sets, display layers, deformers). Never a script
+        node, a renderer's singleton (renaming ``defaultArnoldRenderOptions``
+        made MtoA create a fresh one: the render settings were lost) or
+        construction history. Maya's default, undeletable and read-only nodes
+        are left out, and shapes (a shape follows its transform's name;
+        renaming both would double-suffix).
 
         Returns:
             list[str]: Long names.
         """
-        skip = set(cmds.ls(defaultNodes=True, long=True) or [])
-        skip.update(cmds.ls(undeletable=True, long=True) or [])
-        skip.update(cmds.ls(readOnly=True, long=True) or [])
-        skip.update(cmds.ls(shapes=True, long=True) or [])
-        return [n for n in cmds.ls(long=True) or [] if n not in skip]
+        nodes = cls._user_nodes()
+        read_only = set(cmds.ls(nodes, readOnly=True, long=True) or []) if nodes else set()
+        return [n for n in nodes if n not in read_only]
+
+    @classmethod
+    def scope_objects(cls, scene: bool = False) -> List[str]:
+        """What a naming operation acts on in a scene scope: every renameable
+        node (*scene*, :meth:`scene_objects`), else the current selection.
+
+        Returns:
+            list[str]: Node UUIDs, which every operation takes as it takes a
+            name: a plan frozen now (a dry run's Apply) still finds each node
+            after a rename moved its path -- a parent's included.
+        """
+        nodes = cls.scene_objects() if scene else cmds.ls(selection=True, long=True)
+        # ls([]) lists the whole scene: never hand it nothing.
+        return list(dict.fromkeys(cmds.ls(nodes, uuid=True) or [])) if nodes else []
+
+    @classmethod
+    def select_by_name(
+        cls,
+        pattern: str,
+        regex: bool = False,
+        ignore_case: bool = False,
+        locators_only: bool = False,
+    ) -> Tuple[List[str], int]:
+        """Select the scene nodes whose name matches *pattern* (Find).
+
+        Searches the user's own nodes -- what the Scene scope holds
+        (:meth:`scene_objects`), referenced nodes included -- never Maya's
+        defaults, history or system nodes. Matches each node's leaf name (no
+        path) through :func:`pythontk.find_str`, without its namespace unless
+        *pattern* names one (``ns:*``); the matches replace the selection, and
+        none found clears it.
+
+        Parameters:
+            pattern: ``*`` / ``|`` wildcards (``startswith*``, ``*contains*``,
+                ``a|b``), or a regular expression with *regex*.
+            regex: Read *pattern* as a regular expression.
+            ignore_case: Match case-insensitively.
+            locators_only: Search locator transforms only.
+
+        Returns:
+            tuple: ``(matches, searched)`` -- the matched nodes (long names),
+            now the selection, and how many nodes were searched.
+        """
+        cmds.select(clear=True)  # first, so the outliner never shows a stale mix
+        if locators_only:
+            shapes = cmds.ls(type="locator", long=True) or []
+            # listRelatives([]) falls back to the selection -- never pass it
+            # nothing. allParents: an instanced locator has a parent per instance.
+            objects = list(
+                dict.fromkeys(
+                    cmds.listRelatives(shapes, allParents=True, fullPath=True) or []
+                    if shapes
+                    else []
+                )
+            )
+        else:
+            objects = cls._user_nodes()
+        # A namespace named: match it too ('ns:*'). A regex group's '(?:' or
+        # '(?i:' names none.
+        if ":" in (re.sub(r"\(\?[A-Za-z-]*:", "(", pattern) if regex else pattern):
+            names = [o.split("|")[-1] for o in objects]
+        else:
+            names = [cls._leaf(o) for o in objects]
+        hits = set(ptk.find_str(pattern, names, regex=regex, ignore_case=ignore_case))
+        found = [o for o, name in zip(objects, names) if name in hits]
+        if found:
+            cmds.select(found)
+        return found, len(objects)
+
+    @classmethod
+    def select_link(cls, node: str) -> str:
+        """A report link labeled with *node*'s leaf name that selects it."""
+        return cls.log_link(cls._leaf(node), "select", node=node)
 
     @classmethod
     def generate_unique_name(cls, base_name, suffix="_", padding=3):
@@ -428,22 +550,9 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
                 )
                 continue
 
-            if trailing:
-                new_name = s[:-num_chars]
-            else:
-                temp_name = s[num_chars:]
-                # Maya does not allow names starting with a digit
-                if temp_name and temp_name[0].isdigit():
-                    temp_name = "_" + temp_name[1:]
-                new_name = temp_name
-
-            # Ensure name is not empty and legal
-            if not new_name or not (new_name[0].isalpha() or new_name[0] == "_"):
-                cls.logger.warning(
-                    f"Skipped '{s}': '{new_name}' is not a legal Maya identifier."
-                )
-                continue
-
+            # A digit left in front is kept: the plan step legalizes it
+            # ('a1box' minus 'a' -> '_1box'), and skips a name left empty.
+            new_name = s[:-num_chars] if trailing else s[num_chars:]
             plan.append((cls._key(obj), s, new_name))
 
         return cls._apply_plan(plan, "Strip Chars", dry_run)
@@ -454,9 +563,13 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         """Rename objects following the given case.
 
         Parameters:
-            objects (str/list): The objects to rename. default:all scene objects
-            case (str): Desired case using python case operators.
-                    valid: 'upper', 'lower', 'capitalize', 'swapcase', 'title'. default:'capitalize'
+            objects (str/list): The objects to rename. default: the Scene
+                scope (:meth:`scene_objects`).
+            case (str): Desired case, a :meth:`pythontk.StrUtils.set_case` case:
+                    'upper', 'lower', 'capitalize', 'swapcase', 'title' (Python's,
+                    which lower every other letter), or 'upper_first' /
+                    'upper_initials' (first letters raised, the rest kept).
+                    default:'capitalize'
             dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
@@ -465,7 +578,7 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         Example:
             set_case(cmds.ls(sl=1), 'upper')
         """
-        objects = cmds.ls(objects, long=True) if objects else cmds.ls(long=True)
+        objects = cmds.ls(objects, long=True) if objects else cls.scene_objects()
         plan = []
         for obj in objects:
             leaf = cls._leaf(obj)
@@ -720,7 +833,12 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
             # excluding it left the name unstripped and applied a SECOND affix
             # ("GEO_body_GEO"). Without it: "body_GEO" -> "GEO_body", while an
             # already-correct "GEO_body" still round-trips unchanged.
-            base_name = ptk.StrUtils.strip_any_affix(short_name, known)
+            #
+            # numbered: a duplicate's '1' (Ctrl+D of crate_GEO is crate_GEO1)
+            # or an index after the affix (wall_GEO_01) is peeled first and
+            # kept on the base, so the result is crate1_GEO / wall_01_GEO
+            # rather than a second affix.
+            base_name = ptk.StrUtils.strip_any_affix(short_name, known, numbered=True)
 
             # Apply strip_trailing_ints if specified
             if strip_trailing_ints:
@@ -763,169 +881,95 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         valid_suffixes=None,
         reverse=False,
         independent_groups=False,
+        order: str = "distance",
         dry_run: bool = False,
     ):
-        """Rename objects with a suffix defined by its location from origin.
+        """Rename objects with a suffix numbering them by location.
+
+        Each object's location is its pivot (the world rotate pivot), as
+        blendertk reads ``matrix_world.translation``, so both hosts number one
+        layout the same way -- and an empty group counts where it stands, not
+        at its empty bounding box's origin. The order is
+        :meth:`pythontk.PointCloud.order_points`'s: deterministic, float noise
+        quantized away, a tie never left to the selection order.
 
         Parameters:
-            objects (str)(int/list): The object(s) to rename.
-            first_obj_as_ref (bool): When True, use the first object's bounding box center as reference_point instead of origin.
+            objects (str)(int/list): The object(s) to rename. Only transforms
+                have a location to order by; anything else is skipped.
+            first_obj_as_ref (bool): With ``order="distance"``, measure from the
+                first object's pivot instead of the world origin.
             alphabetical (str): When True use an alphabetical character as a suffix when there is less than 26 objects else use integers.
+                A letter this tool wrote (the batch's letters run A, B, C, ...)
+                is stripped first, so a re-run is stable; any other trailing
+                letter ('_L', '_R') is name content.
             strip_trailing_ints (bool): Strip any trailing integers. ie. 'cube123'
             strip_defined_suffixes (bool): Strip any suffixes found in valid_suffixes kwarg.
             valid_suffixes (list): List of valid suffixes to strip.
-            reverse (bool): Reverse the naming order. (Farthest object first)
+            reverse (bool): Reverse the naming order (the farthest, or the far
+                end of the axis, first).
             independent_groups (bool): When True, objects matching the same base name (after stripping) are grouped and suffixed independently.
+            order (str): What the numbers follow, one of
+                :attr:`pythontk.PointCloud.ORDERS`: ``"distance"`` (the default:
+                from the origin, or the first object), ``"x"`` / ``"y"`` /
+                ``"z"`` (signed position along that world axis; ties go to the
+                other axes, then the name), or ``"auto"`` (the axis the objects
+                are most spread along, so a row is numbered along the row).
             dry_run (bool): Plan and report the renames without changing the scene.
 
         Returns:
-            list[str]: The final names, in distance order (grouped when
-                ``independent_groups``).
+            list[str]: The final names, in order (grouped when
+                ``independent_groups``); ``[]`` with no transform to rename.
         """
-
-        objects = cmds.ls(CoreUtils.as_strings(objects), flatten=True)
+        # A scene scope also holds shapes, shaders and sets: none of them has a
+        # location, so only the transforms are numbered.
+        objects = (
+            cmds.ls(
+                CoreUtils.as_strings(objects), type="transform", flatten=True, long=True
+            )
+            or []
+        )
         if not objects:
-            return
+            cls.logger.warning("No transforms to suffix by location.")
+            return []
 
-        # Determine the reference point
-        reference_point = [0, 0, 0]
-        if first_obj_as_ref and objects:
-            first_obj_bbox = cmds.exactWorldBoundingBox(objects[0])
-            reference_point = [
-                (first_obj_bbox[i] + first_obj_bbox[i + 3]) / 2 for i in range(3)
-            ]
+        positions = {
+            obj: tuple(cmds.xform(obj, q=True, worldSpace=True, rotatePivot=True))
+            for obj in objects
+        }
+        order = (order or "distance").lower()
+        if order == "auto":  # one axis for the whole batch, groups included
+            order = ptk.PointCloud.spread_axis(list(positions.values()))
+        reference = positions[objects[0]] if first_obj_as_ref else (0.0, 0.0, 0.0)
 
-        # Helper to determine if we should strip valid suffixes
-        # If independent_groups is True, we generally want to PRESERVE the group suffix (Type)
-        # So we force strip_defined_suffixes to False for the base name calculation in that mode.
-        strip_suffixes_for_grouping = strip_defined_suffixes
-        if independent_groups:
-            strip_suffixes_for_grouping = False
-
-        def get_base_name(name):
-            # Sort suffixes by length (descending) to match longest first (e.g. match _GRP before _G)
-            sorted_suffixes = sorted(valid_suffixes or [], key=len, reverse=True)
-
-            # Loop to handle stacked suffixes (e.g. Name_GRP_01_A)
-            # We continue stripping as long as we find something to strip
-            while True:
-                original_name = name
-
-                # 1. Strip Trailing Integers (e.g. _01, 123)
-                if strip_trailing_ints:
-                    if name and name[-1].isdigit():
-                        # Determine if prefixed with underscore
-                        match = re.search(r"(_\d+|\d+)$", name)
-                        if match:
-                            name = name[: match.start()]
-
-                # 2. Strip Defined Suffixes (e.g. _GRP, _A)
-                # Replaces the old "strip_trailing_alpha" logic which only handled single chars
-                if strip_suffixes_for_grouping and sorted_suffixes:
-                    for suffix in sorted_suffixes:
-                        if name.endswith(suffix):
-                            name = name[: -len(suffix)]
-                            break
-
-                if name == original_name:
-                    break
-
-            return name
-
-        newNames = {}
-        all_ordered_objs = []
-
-        if independent_groups:
-            # Group objects by base name
-            groups = {}
-            for obj in objects:
-                # Use nodeName() to ignore namespace/path for grouping purposes
-                # This ensures similar objects in different hierarchies are grouped together
-                short_name = obj.split("|")[-1]
-                base_name = get_base_name(short_name)
-
-                if base_name not in groups:
-                    groups[base_name] = []
-                groups[base_name].append(obj)
-
-            for base_name, group_objs in groups.items():
-                # Sort group by distance
-                ordered_group = XformUtils.order_by_distance(
-                    group_objs, reference_point=reference_point, reverse=reverse
-                )
-
-                length = len(ordered_group)
-                if alphabetical and length <= 26:
-                    suffix_list = list(string.ascii_uppercase)[:length]
-                else:
-                    pad = max(2, len(str(length)))
-                    suffix_list = [
-                        str(n + 1).zfill(pad) for n in range(length)
-                    ]  # 1-based index (01, 02)
-
-                # Determine if checking "Strip Defined Suffixes" should remove the suffix or move it to the end
-                # base_name here includes the suffix (e.g. Name_GRP) because strip_suffixes_for_grouping is False
-                root_name = base_name
-                type_suffix = ""
-
-                # Identify the suffix
-                sorted_valid = sorted(valid_suffixes or [], key=len, reverse=True)
-                for s in sorted_valid:
-                    if base_name.endswith(s):
-                        root_name = base_name[: -len(s)]
-                        type_suffix = s
-                        break
-
-                # If strip_defined_suffixes is True, we discard the suffix (User opted to Strip)
-                # If False, we keep it and append it at the end (User opted to Retain/Move)
-                if strip_defined_suffixes:
-                    type_suffix = ""
-
-                for i, obj in enumerate(ordered_group):
-                    # Construct: Root + _Index + Type
-                    nm = f"{root_name}_{suffix_list[i]}"
-                    if type_suffix:
-                        nm = f"{nm}{type_suffix}"
-
-                    newNames[obj] = nm
-
-                all_ordered_objs.extend(ordered_group)
-        else:
-            ordered_objs = XformUtils.order_by_distance(
-                objects, reference_point=reference_point, reverse=reverse
+        def ordered(objs):
+            return ptk.PointCloud.order_points(
+                [(o, positions[o]) for o in objs],
+                order_by=order,
+                reference=reference,
+                reverse=reverse,
             )
 
-            length = len(ordered_objs)
-            if alphabetical and length <= 26:
-                suffix_list = list(string.ascii_uppercase)[:length]
-            else:
-                pad = max(2, len(str(length)))
-                suffix_list = [
-                    str(n + 1).zfill(pad) for n in range(length)
-                ]  # 1-based index
+        # The host-free plan (strip what a previous run left, group, number)
+        # is pythontk's, written once for both hosts.
+        new_names = ptk.StrUtils.sequence_names(
+            {obj: cls._leaf(obj) for obj in objects},
+            order=ordered,
+            alphabetical=alphabetical,
+            strip_trailing_ints=strip_trailing_ints,
+            strip_defined_suffixes=strip_defined_suffixes,
+            valid_suffixes=valid_suffixes,
+            independent_groups=independent_groups,
+        )
 
-            for n, obj in enumerate(ordered_objs):
-                base_name = get_base_name(cls._leaf(obj))
-                obj_suffix = suffix_list[n]
-                newNames[obj] = base_name + "_" + obj_suffix
-
-            all_ordered_objs = ordered_objs
-
-        # ``order_by_distance`` may return nodes from un-migrated callers;
-        # ``cmds`` does not accept those, so str-coerce here.
         plan = [
-            (cls._key(str(obj)), cls._leaf(str(obj)), newNames[obj])
-            for obj in all_ordered_objs
+            (cls._key(obj), cls._leaf(obj), name) for obj, name in new_names.items()
         ]
-        if not dry_run:
-            # Park every node that changes on a placeholder first so a target
-            # name freed by a later rename in the batch cannot collide into a
-            # '1' suffix. Unchanged entries are never renamed back by the plan,
-            # so they must keep their name here.
-            for key, old, new in plan:
-                if new != old:
-                    cmds.rename(cls._path(key), "p0000000000")
-        return cls._apply_plan(plan, "Suffix By Location", dry_run)
+        title = "Suffix By Location"
+        if order in ("x", "y", "z"):
+            title += f" (along {order.upper()})"
+        # Two phases (no target collides with a name the batch still holds)
+        # are the shared plan step's, after its skip filter.
+        return cls._apply_plan(plan, title, dry_run)
 
     # ------------------------------------------------------------------
     # Plan execution — shared by every operation
@@ -937,6 +981,18 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         return path.split("|")[-1].split(":")[-1]
 
     @staticmethod
+    def _namespace(path: str) -> str:
+        """The node's own namespace: ``a:b`` of ``|grp|a:b:box``, ``""`` at the root."""
+        return path.split("|")[-1].rpartition(":")[0]
+
+    @staticmethod
+    def _in_namespace(namespace: str, name: str) -> str:
+        """*name* spelled absolute in *namespace* -- what ``cmds.rename`` needs
+        to keep a node where it is: a bare name lands in the CURRENT namespace
+        (``ns:prop1`` renamed ``PROP1`` became ``|PROP1``)."""
+        return f":{namespace}:{name}" if namespace else f":{name}"
+
+    @staticmethod
     def _key(path: str) -> str:
         """A plan key that survives intra-batch path changes (UUID, else the path)."""
         return (cmds.ls(path, uuid=True) or [path])[0]
@@ -946,45 +1002,219 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
         """Resolve a plan key back to the node's current full path."""
         return (cmds.ls(key, long=True) or [key])[0]
 
+    @staticmethod
+    def legalize(name: str) -> str:
+        """*name* as a Maya node name, or ``""`` when it holds no name at all.
+
+        Every operation's planned names pass through here (the shared plan
+        step): each character outside letters, digits and ``_`` becomes ``_``,
+        and a leading digit gets a ``_`` in front -- Maya's own rename drops
+        it (``1box`` -> ``box``). A name of underscores alone (``---``) or
+        nothing is no name: the plan step skips it, with a warning. ``#`` is
+        replaced like any other character (see :attr:`HASH_NOTE`).
+
+        Example:
+            legalize("1box") --> '_1box'
+            legalize("---") --> ''
+        """
+        legal = ptk.StrUtils.to_identifier(name)
+        return legal if legal.strip("_") else ""
+
     @classmethod
     def _rename_node(cls, key: str, new_name: str) -> str:
-        """The :class:`pythontk.RenamePlan` strategy: rename one node, return its new leaf."""
-        return cls._leaf(str(cmds.rename(cls._path(key), new_name)))
+        """The :class:`pythontk.RenamePlan` strategy: rename one node, in its
+        own namespace, and return its new leaf."""
+        path = cls._path(key)
+        target = cls._in_namespace(cls._namespace(path), new_name)
+        return cls._leaf(str(cmds.rename(path, target)))
+
+    @classmethod
+    def _park(cls, key: str, index: int) -> None:
+        """The two-phase run's placeholder (:meth:`pythontk.RenamePlan.apply`'s ``park``)."""
+        cls._rename_node(key, f"naming_park_{index}")
 
     @classmethod
     def _node_link(cls, key: str, name: str) -> str:
         """Render a report item as a link that selects the node in the viewport."""
         return cls.log_link(name, "select", node=cls._path(key))
 
+    @staticmethod
+    def _uniquify(name: str, taken) -> str:
+        """Maya's rule for a taken *name*, measured in Maya 2025: one more than
+        the highest number any ``<base><N>`` in the pool carries (the name's
+        own counts; none is 0), padded as the name was -- so past ``box`` and
+        ``box2`` comes ``box3`` (never the free ``box1``), and ``box_01`` gives
+        ``box_02``."""
+        base, digits = re.match(r"^(.*?)(\d*)$", name).groups()
+        pattern = re.compile(re.escape(base) + r"(\d+)$")
+        top = int(digits or 0)
+        for other in taken:
+            m = pattern.match(other)
+            if m:
+                top = max(top, int(m.group(1)))
+        return f"{base}{str(top + 1).zfill(len(digits))}"
+
+    @classmethod
+    def _predict(cls, plan) -> List[str]:
+        """The names Maya gives *plan*'s entries on collision, in order
+        (:meth:`pythontk.RenamePlan.predict`), so a dry run previews the live
+        run. Maya's pools, measured: a DAG node's name must be free among its
+        siblings and among every DG node's; a DG node's among every node's
+        (DAG nodes included, at any depth); each namespace is its own."""
+        if not plan:
+            return []
+        paths = {key: cls._path(key) for key, _old, _new in plan}
+        dag = set(cmds.ls(list(paths.values()), dag=True, long=True) or [])
+        scene = {}
+
+        def every():
+            if not scene:
+                scene["all"] = cmds.ls(long=True) or []
+                scene["dag"] = set(cmds.ls(dag=True, long=True) or [])
+            return scene["all"], scene["dag"]
+
+        def scopes(key):
+            path = paths[key]
+            ns = cls._namespace(path)
+            if path in dag:
+                siblings = ("siblings", path.rpartition("|")[0], ns)
+                return [siblings, ("dg", ns)], [siblings, ("all", ns)]
+            return [("all", ns)], [("dg", ns), ("all", ns)]
+
+        def names(pool):
+            kind, ns = pool[0], pool[-1]
+            if kind == "siblings":
+                parent = pool[1]
+                members = (
+                    cmds.listRelatives(parent, children=True, fullPath=True)
+                    if parent
+                    else cmds.ls(assemblies=True, long=True)
+                ) or []
+            else:
+                nodes, dag_nodes = every()
+                members = nodes if kind == "all" else [n for n in nodes if n not in dag_nodes]
+            return [cls._leaf(m) for m in members if cls._namespace(m) == ns]
+
+        return ptk.RenamePlan.predict(plan, scopes, names, cls._uniquify)
+
+    @classmethod
+    def _followers(cls, plan) -> set:
+        """The keys of the shapes in *plan* whose parent transform is in it too.
+
+        Maya renames a shape along with its transform (``seat`` ->
+        ``seat_GEO`` carries ``seatShape`` to ``seat_GEOShape``), so renaming
+        the shape as well only decorated it (``seatShape_GEO``, from a
+        ``select -hi`` or a Find of ``*seat*``). A shape not named after its
+        transform keeps its name, as in Maya (:meth:`conform_shape_names`
+        repairs those).
+        """
+        keys = {key for key, _old, _new in plan}
+        paths = [cls._path(key) for key in keys]
+        shapes = (cmds.ls(paths, shapes=True, long=True) or []) if paths else []
+        followers = set()
+        for shape in shapes:
+            parents = cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+            if any(cls._key(parent) in keys for parent in parents):
+                followers.add(cls._key(shape))
+        return followers
+
+    @classmethod
+    def _locked(cls, plan) -> set:
+        """The keys of *plan*'s nodes Maya will not rename: read-only
+        (referenced) and lockNode-locked nodes, and Maya's default and
+        undeletable ones (the startup cameras, ``lambert1``, ``time1``, the
+        managers)."""
+        by_path = {cls._path(key): key for key, _old, _new in plan}
+        nodes = [n for n in by_path if cmds.objExists(n)]
+        if not nodes:
+            return set()
+        blocked = set(cmds.ls(nodes, readOnly=True, long=True) or [])
+        blocked.update(cmds.ls(defaultNodes=True, long=True) or [])
+        blocked.update(cmds.ls(undeletable=True, long=True) or [])
+        locks = cmds.lockNode(nodes, query=True, lock=True) or []
+        blocked.update(n for n, locked in zip(nodes, locks) if locked)
+        return {key for path, key in by_path.items() if path in blocked}
+
+    @staticmethod
+    def _listed(items, limit: int = 10) -> str:
+        """``a, b, …`` -- a tally line's names, the first *limit* of them."""
+        shown = ", ".join(items[:limit])
+        return f"{shown}, …" if len(items) > limit else shown
+
     @classmethod
     def _apply_plan(cls, plan, title: str, dry_run: bool) -> List[str]:
         """Apply ``(key, old_leaf, new_leaf)`` entries and report; returns the resulting node names.
 
-        Live: the node's shortest unique name after the rename (the
-        ``cmds.rename`` return, resolved by UUID so it is authoritative even
-        after later entries changed the hierarchy). Dry run: the planned leaf.
-        Read-only nodes (referenced, locked) are skipped and tallied in one
-        line rather than failing one by one.
+        The plan step every operation shares, so each behaves the same:
+
+        1. A shape whose transform is in the batch follows it and is dropped
+           (:meth:`_followers`).
+        2. Each new name is legalized (:meth:`legalize`); one with no name
+           left is skipped, all of them in one warning.
+        3. What Maya will not rename is skipped, in one line (:meth:`_locked`).
+        4. The names Maya will number on a collision are predicted
+           (:meth:`_predict`) and planned as such, so a dry run shows what the
+           live run does; they are reported in one line.
+        5. The batch runs in two phases (:meth:`pythontk.RenamePlan.apply`
+           with ``park``), so no rename meets a name the batch still holds and
+           nothing is ever left on a placeholder.
+
+        Returns, parallel to *plan*: live, each node's shortest unique name
+        after the rename (resolved by UUID, so it is authoritative after later
+        entries changed the hierarchy); on a dry run, the predicted leaf (the
+        old leaf for a node skipped or following its transform).
         """
-        read_only = set(cmds.ls(readOnly=True, long=True) or [])
-        skipped = {key for key, _old, _new in plan if cls._path(key) in read_only}
-        if skipped:
-            names = [old for key, old, _new in plan if key in skipped]
-            cls.logger.info(
-                f"Skipped {len(names)} read-only node(s): {', '.join(names[:10])}"
-                f"{', …' if len(names) > 10 else ''}"
+        plan = list(plan)
+        followers = cls._followers(plan)
+        staged, nameless = [], []
+        for key, old, new in plan:
+            if key in followers:
+                continue
+            if new != old:
+                legal = cls.legalize(new)
+                if not legal:
+                    nameless.append(f"{old} → '{new}'")
+                    continue
+                new = legal
+            staged.append((key, old, new))
+        if nameless:
+            cls.logger.warning(
+                f"Skipped {len(nameless)} name(s) with no letters or digits left: "
+                f"{cls._listed(nameless)}"
             )
+        locked = cls._locked(staged)
+        if locked:
+            names = [old for key, old, _new in staged if key in locked]
+            cls.logger.info(
+                f"Skipped {len(names)} node(s) Maya will not rename (default, "
+                f"locked or read-only): {cls._listed(names)}"
+            )
+        live = [entry for entry in staged if entry[0] not in locked]
+        predicted = cls._predict(live)
+        numbered = [
+            f"{old} → {got}"
+            for (_key, old, new), got in zip(live, predicted)
+            if got != new
+        ]
+        if numbered:
+            cls.logger.warning(
+                f"{len(numbered)} name(s) already taken, numbered as Maya numbers "
+                f"them: {cls._listed(numbered)}"
+            )
+        live = [(key, old, got) for (key, old, _new), got in zip(live, predicted)]
         ptk.RenamePlan.apply(
-            [e for e in plan if e[0] not in skipped],
+            live,
             cls._rename_node,
             title=title,
             dry_run=dry_run,
             logger=cls.logger,
             link=cls._node_link,
             unit="object",
+            park=cls._park,
         )
         if dry_run:
-            return [old if key in skipped else new for key, old, new in plan]
+            planned = {key: new for key, _old, new in live}
+            return [planned.get(key, old) for key, old, _new in plan]
         return [(cmds.ls(key) or [key])[0] for key, _old, _new in plan]
 
 

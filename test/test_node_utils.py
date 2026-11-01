@@ -547,7 +547,7 @@ class TestNodeUtils(MayaTkTestCase):
         ``visible=True`` filters SHAPES, but visibility lives on the transform
         chain -- so expanding one visible shape to all its parents would drag
         every hidden sibling in with it. Same trap, and same per-path rule, as
-        ``MayaBridgeSlotsBase.resolve_scope_objects("visible")``.
+        ``BridgeHost.resolve_scope("visible")``.
         """
         src = cmds.polyCube(name="visSrc")[0]
         shown = cmds.instance(src, name="visShown")[0]
@@ -2061,6 +2061,185 @@ class TestIncomingConnections(MayaTkTestCase):
         )
         self.assertEqual(mtk.NodeUtils.incoming_connections(["no_such_node"]), [])
         self.assertEqual(mtk.NodeUtils.incoming_connections([]), [])
+
+
+class TestInstancingFromTheSelection(MayaTkTestCase):
+    """The selection paths the Duplicate menu calls through ``self.tk``
+    (blendertk's twins answer the same in Blender)."""
+
+    def setUp(self):
+        super().setUp()
+        self.src = cmds.polyCube(name="sel_inst_src")[0]
+        self.tgt = cmds.polyCube(name="sel_inst_tgt")[0]
+        cmds.select(clear=True)
+
+    def test_replace_with_instances_reads_the_selection_source_first(self):
+        self.assertEqual(NodeUtils.replace_with_instances(None), [])
+        cmds.select(self.src)
+        with self.assertRaises(ValueError):
+            NodeUtils.replace_with_instances(None)
+        cmds.select([self.src, self.tgt])
+        made = NodeUtils.replace_with_instances(None)
+        self.assertEqual(len(made), 1)
+        self.assertTrue(NodeUtils.get_instances(self.src))
+        with self.assertRaises(ValueError):
+            NodeUtils.replace_with_instances([self.src])
+
+    def test_select_instances(self):
+        lonely = cmds.polyCube(name="sel_inst_lonely")[0]
+        inst = cmds.instance(self.src, name="sel_inst_copy")[0]
+        cmds.select(clear=True)
+        self.assertEqual(NodeUtils.select_instances([lonely]), [])
+        cmds.select(self.src)
+        selected = NodeUtils.select_instances()
+        names = {n.split("|")[-1] for n in cmds.ls(selection=True, long=True)}
+        self.assertTrue(selected)
+        self.assertEqual(names, {self.src, inst})
+        cmds.select(lonely)
+        self.assertTrue(NodeUtils.select_instances(whole_scene=True))
+        self.assertNotIn(lonely, cmds.ls(selection=True))
+
+    def test_uninstance_takes_the_selection(self):
+        inst = cmds.instance(self.src, name="sel_inst_un")[0]
+        cmds.select(clear=True)  # instance selects what it made
+        self.assertEqual(NodeUtils.uninstance(), [])
+        cmds.select(inst)
+        NodeUtils.uninstance()
+        self.assertFalse(NodeUtils.get_instances(self.src))
+
+
+class TestSelectionSummary(MayaTkTestCase):
+    """``NodeUtils.selection_summary``: what tentacle's HUD lists (blendertk's
+    twin answers the same keys in Blender)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="hud_cube")[0]
+        cmds.select(clear=True)
+
+    def tearDown(self):
+        cmds.selectMode(object=True)
+        super().tearDown()
+
+    def test_nothing_selected_is_none(self):
+        self.assertIsNone(NodeUtils.selection_summary())
+
+    def test_an_object(self):
+        cmds.select(self.cube)
+        summary = NodeUtils.selection_summary()
+        self.assertEqual(summary["mode"], "object")
+        self.assertEqual(summary["count"], 1)
+        self.assertEqual(summary["objects"], [("hud_cube", "transform")])
+        self.assertEqual((summary["faces"], summary["tris"]), (6, 12))
+        self.assertEqual(summary["uvs"], cmds.polyEvaluate(self.cube, uvcoord=True))
+        self.assertFalse(summary["normals_locked"])
+        self.assertEqual(summary["instances"], 1)
+
+    def test_instances_locks_and_the_limit(self):
+        cmds.instance(self.cube, name="hud_cube_inst")
+        cmds.polyNormalPerVertex(f"{self.cube}.vtx[*]", freezeNormal=True)
+        cmds.select(self.cube)
+        summary = NodeUtils.selection_summary()
+        self.assertEqual(summary["instances"], 2)
+        self.assertTrue(summary["normals_locked"])
+        cmds.select(self.cube, cmds.spaceLocator()[0])
+        self.assertEqual(NodeUtils.selection_summary(limit=1)["objects"], [])
+
+    @unittest.skipIf(cmds.about(batch=True), "selectMode queries read False in batch")
+    def test_component_mode_counts(self):
+        cmds.selectMode(component=True)
+        cmds.selectType(facet=True)
+        cmds.select(f"{self.cube}.f[0:1]")
+        summary = NodeUtils.selection_summary()
+        self.assertEqual(
+            (summary["mode"], summary["component"], summary["selected"], summary["total"]),
+            ("component", "Faces", 2, 6),
+        )
+
+
+class TestDeleteHistoryInScope(MayaTkTestCase):
+    """``NodeUtils.delete_history_in_scope``: what the shared Edit panel's Delete
+    History calls (its slot-level regressions run in tentacle's test_edit.py)."""
+
+    def test_selected_scope_limits_deletion_to_the_selection(self):
+        a = cmds.polyCube(name="histA")[0]
+        cmds.polyCube(name="histB")
+        cmds.select(a)
+        done = NodeUtils.delete_history_in_scope("selected", preserve_deformers=False)
+        self.assertTrue(done)
+        self.assertEqual(len(cmds.ls(type="polyCube")), 1)
+
+    def test_an_empty_scope_returns_nothing(self):
+        cmds.polyCube(name="histC")
+        cmds.select(clear=True)
+        self.assertEqual(NodeUtils.delete_history_in_scope("selected"), [])
+        self.assertEqual(len(cmds.ls(type="polyCube")), 1)
+
+    def test_delete_unused_spares_rig_nodes_and_connected_groups(self):
+        cmds.polyCube(name="histKeep")
+        start = cmds.joint(name="histStart", position=(0, 0, 0))
+        end = cmds.joint(name="histEnd", position=(0, 5, 0))
+        handle = cmds.ikHandle(sj=start, ee=end)[0]
+        source = cmds.group(empty=True, name="histMatrixSource")
+        mult = cmds.createNode("multMatrix", name="histConsumer")
+        cmds.connectAttr(f"{source}.worldMatrix[0]", f"{mult}.matrixIn[0]")
+        cmds.connectAttr(f"{mult}.matrixSum", "histKeep.offsetParentMatrix")
+        junk = cmds.group(empty=True, name="histJunk")
+        NodeUtils.delete_history_in_scope("all", delete_unused=True)
+        self.assertTrue(all(cmds.objExists(n) for n in (handle, end, source)))
+        self.assertFalse(cmds.objExists(junk))
+
+    def test_optimize_restores_the_env_flag(self):
+        mel.eval('putenv "MAYA_TESTING_CLEANUP" "preexisting";')
+        try:
+            NodeUtils.delete_history_in_scope("selected", optimize_scene=True)
+            self.assertEqual(mel.eval('getenv "MAYA_TESTING_CLEANUP"'), "preexisting")
+        finally:
+            mel.eval('putenv "MAYA_TESTING_CLEANUP" "";')
+
+    def test_never_combines_dag_with_exact_type(self):
+        """``ls -dag -exactType`` is NOT exact: under -dag the type test inherits,
+        matching joints, ikHandles and constraints, which the empty-group sweep
+        once deleted scene-wide. AST guard over the sweep and its helpers."""
+        import ast
+        import inspect
+        import textwrap
+
+        offenders = []
+        for fn in (
+            NodeUtils.delete_history_in_scope,
+            NodeUtils._is_disposable_group,
+            NodeUtils._history_scope,
+        ):
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+            for call in ast.walk(tree):
+                if isinstance(call, ast.Call) and getattr(call.func, "attr", "") == "ls":
+                    flags = {kw.arg for kw in call.keywords}
+                    if "exactType" in flags and flags & {"dag", "dagObjects"}:
+                        offenders.append(fn.__name__)
+        self.assertEqual(offenders, [])
+
+
+class TestLockNodes(MayaTkTestCase):
+    """``NodeUtils.lock_nodes``: the shared Edit panel's Lock / Unlock."""
+
+    def test_locks_and_unlocks_the_selection(self):
+        cube = cmds.polyCube(name="lockCube")[0]
+        cmds.select(cube)
+        self.assertEqual(NodeUtils.lock_nodes(None, lock=True), [cube])
+        self.assertTrue(cmds.lockNode(cube, q=True, lock=True)[0])
+        cmds.select(cube)
+        NodeUtils.lock_nodes(None, lock=False)
+        self.assertFalse(cmds.lockNode(cube, q=True, lock=True)[0])
+
+    def test_nothing_selected_takes_every_node(self):
+        cube = cmds.polyCube(name="lockAll")[0]
+        cmds.select(clear=True)
+        try:
+            self.assertIn(cube, NodeUtils.lock_nodes(None, lock=True))
+            self.assertTrue(cmds.lockNode(cube, q=True, lock=True)[0])
+        finally:
+            NodeUtils.lock_nodes(None, lock=False)
 
 
 if __name__ == "__main__":

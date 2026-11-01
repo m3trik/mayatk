@@ -3,7 +3,7 @@
 """Test Suite for instancing modules not covered elsewhere.
 
 Covers:
-    - InstancingStrategy's Maya binding (instancing_strategy.py)
+    - InstancingStrategy's Maya adapter (the AutoInstancer's triangle count)
     - AssemblyReconstructor smoke / API surface (assembly_reconstructor.py)
 
 `auto_instancer` and `geometry_matcher` are covered by existing tests.
@@ -24,17 +24,18 @@ from mayatk.core_utils.auto_instancer.assembly_reconstructor import (
     AssemblyReconstructor,
 )
 from mayatk.core_utils.auto_instancer.geometry_matcher import GeometryMatcher
+from mayatk.core_utils.auto_instancer._auto_instancer import AutoInstancer
 
 from base_test import MayaTkTestCase, QuickTestCase
 
 
 class TestInstancingStrategyBinding(QuickTestCase):
-    """The mayatk names bind pythontk's engine (its decision tree is tested
+    """The mayatk names are pythontk's engine (its decision tree is tested
     in pythontk ``test_instancing_strategy.py``); only the triangle count is
-    Maya's."""
+    Maya's, injected by the AutoInstancer."""
 
     def test_names_are_the_engine(self):
-        self.assertTrue(issubclass(InstancingStrategy, ptk.InstancingStrategy))
+        self.assertIs(InstancingStrategy, ptk.InstancingStrategy)
         self.assertIs(StrategyConfig, ptk.StrategyConfig)
         self.assertIs(StrategyType, ptk.StrategyType)
 
@@ -46,17 +47,17 @@ class TestInstancingStrategyBinding(QuickTestCase):
 
 
 class TestInstancingStrategyTriangleCount(MayaTkTestCase):
-    """_get_triangle_count uses polyEvaluate; needs Maya."""
+    """The AutoInstancer injects ``polyEvaluate``; needs Maya."""
 
     def test_get_triangle_count_returns_int(self):
         cube = cmds.polyCube(name="strat_cube")[0]
-        s = InstancingStrategy(StrategyConfig())
+        s = AutoInstancer().strategy_analyzer
         n = s._get_triangle_count(cube)
         self.assertIsInstance(n, int)
-        self.assertGreater(n, 0)
+        self.assertEqual(n, 12)
 
     def test_get_triangle_count_invalid_node_returns_zero(self):
-        s = InstancingStrategy(StrategyConfig())
+        s = AutoInstancer().strategy_analyzer
         self.assertEqual(s._get_triangle_count("nonexistent_node"), 0)
 
 

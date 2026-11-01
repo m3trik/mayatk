@@ -13,6 +13,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils.plugins._plugins import Plugins
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -581,6 +582,7 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         return light["intensity"] / dist2
 
     @classmethod
+    @CoreUtils.undoable
     def lights_from_geometry(
         cls,
         objects: Optional[Sequence[Any]] = None,

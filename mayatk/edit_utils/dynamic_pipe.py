@@ -44,6 +44,36 @@ class DynamicPipe:
         self.circles: List[str] = self._build_circles(self.locators)
         self.pipe_segments: List[str] = []
 
+    @classmethod
+    def from_selection(cls, **kwargs) -> "DynamicPipe":
+        """A pipe through the selected transforms in the order they were
+        selected, its geometry lofted and added to the isolation set, all one
+        undo step.
+
+        Parameters:
+            **kwargs: The constructor's options (``num_inbetween``, ``radius``,
+                ``normal``).
+
+        Raises:
+            ValueError: Fewer than two transforms are selected (checked before
+                the undo chunk opens, so a refused click leaves no step).
+        """
+        locators = cmds.ls(orderedSelection=True, exactType="transform", long=True) or []
+        if len(locators) < 2:
+            raise ValueError("Select at least two transforms (locators), in path order.")
+        from mayatk.display_utils._display_utils import DisplayUtils
+
+        cmds.undoInfo(openChunk=True)
+        try:
+            pipe = cls(locators, **kwargs)
+            pipe.create_pipe_geometry()
+            DisplayUtils.add_to_isolation_set(
+                list(pipe.locators) + list(pipe.circles) + [pipe.curve] + list(pipe.pipe_segments)
+            )
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        return pipe
+
     # ------------------------------------------------------------------ build
 
     @staticmethod
@@ -136,71 +166,5 @@ class DynamicPipe:
         return new_segments
 
 
-class DynamicPipeSlots:
-    """Switchboard slot wiring for the dynamic_pipe UI."""
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.dynamic_pipe
-        self.pipe: Optional[DynamicPipe] = None
-
-    def header_init(self, widget):
-        """Configure header help text."""
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Dynamic Pipe",
-                body="Build a pipe-style mesh by lofting NURBS circles "
-                "parented to a chain of locators. Each locator drives a "
-                "cross-section circle; consecutive circles loft into pipe "
-                "segments that follow the locators interactively.",
-                steps=[
-                    "Place locators in the scene along the desired path.",
-                    "Select the locators <b>in order</b> (Maya tracks "
-                    "selection order).",
-                    "Press <b>Initialize Pipe</b>.",
-                ],
-                notes=[
-                    "Requires at least two locators. Moving a locator in the "
-                    "viewport updates its associated circle and any lofted "
-                    "segment that includes it.",
-                ],
-            )
-        )
-
-    def b000(self):
-        """Initialize Pipe — build pipe from the current ordered selection."""
-        locators = (
-            cmds.ls(orderedSelection=True, exactType="transform", long=True) or []
-        )
-        if len(locators) < 2:
-            self.sb.message_box(
-                "Select at least two transforms (locators) in order, "
-                "then press Initialize Pipe."
-            )
-            return
-
-        cmds.undoInfo(openChunk=True)
-        try:
-            self.pipe = DynamicPipe(locators)
-            self.pipe.create_pipe_geometry()
-            # Imported here, not at module top: this module deliberately
-            # guards maya.cmds so the surface imports without Maya.
-            from mayatk.display_utils._display_utils import DisplayUtils
-
-            DisplayUtils.add_to_isolation_set(
-                list(self.pipe.locators)
-                + list(self.pipe.circles)
-                + [self.pipe.curve]
-                + list(self.pipe.pipe_segments)
-            )
-        finally:
-            cmds.undoInfo(closeChunk=True)
-
-
 # -----------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("dynamic_pipe", reload=True)
-    ui.show(pos="screen", app_exec=True)

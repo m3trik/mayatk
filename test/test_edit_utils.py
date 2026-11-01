@@ -1656,5 +1656,228 @@ class TestOriginalAxisFrame(MayaTkTestCase):
         )
 
 
+class TestSymmetry(MayaTkTestCase):
+    """get_symmetry / set_symmetry: Maya's modeling symmetry as tentacle's
+    composed symmetry panel reads and sets it (blendertk's twins: mesh flags)."""
+
+    @staticmethod
+    def _off():
+        cmds.symmetricModelling(edit=True, symmetry=False, about="world", axis="x")
+
+    def setUp(self):
+        super().setUp()
+        self._off()
+
+    def tearDown(self):
+        self._off()
+        super().tearDown()
+
+    def test_an_axis_on_reads_back(self):
+        state = EditUtils.set_symmetry(axis="y", state=True)
+        self.assertEqual(state["axes"], ["y"])
+        self.assertTrue(state["enabled"] and state["by_axis"])
+        self.assertTrue(cmds.symmetricModelling(query=True, symmetry=True))
+
+    def test_turning_off_another_axis_changes_nothing(self):
+        EditUtils.set_symmetry(axis="y", state=True)
+        self.assertEqual(EditUtils.set_symmetry(axis="x", state=False)["axes"], ["y"])
+        self.assertFalse(EditUtils.set_symmetry(axis="y", state=False)["enabled"])
+
+    def test_off_reads_no_axis(self):
+        self.assertEqual(EditUtils.get_symmetry()["axes"], [])
+        self.assertFalse(EditUtils.get_symmetry()["enabled"])
+
+    def test_object_space(self):
+        EditUtils.set_symmetry(axis="x", state=True)
+        state = EditUtils.set_symmetry(space="object")
+        self.assertEqual((state["space"], state["axes"]), ("object", ["x"]))
+
+    def test_topology_without_an_edge_raises_and_changes_nothing(self):
+        cmds.select(clear=True)
+        with self.assertRaises(ValueError) as caught:
+            EditUtils.set_symmetry(space="topo")
+        self.assertIn("edge", str(caught.exception))
+        self.assertNotEqual(EditUtils.get_symmetry()["space"], "topo")
+
+
+class TestEditMenus(MayaTkTestCase):
+    """The shared Edit panel's menus: Create (``Primitives``), Convert and Delete."""
+
+    def test_the_create_menu_lists_what_create_makes(self):
+        types = mtk.Primitives.get_primitive_types()
+        self.assertEqual(
+            list(types), ["Polygon", "NURBS", "Curve", "Helper", "Light", "Arnold"]
+        )
+        self.assertNotIn("Text", types["Polygon"])  # never had a creator
+        self.assertIn("Skydome", types["Arnold"])
+
+    def test_create_a_polygon_and_a_helper(self):
+        mtk.Primitives.create("Polygon", "Cube")
+        self.assertTrue(cmds.ls(type="polyCube"))
+        mtk.Primitives.create("Helper", "Locator")
+        self.assertTrue(cmds.ls(type="locator"))
+
+    def test_create_refuses_an_unknown_item(self):
+        with self.assertRaises(ValueError):
+            mtk.Primitives.create("Polygon", "Text")
+
+    def test_conversion_types_are_mel(self):
+        types = EditUtils.get_conversion_types()
+        self.assertIn("NURBS to Polygons", types)
+        self.assertTrue(all(isinstance(v, str) and v for v in types.values()))
+
+    def test_convert_nothing_selected_is_empty(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.convert_objects(None, "NURBS to Polygons"), [])
+
+    def test_convert_refuses_an_unknown_conversion(self):
+        cmds.select(cmds.polyCube()[0])
+        with self.assertRaises(ValueError):
+            EditUtils.convert_objects(None, "Bogus to Bogus")
+
+    def test_delete_selected_is_one_undo_step(self):
+        """An edge of one cube and a whole other: two commands, one undo."""
+        a = cmds.polyCube(name="delA")[0]
+        b = cmds.polyCube(name="delB")[0]
+        cmds.undoInfo(state=True, infinity=True)
+        cmds.select([f"{a}.e[0]", b])
+        EditUtils.delete_selected()
+        self.assertEqual(
+            (cmds.polyEvaluate(a, face=True), cmds.objExists(b)), (5, False)
+        )
+        cmds.undo()
+        self.assertEqual(
+            (cmds.polyEvaluate(a, face=True), cmds.objExists(b)), (6, True)
+        )
+
+
+class TestPolygonsPanelOperations(MayaTkTestCase):
+    """merge_vertices / boolean_objects / wedge / separate_objects(select) as
+    tentacle's composed polygons panel calls them."""
+
+    def _touching_cubes(self):
+        a = cmds.polyCube(w=1, h=1, d=1, name="mv_a")[0]
+        b = cmds.polyCube(w=1, h=1, d=1, name="mv_b")[0]
+        cmds.move(1, 0, 0, b)
+        return cmds.polyUnite(a, b, ch=False, name="mv_both")[0]
+
+    def test_merge_with_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.merge_vertices(None), [])
+
+    def test_merge_an_object_welds_every_coincident_vertex(self):
+        both = self._touching_cubes()
+        self.assertEqual(cmds.polyEvaluate(both, vertex=True), 16)
+        cmds.select(both)
+        EditUtils.merge_vertices(None, tolerance=0.001)
+        self.assertEqual(cmds.polyEvaluate(both, vertex=True), 12)
+
+    def test_merge_selected_vertices_only(self):
+        both = self._touching_cubes()
+        cmds.select(f"{both}.vtx[0:3]")  # one cube's verts: none coincide
+        EditUtils.merge_vertices(None, tolerance=0.001)
+        self.assertEqual(cmds.polyEvaluate(both, vertex=True), 16)
+
+    def test_boolean_needs_two_meshes(self):
+        cube = cmds.polyCube()[0]
+        self.assertEqual(EditUtils.boolean_objects([cube]), [])
+        with self.assertRaises(ValueError):
+            EditUtils.boolean_objects([cube, cube], operation="xor")
+
+    def test_boolean_difference_bakes_one_result(self):
+        a = cmds.polyCube(w=2, h=2, d=2, name="bo_a")[0]
+        b = cmds.polyCube(w=1, h=1, d=1, name="bo_b")[0]
+        cmds.move(1, 1, 1, b)
+        result = EditUtils.boolean_objects([a, b], operation="difference")
+        self.assertEqual(len(result), 1)
+        self.assertTrue(cmds.objExists(result[0]))
+
+    def test_wedge_with_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.wedge(None), [])
+
+    def test_separate_selects_its_results(self):
+        both = self._touching_cubes()
+        parts = EditUtils.separate_objects([both], select=True)
+        self.assertEqual(len(parts), 2)
+        self.assertEqual(
+            sorted(cmds.ls(selection=True, long=True)), sorted(cmds.ls(parts, long=True))
+        )
+
+
+class TestSelectEdgesByAngle(MayaTkTestCase):
+    """select_edges_by_angle as tentacle's selection panel calls it."""
+
+    def test_a_cube_s_right_angled_edges(self):
+        cube = cmds.polyCube(name="sea_cube")[0]
+        cmds.select(cube)
+        self.assertEqual(EditUtils.select_edges_by_angle(None, 80, 100), 12)
+        self.assertEqual(len(cmds.ls(selection=True, flatten=True)), 12)
+
+    def test_no_edge_in_range_is_zero(self):
+        cmds.select(cmds.polyCube(name="sea_none")[0])
+        self.assertEqual(EditUtils.select_edges_by_angle(None, 10, 20), 0)
+
+    def test_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.select_edges_by_angle(None), [])
+
+
+class TestSubdivisionOps(MayaTkTestCase):
+    """The subdivision panel's ops: Maya's menu commands on the given meshes."""
+
+    def _faces(self, obj):
+        return cmds.polyEvaluate(obj, face=True)
+
+    def test_triangulate_then_quadrangulate(self):
+        cube = cmds.polyCube(name="sub_ops_cube", ch=False)[0]
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.triangulate(cube), [cube])
+        self.assertEqual(self._faces(cube), 12)
+        EditUtils.quadrangulate(cube)
+        self.assertEqual(self._faces(cube), 6)
+
+    def test_subdivide_adds_faces(self):
+        # Maya's performPolySubdivide errors on a selected transform (its MEL
+        # IF test, line 403) and changes nothing; a whole mesh goes as its faces.
+        cube = cmds.polyCube(name="sub_ops_div", ch=False)[0]
+        before = self._faces(cube)
+        EditUtils.subdivide_mesh(cube)
+        self.assertGreater(self._faces(cube), before)
+
+    def test_apply_subdivision_converts_only_a_previewed_mesh(self):
+        plain = cmds.polyCube(name="sub_ops_plain", ch=False)[0]
+        smooth = cmds.polyCube(name="sub_ops_smooth", ch=False)[0]
+        cmds.setAttr(f"{smooth}.displaySmoothMesh", 2)
+        converted = EditUtils.apply_subdivision([plain, smooth])
+        self.assertEqual([c.rsplit("|", 1)[-1] for c in converted], [smooth])
+        self.assertGreater(self._faces(smooth), 6)
+        self.assertEqual(self._faces(plain), 6)
+        self.assertEqual(EditUtils.apply_subdivision(plain), [])
+
+    def test_nothing_selected_runs_nothing(self):
+        cmds.select(clear=True)
+        for op in (
+            EditUtils.quadrangulate,
+            EditUtils.triangulate,
+            EditUtils.subdivide_mesh,
+            EditUtils.apply_subdivision,
+        ):
+            with self.subTest(op=op.__name__):
+                self.assertEqual(op(None), [])
+
+    def test_decimate_options_are_the_ops_keywords(self):
+        import inspect
+
+        for algorithm, op in (
+            ("reduce", EditUtils.decimate),
+            ("planar", EditUtils.dissolve_coplanar),
+        ):
+            params = inspect.signature(op).parameters
+            for option in EditUtils.DECIMATE_OPTIONS[algorithm]:
+                with self.subTest(algorithm=algorithm, option=option):
+                    self.assertIn(option, params)
+
+
 if __name__ == "__main__":
     unittest.main()

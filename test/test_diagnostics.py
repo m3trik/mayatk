@@ -857,5 +857,98 @@ class TestSceneDiagnosticsMangledNames(MayaTkTestCase):
         self.assertTrue(ok, messages)
 
 
+class TestCleanupMeshes(MayaTkTestCase):
+    """``MeshDiagnostics.cleanup_meshes``: Mesh Cleanup's one call (the shared
+    panel words the report)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="cleanCube")[0]
+
+    def test_nothing_in_scope_does_nothing(self):
+        cmds.select(clear=True)
+        report = MeshDiagnostics.cleanup_meshes("selected", checks=["ngons"])
+        self.assertEqual(report["objects"], [])
+        self.assertIsNone(report["duplicates"])
+
+    def test_select_with_no_check_does_nothing(self):
+        cmds.select(self.cube)
+        report = MeshDiagnostics.cleanup_meshes("selected", checks=[])
+        self.assertEqual((report["checks"], report["selected"]), ([], 0))
+        self.assertEqual(cmds.ls(selection=True), [self.cube])
+
+    def test_select_finds_an_ngon(self):
+        # the edge's two faces become one six-sided face (its vertices kept)
+        cmds.polyDelEdge(f"{self.cube}.e[0]", cleanVertices=False)
+        cmds.select(self.cube)
+        report = MeshDiagnostics.cleanup_meshes("selected", checks=["ngons", "bogus"])
+        self.assertEqual(report["checks"], ["ngons"])
+        self.assertGreater(report["selected"], 0)
+
+    def test_repair_merges_vertices_and_counts_them(self):
+        plane = cmds.polyPlane(name="cleanPlane", sx=1, sy=1)[0]
+        corner = cmds.pointPosition(f"{plane}.vtx[0]", world=True)
+        cmds.xform(f"{plane}.vtx[1]", worldSpace=True, translation=corner)
+        cmds.select(plane)
+        report = MeshDiagnostics.cleanup_meshes(
+            "selected", True, merge_vertices=True, merge_distance=0.001
+        )
+        self.assertEqual(report["vertices"], (4, 3))  # the merge is counted
+        self.assertEqual(report["repairs"], ["merge vertices"])
+
+    def test_all_scope_takes_every_mesh(self):
+        other = cmds.polyCube(name="cleanOther")[0]
+        cmds.select(clear=True)
+        pool = MeshDiagnostics.cleanup_meshes("all", checks=["ngons"])["objects"]
+        self.assertEqual(
+            sorted(p.rsplit("|", 1)[-1] for p in pool), sorted([self.cube, other])
+        )
+
+    def test_overlapping_objects_ignores_the_scope_and_deletes(self):
+        twin = cmds.duplicate(self.cube, name="cleanCubeTwin")[0]
+        cmds.select(clear=True)
+        report = MeshDiagnostics.cleanup_meshes(
+            "selected", True, overlapping_objects=True
+        )
+        self.assertEqual(report["duplicates"], 1)
+        self.assertEqual(
+            len([n for n in (self.cube, twin) if cmds.objExists(n)]), 1
+        )
+
+
+class TestTransformsInScope(MayaTkTestCase):
+    """``transforms_in_scope``: what the Scene panel's Fix Non-Orthogonal Axes checks."""
+
+    def test_a_component_selection_checks_its_object(self):
+        cube = cmds.polyCube(name="scope_cube")[0]
+        other = cmds.polyCube(name="scope_other")[0]
+        cmds.select(f"{cube}.f[0]")
+        self.assertEqual(
+            TransformDiagnostics.transforms_in_scope("selection"),
+            cmds.ls(cube, long=True),
+        )
+        everything = TransformDiagnostics.transforms_in_scope("all")
+        self.assertTrue(set(cmds.ls([cube, other], long=True)) <= set(everything))
+
+    def test_nothing_selected_is_empty_and_a_bad_scope_raises(self):
+        cmds.select(clear=True)
+        self.assertEqual(TransformDiagnostics.transforms_in_scope("selection"), [])
+        with self.assertRaises(ValueError):
+            TransformDiagnostics.transforms_in_scope("visible")
+
+
+class TestFixNonOrthogonalAxesUndo(MayaTkTestCase):
+    """``fix_non_orthogonal_axes`` is ONE undo step: one Ctrl+Z puts the shear back."""
+
+    def test_one_undo_restores_the_shear(self):
+        cube = cmds.polyCube(name="undo_sheared")[0]
+        cmds.setAttr(f"{cube}.shearXY", 0.5)
+        cmds.undoInfo(state=True, infinity=True)
+        TransformDiagnostics.fix_non_orthogonal_axes([cube], quiet=True)
+        self.assertEqual(TransformDiagnostics.get_non_orthogonal([cube]), [])
+        cmds.undo()
+        self.assertTrue(TransformDiagnostics.get_non_orthogonal(cmds.ls(cube)))
+
+
 if __name__ == "__main__":
     unittest.main()

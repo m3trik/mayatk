@@ -26,6 +26,61 @@ class _AssignmentInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
     @staticmethod
+    def _select_matches(matches, add):
+        """Select *matches*, added to the selection or replacing it; nothing
+        found leaves the selection as it is."""
+        if not matches:
+            return
+        if add:
+            cmds.select(matches, add=True)
+        else:
+            cmds.select(matches, replace=True)
+
+    @classmethod
+    def _select_by_mat(cls, material, objects, shell, add):
+        """Body of :meth:`MatUtils.select_by_mat`."""
+        material = str(material)
+        if not cmds.objExists(material):
+            raise ValueError(f"No material named '{material}'.")
+        # A component stands for its object; an empty pool searches the scene.
+        pool = (
+            cmds.ls([str(o) for o in objects], objectsOnly=True) or None
+            if objects
+            else None
+        )
+        matches = list(cls.find_by_mat_id(material, pool, shell=shell) or [])
+        cls._select_matches(matches, add)
+        return matches
+
+    @classmethod
+    def _select_unassigned(cls, objects, add):
+        """Body of :meth:`MatUtils.select_unassigned`."""
+        matches = list(cls.find_unassigned(objects or None) or [])
+        cls._select_matches(matches, add)
+        return matches
+
+    @classmethod
+    def _assign_random_mat(cls, objects, previous):
+        """Body of :meth:`MatUtils.assign_random_mat`."""
+        if objects is None:
+            objects = cmds.ls(selection=True, flatten=True) or []
+        objects = [str(o) for o in ptk.make_iterable(objects) if o]
+        if not objects:
+            raise ValueError("Nothing selected: select what the new material goes on.")
+        new = str(cls.create_mat("random"))
+        cls.assign_mat(objects, new)
+        previous = str(previous) if previous else ""
+        if (
+            previous
+            and previous != new
+            and cmds.objExists(previous)
+            and not cls._is_mat_assigned(mat=previous)
+        ):
+            cmds.delete(previous)
+        cmds.select(objects, replace=True)  # making the shader selected it
+        return new
+
+    @staticmethod
     def _cluster_objects_by_distance(objects, threshold):
         """Clusters objects by spatial proximity (flood-fill, threshold-linked).
 
@@ -189,7 +244,7 @@ class _AssignmentInternal:
         return False
 
     @classmethod
-    def _assign_mat(cls, objects, mat_name):
+    def _assign_mat(cls, objects, mat_name, create=True):
         """Body of :meth:`MatUtils.assign_mat`."""
         if not objects:
             raise ValueError("No objects provided to assign material.")
@@ -198,6 +253,8 @@ class _AssignmentInternal:
 
         if cmds.objExists(mat_name):
             mat = mat_name
+        elif not create:
+            raise ValueError(f"No material named '{mat_name}'.")
         else:
             preferred_type = cls._create_standard_shader(return_type="type")
             mat = cmds.shadingNode(preferred_type, name=mat_name, asShader=True)
@@ -229,15 +286,27 @@ class _AssignmentInternal:
         owners = set(cmds.ls(shape, long=True) or [])
         owners.update(cmds.listRelatives(shape, parent=True, fullPath=True) or [])
 
+        def may_own(member: str) -> bool:
+            # A set spells its members shortest-unique: a `|`-bounded tail of
+            # the long path, so this cheap test keeps every member that can be ours.
+            base = member.split(".f[")[0]
+            return any(o == base or o.endswith("|" + base) for o in owners)
+
         result: Dict[str, Optional[List[int]]] = {}
         for sg in set(cmds.listConnections(shape, type="shadingEngine") or []):
             whole = False
             faces: List[int] = []
-            for m in (
-                cmds.ls(cmds.sets(sg, q=True) or [], long=True, flatten=True) or []
-            ):
-                if m.split(".f[")[0] not in owners:
-                    continue  # a different object that shares this shading group
+            # This object's members FIRST, then flatten only those: a shading
+            # group's members span the scene (a different object that shares it),
+            # and flattening them all made one snapshot cost every face the group
+            # holds (measured: 0.68 s a call beside 500 split meshes).
+            near = [m for m in cmds.sets(sg, q=True) or [] if may_own(m)]
+            own = [
+                m
+                for m in ((cmds.ls(near, long=True) or []) if near else [])
+                if m.split(".f[")[0] in owners
+            ]
+            for m in (cmds.ls(own, long=True, flatten=True) or []) if own else []:
                 if ".f[" in m:
                     faces.append(int(m.split(".f[", 1)[1].rstrip("]")))
                 else:

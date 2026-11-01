@@ -2236,6 +2236,51 @@ class TestInstanceReplayOnTheFbxRoute(MayaTkTestCase):
                     f"{transform} has no shading after the rebuild",
                 )
 
+    def test_a_per_face_split_survives_the_rebuild_on_every_member(self):
+        """Linked duplicates whose mesh carries two materials split by faces.
+
+        The shading snapshot used to keep ONE shading group per member and re-assert
+        it whole-object, so a Wood + Metal set came back all one material (measured:
+        every member `{MetalSG: all}`). The member the carrier already shared keeps
+        its split through its own instance path, and the de-shared stray -- which
+        arrives unshaded -- takes the group's split, not one of its materials.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        sgs = {}
+        for name in ("Wood", "Metal"):
+            shader = cmds.shadingNode("lambert", asShader=True, name=f"{name}_mat")
+            sgs[name] = cmds.sets(
+                name=f"{name}SG", renderable=True, noSurfaceShader=True, empty=True
+            )
+            cmds.connectAttr(f"{shader}.outColor", f"{sgs[name]}.surfaceShader")
+        master = cmds.polyCube(name="inst_master")[0]
+        shape = cmds.listRelatives(master, shapes=True, fullPath=True)[0]
+        shared = cmds.group(empty=True, name="inst_shared")
+        cmds.parent(shape, shared, add=True, shape=True)
+        for transform in (master, shared):
+            cmds.sets(f"{transform}.f[0:2]", edit=True, forceElement=sgs["Wood"])
+            cmds.sets(f"{transform}.f[3:5]", edit=True, forceElement=sgs["Metal"])
+        stray = cmds.polyCube(name="inst_stray")[0]
+        stray_shape = cmds.listRelatives(stray, shapes=True, fullPath=True)[0]
+        cmds.sets(stray_shape, remove="initialShadingGroup")
+        path = self._manifest([["inst_master", "inst_shared", "inst_stray"]])
+
+        rebuilt = BlenderSceneImport()._apply_instance_manifest(
+            path, cmds.ls(type="transform") + cmds.ls(type="mesh")
+        )
+
+        self.assertEqual(rebuilt, 1)
+        split = {sgs["Wood"]: [0, 1, 2], sgs["Metal"]: [3, 4, 5]}
+        for transform in (master, shared, stray):
+            with self.subTest(transform=transform):
+                got = MatUtils.get_shading_assignments(transform)
+                self.assertEqual(
+                    {sg: faces and sorted(faces) for sg, faces in got.items()},
+                    split,
+                    f"{transform} lost its per-face split to the rebuild",
+                )
+
     def test_replaying_twice_changes_nothing_the_second_time(self):
         cmds.polyCube(name="inst_master")
         stray = cmds.polyCube(name="inst_stray")[0]
@@ -4233,9 +4278,9 @@ class TestConversionRoutes(unittest.TestCase):
         self.assertTrue(hasattr(BlenderSceneImport, "_apply_instance_manifest"))
         src = inspect.getsource(BlenderSceneImport._apply_instance_manifest)
         # Instance the master's shape, drop the follower's own geometry, then
-        # re-assign shading (instancing routes it through instObjGroups).
+        # re-assign shading per face (instancing routes it through instObjGroups).
         self.assertIn("add=True, shape=True", src)
-        self.assertIn("forceElement", src)
+        self.assertIn("apply_shading_assignments", src)
         self.assertIn(
             "_apply_instance_manifest",
             inspect.getsource(BlenderSceneImport.import_payload),
@@ -4333,6 +4378,51 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
             any("Chair_002" in m for m in members),
             f"per-instance shading lost: {members}",
         )
+
+    def test_replay_keeps_each_members_per_face_split(self):
+        """The USD export is flat, so every member arrives with its OWN shape and
+        every group rebuilds. Members split Wood + Metal by faces must keep the
+        split on their instance path, and one with a whole-object material of its
+        own must keep that -- the snapshot is per member, not one group per member.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        sgs = {}
+        for name in ("Wood", "Metal", "Red"):
+            shader = cmds.shadingNode("lambert", asShader=True, name=f"{name}_mat")
+            sgs[name] = cmds.sets(
+                name=f"{name}SG", renderable=True, noSurfaceShader=True, empty=True
+            )
+            cmds.connectAttr(f"{shader}.outColor", f"{sgs[name]}.surfaceShader")
+        for name in ("Chair_001", "Chair_002", "Chair_003"):
+            cmds.polyCube(name=name)
+        for name in ("Chair_001", "Chair_002"):
+            cmds.sets(f"{name}.f[0:2]", edit=True, forceElement=sgs["Wood"])
+            cmds.sets(f"{name}.f[3:5]", edit=True, forceElement=sgs["Metal"])
+        cmds.sets("Chair_003", edit=True, forceElement=sgs["Red"])
+
+        mpath = os.path.join(tempfile.gettempdir(), "mtk_strict_split.manifest.json")
+        self._manifest(mpath, [["Chair_001", "Chair_002", "Chair_003"]])
+        try:
+            nodes = cmds.ls("Chair_00*", long=True) + cmds.ls(
+                "Chair_00*", dag=True, shapes=True, long=True
+            )
+            rebuilt = BlenderSceneImport()._apply_instance_manifest(mpath, nodes)
+        finally:
+            os.remove(mpath)
+
+        self.assertEqual(rebuilt, 2)
+        expected = {
+            "Chair_001": {sgs["Wood"]: [0, 1, 2], sgs["Metal"]: [3, 4, 5]},
+            "Chair_002": {sgs["Wood"]: [0, 1, 2], sgs["Metal"]: [3, 4, 5]},
+            "Chair_003": {sgs["Red"]: None},
+        }
+        for transform, want in expected.items():
+            with self.subTest(transform=transform):
+                got = MatUtils.get_shading_assignments(transform)
+                self.assertEqual(
+                    {sg: faces and sorted(faces) for sg, faces in got.items()}, want
+                )
 
     def test_replay_raises_on_unmatched_member(self):
         cmds.polyCube(name="Chair_001")

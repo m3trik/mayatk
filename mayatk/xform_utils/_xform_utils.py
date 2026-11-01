@@ -104,10 +104,11 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         )
 
     @classmethod
+    @CoreUtils.selected
     @CoreUtils.undoable
     def drop_to_grid(
         cls,
-        objects,
+        objects=None,
         align="Mid",
         origin=False,
         center_pivot=False,
@@ -122,16 +123,20 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             center_pivot (bool): Center the object's pivot.
             freeze_transforms (bool): Reset the selected transform and all of its children down to the shape level.
         """
-        return cls._drop_to_grid(
-            objects=objects,
-            align=align,
-            origin=origin,
-            center_pivot=center_pivot,
-            freeze_transforms=freeze_transforms,
-        )
+        # objects None: the selection, which the helper planes disturb -- kept.
+        # Returns the transforms dropped; [] (nothing runs) with nothing selected.
+        with CoreUtils.preserved_selection():
+            return cls._drop_to_grid(
+                objects=objects,
+                align=align,
+                origin=origin,
+                center_pivot=center_pivot,
+                freeze_transforms=freeze_transforms,
+            )
 
     @classmethod
-    def match_scale(cls, a, b, scale=True, average=False):
+    @CoreUtils.undoable
+    def match_scale(cls, a=None, b=None, scale=True, average=False):
         """Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
 
         Parameters:
@@ -143,12 +148,15 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         Returns:
             (list) scale values as [x,y,z,x,y,z...]
         """
+        # a and b None: the ordered selection -- the first selected is scaled to
+        # the rest (twin of blendertk's, whose active object takes that role);
+        # [] with fewer than two selected. One undo step.
         return cls._match_scale(a=a, b=b, scale=scale, average=average)
 
     @staticmethod
     @CoreUtils.selected
     @CoreUtils.undoable
-    def scale_connected_edges(objects, scale_factor=1.1) -> None:
+    def scale_connected_edges(objects=None, scale_factor=1.1) -> int:
         """Scales each set of connected edges separately, either uniformly or non-uniformly.
 
         Parameters:
@@ -291,9 +299,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         ``scale``/``s``, or per-axis ``tx``…``sz``) restrict the freeze; with
         none of them the whole transform is frozen, matching Maya's
         ``makeIdentity -apply true``.  ``normal`` is a **modifier**, not a
-        channel: it maps to ``makeIdentity -normal`` (freeze vertex normals,
-        which matters for negatively-scaled geometry) and does not narrow the
-        channel set.
+        channel: it maps to ``makeIdentity -normal`` (1 locks every vertex
+        normal, 2 only under a non-uniform scale) and does not narrow the
+        channel set. Without it every normal keeps its lock state and, a
+        mirrored mesh's included, points the same way in world space.
 
         ``instance_strategy`` decides what happens to instanced objects:
 
@@ -671,6 +680,131 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         """Returns a list of supported pivot options."""
         return cls._get_pivot_options()
 
+    #: The pivots :meth:`move_to_target` aligns by, in the order a panel lists
+    #: them (it saves an index): :meth:`get_pivot_options` without ``"baked"``
+    #: (it differs from ``"object"`` only in orientation, which a move ignores)
+    #: and ``"world"`` (the origin, ignoring the target: Drop To Grid's job).
+    #: Twin of blendertk's ``MOVE_TO_PIVOTS``.
+    MOVE_TO_PIVOTS = (
+        "object",
+        "center",
+        "manip",
+        "xmin",
+        "xmax",
+        "ymin",
+        "ymax",
+        "zmin",
+        "zmax",
+    )
+
+    #: Align To modes -> the Maya command each runs on the selection (its snap and
+    #: align tools, and the option boxes of the point snaps), in menu order. Twin
+    #: of blendertk's ``ALIGN_MODES`` (align-to-active by axis there).
+    ALIGN_MODES = {
+        "Point to Point": "SnapPointToPointOptions",
+        "2 Points to 2 Points": "Snap2PointsTo2PointsOptions",
+        "3 Points to 3 Points": "Snap3PointsTo3PointsOptions",
+        "Align Objects": "performAlignObjects 1",
+        "Position Along Curve": "PositionAlongCurve",
+        "Align Tool": "SetAlignTool",
+        "Snap Together Tool": "SetSnapTogetherToolOptions",
+    }
+
+    @classmethod
+    @CoreUtils.undoable
+    def move_to_target(
+        cls, objects=None, pivot="center", all_to_last=True, match_scale=False
+    ) -> List[str]:
+        """Move To: the objects move onto their target by *pivot*.
+
+        *objects* (None: the selection, in pick order): with *all_to_last* every
+        object but the last moves onto the last; otherwise the first moves onto
+        the others' combined bounding box. *match_scale* first rescales the movers
+        uniformly to the target's bounding-box size. The movers end selected. Twin
+        of blendertk's ``XformUtils.move_to_target`` (the active object is the
+        target there). One undo step.
+
+        Parameters:
+            objects (str/list/None): Transforms, in order; None takes the selection.
+            pivot (str): One of :attr:`MOVE_TO_PIVOTS`.
+            all_to_last (bool): Everything to the last, or the first to the rest.
+            match_scale (bool): Rescale the movers to the target first.
+
+        Returns:
+            (list): The objects moved; ``[]`` (nothing runs) with fewer than two.
+        """
+        return cls._move_to_target(
+            objects=objects,
+            pivot=pivot,
+            all_to_last=all_to_last,
+            match_scale=match_scale,
+        )
+
+    @classmethod
+    def align_to(cls, mode, objects=None) -> List[str]:
+        """Align To: run the :attr:`ALIGN_MODES` command *mode* on *objects* (None:
+        the selection; others are selected first). A mode that opens a tool or an
+        option box leaves the rest to it. Twin of blendertk's ``XformUtils.align_to``.
+
+        Returns:
+            (list): The selection the command left.
+
+        Raises:
+            ValueError: An unknown *mode*.
+            RuntimeError: Maya refused it.
+        """
+        return cls._align_to(mode=mode, objects=objects)
+
+    @classmethod
+    def get_transform_snap(cls) -> dict:
+        """The move / scale / rotate tools' increment snapping:
+        ``{kind: {"enabled": bool, "increment": float}}``, *kind* ``"move"``,
+        ``"scale"`` or ``"rotate"`` (degrees). Twin of blendertk's
+        ``XformUtils.get_transform_snap`` (no move or scale increment there)."""
+        return cls._get_transform_snap()
+
+    @classmethod
+    def set_transform_snap(cls, kind, state=None, increment=None) -> dict:
+        """Set the *kind* tool's increment snapping (``"move"``, ``"scale"`` or
+        ``"rotate"``), in its manipulator and UV-editor contexts alike.
+
+        Parameters:
+            kind (str): ``"move"``, ``"scale"`` or ``"rotate"``.
+            state (bool/int/None): ``False``/``0`` off, ``True``/``1`` relative,
+                ``2`` absolute; None leaves it.
+            increment (float/None): The snap increment (rotate: degrees); None
+                leaves it.
+
+        Returns:
+            (dict): The kind's state after, as :meth:`get_transform_snap` reads it.
+
+        Raises:
+            ValueError: An unknown *kind*.
+        """
+        return cls._set_transform_snap(kind=kind, state=state, increment=increment)
+
+    @classmethod
+    def get_transform_constraint(cls) -> dict:
+        """The transform constraints: ``{"edge": bool, "surface": bool, "live":
+        bool}`` -- ``xformConstraint``'s type and whether a surface is live. Twin of
+        blendertk's ``XformUtils.get_transform_constraint`` (snap elements there)."""
+        return cls._get_transform_constraint()
+
+    @classmethod
+    def set_transform_constraint(cls, kind, state=True) -> dict:
+        """Turn a transform constraint on or off: *kind* ``"edge"`` or
+        ``"surface"`` (``xformConstraint``, one type at a time) or ``"live"`` (the
+        first selected transform made live; off, none is). Turning off a type that
+        is not the current one changes nothing.
+
+        Returns:
+            (dict): :meth:`get_transform_constraint` after.
+
+        Raises:
+            ValueError: An unknown *kind*.
+        """
+        return cls._set_transform_constraint(kind=kind, state=state)
+
     @classmethod
     def clear_manip_cache(cls):
         """Clears the cached manipulator pivot data."""
@@ -725,6 +859,48 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
+    def reset_pivot(
+        objects=None, position: bool = True, orientation: bool = True
+    ) -> list:
+        """Reset the manipulator pivot's position and/or orientation
+        (``manipPivotReset``): the offset and re-orientation a Customize Pivot
+        left on the selection's manipulator go.
+
+        Twin of blendertk's ``XformUtils.reset_pivot`` (the origin back on the
+        bounding-box center there). Maya's manipulator follows the selection, so
+        *objects* other than None are selected first.
+
+        Returns:
+            (list): The selection reset; ``[]`` with nothing selected (nothing runs).
+        """
+        return XformUtils._reset_pivot(objects, position, orientation)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def center_pivot(objects=None, mode: str = "object") -> list:
+        """Center the pivots -- Maya's Center Pivot -- after resetting the
+        manipulator pivot (``manipPivotReset 1 1``), so the manipulator follows.
+
+        Twin of blendertk's ``XformUtils.center_pivot`` (the object origin there).
+
+        Parameters:
+            objects (str/list/None): Objects or components; None takes the
+                selection.
+            mode (str): ``"object"``: each object's bounding-box center
+                (``xform -centerPivots``); ``"component"`` (or ``"median"``): the
+                given components' center (``-centerPivotsOnComponents``);
+                ``"world"``: the world origin.
+
+        Returns:
+            (list): The nodes centered; ``[]`` with nothing selected (nothing runs).
+
+        Raises:
+            ValueError: An unknown *mode*.
+        """
+        return XformUtils._center_pivot(objects, mode)
+
+    @staticmethod
+    @CoreUtils.undoable
     def world_align_pivot(
         objects=None,
         pivot_type: str = "object",
@@ -772,13 +948,22 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         stays put.  The scope forks the shared shapes for the duration and
         re-instances them in place afterwards; pass False for the raw
         (sibling-moving) behavior.
+
+        ``objects`` None takes the selection (components resolve to their
+        transforms). Returns the transforms baked; ``[]`` (nothing runs) when
+        there are none.
         """
-        objects = _XformUtilsInternal._resolve_transforms(objects)
+        objects = _XformUtilsInternal._resolve_transforms(
+            _XformUtilsInternal._selection_if_none(objects)
+        )
+        if not objects:
+            return []
 
         with contextlib.ExitStack() as stack:
             if preserve_instancing:
                 stack.enter_context(NodeUtils.preserve_instancing(objects))
             _XformUtilsInternal._bake_pivot(objects, position, orientation)
+        return objects
 
     @classmethod
     @CoreUtils.undoable
@@ -827,6 +1012,11 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 source). The reflection is taken in the operating space — world when
                 ``world_space`` is True (the usual mirrored-copy case), otherwise the object's
                 local space. Empty (the default) transfers the pivot unmirrored.
+
+        ``objects`` None takes the selected transforms, the first selected the
+        source. Returns the targets; ``[]``, after a warning and with nothing
+        changed, when fewer than two transforms are given (an empty selection
+        never reads as the whole scene).
         """
         return cls._transfer_pivot(
             objects=objects,
@@ -1055,6 +1245,20 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
             ValueError: *order* is not a rotate order.
         """
         return cls._set_rotate_order(objects=objects, order=order, preserve=preserve)
+
+    @classmethod
+    def get_rotate_order(cls, objects=None) -> dict:
+        """Each transform's rotate order, by long name: ``{node: "xyz"}``. What
+        :meth:`set_rotate_order` reports against (the order before and after a
+        change). Twin of blendertk's ``XformUtils.get_rotate_order``.
+
+        Parameters:
+            objects (str/obj/list): Transforms; ``None``: the selected ones.
+
+        Returns:
+            (dict): ``{long name: order}`` in input order; ``{}`` with none.
+        """
+        return cls._get_rotate_order(objects=objects)
 
 
 # -----------------------------------------------------------------------------

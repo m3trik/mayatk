@@ -5,7 +5,7 @@ try:
     import maya.cmds as cmds
 except Exception:
     cmds = None
-from mayatk.core_utils.preview import Preview, OperationError
+from mayatk.core_utils.preview import OperationError
 from mayatk.core_utils.components import Components
 
 
@@ -110,66 +110,8 @@ class Bevel:
             )
 
 
-class BevelSlots:
-    # polyBevel3 mutates the mesh in place with construction history, rewriting
-    # its edge topology. Without a geometry snapshot the preview's node-diff
-    # rollback leaves the bevel baked in (and drops the material), so each value
-    # change stacks another bevel; worse, the captured edge indices (e.g. e[5])
-    # shift after the first bevel, so the next refresh re-bevels *different*
-    # edges. PRESERVE_GEOMETRY makes Preview snapshot the owning mesh and restore
-    # it (topology + material) on rollback, so every refresh re-bevels the same
-    # captured edges from a pristine mesh. Mirrors Bridge / Cut On Axis.
-    PRESERVE_GEOMETRY = True
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.bevel
-
-        # Per-field reset buttons (uitk option-box): click resets a field to its
-        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
-        # Must precede connect_multi/Preview — wrapping reparents the widgets and
-        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
-        self.sb.add_reset_buttons(self.ui)
-
-        self.preview = Preview(
-            self, self.ui.chk000, self.ui.b000, message_func=self.sb.message_box
-        )
-
-        self.sb.connect_multi(self.ui, "s000-1", "valueChanged", self.preview.refresh)
-
-    def header_init(self, widget):
-        """Configure header help text."""
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Bevel",
-                body="Add chamfer bevels to selected polygon edges.",
-                steps=[
-                    "Select one or more polygon edges.",
-                    "Set <b>Width</b> (0–1 fraction) and <b>Segments</b> (1+).",
-                    "Toggle <b>Preview</b> to iterate non-destructively, "
-                    "or press <b>Bevel</b> to commit.",
-                ],
-                notes=[
-                    "Mitering, smoothing, and vertex-merge tolerance use the "
-                    "<i>Bevel.bevel</i> defaults (auto-fit, 30° smoothing). "
-                    "Edit the slot if you need finer control.",
-                ],
-            )
-        )
-
-    def perform_operation(self, objects, contract):
-        width = self.ui.s000.value()
-        segments = self.ui.s001.value()
-        Bevel.bevel(objects, width, segments)
-
-
 # -----------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("bevel", reload=True)
-    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

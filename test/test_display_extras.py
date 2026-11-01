@@ -69,6 +69,11 @@ class TestDefaultSwatchColors(QuickTestCase):
                 f"Color {(r, g, b)} is too saturated ({sat:.3f})",
             )
 
+    def test_swatch_presets_keep_the_legacy_store(self):
+        """The tentacle panel saves palettes where the library says; the legacy
+        "color_manager" key holds every palette saved before the rename."""
+        self.assertEqual(ColorId.SWATCH_PRESET_DIR, "mayatk/color_manager")
+
 
 class TestColorUtilsMaterial(MayaTkTestCase):
     """ColorUtils.assign_material — creates lambert + assigns."""

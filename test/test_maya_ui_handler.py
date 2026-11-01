@@ -74,14 +74,14 @@ class TestMayaUiHandlerLogLinkRegistration(unittest.TestCase):
     """
 
     def test_dispatch_log_link_registers_with_uitk(self):
-        from uitk.bridge.slots import _BridgeSlotsInternal, BridgeSlotsBase
+        from uitk.bridge.slots import _ParamPanelSlotsInternal, ParamPanelSlots
         from mayatk.ui_utils._ui_utils import UiUtils
 
-        registry = _BridgeSlotsInternal._LOG_LINK_HANDLERS
+        registry = _ParamPanelSlotsInternal._LOG_LINK_HANDLERS
         saved = list(registry)
         try:
             registry.clear()
-            BridgeSlotsBase.register_log_link_handler(UiUtils.dispatch_log_link)
+            ParamPanelSlots.register_log_link_handler(UiUtils.dispatch_log_link)
             self.assertIn(UiUtils.dispatch_log_link, registry)
         finally:
             registry[:] = saved

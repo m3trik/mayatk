@@ -1248,7 +1248,7 @@ class TestApplyBindingsResilience(QuickTestCase):
 class TestApplyBindingsIdempotent(QuickTestCase):
     """apply_bindings must be a no-op — and must NOT flush prefs — when the live
     hotkey registry already matches the target preset. The launch-time re-apply
-    (``apply_saved_macros`` from TclMaya) otherwise recreated every
+    (``apply_saved_macros`` from tentacle's Tcl.build) otherwise recreated every
     runtimeCommand and forced ``savePrefs(hotkeys=True)`` on every start, so the
     Script Editor logged "Saving runtime commands / Saving hotkeys / Saving
     named commands" each launch even though nothing had changed."""

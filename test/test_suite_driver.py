@@ -380,6 +380,12 @@ class _WorkspaceCmds:
         self.root = root
         self.opened = []
 
+    @staticmethod
+    def about(**kwargs):
+        """A batch session: ``EnvUtils.set_current_workspace`` opens a root with
+        ``workspace -openWorkspace`` there (``setProject`` is the GUI's)."""
+        return bool(kwargs.get("batch"))
+
     def workspace(self, *args, **kwargs):
         if kwargs.get("query") or kwargs.get("q"):
             return self.root
@@ -919,8 +925,10 @@ print(json.dumps(report))
             mayatk=str(mono / "mayatk"),
             driver=str(TEST_DIR / "_suite_driver.py"),
         )
+        from base_test import child_python
+
         proc = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
+            [child_python(), "-c", code], capture_output=True, text=True, timeout=300
         )
         self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
         report = json.loads(proc.stdout.splitlines()[-1])

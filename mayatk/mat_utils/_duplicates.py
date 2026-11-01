@@ -25,6 +25,36 @@ logger = logging.getLogger(__name__)
 class _DuplicatesInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
+    @classmethod
+    def _find_duplicate_materials(cls, materials):
+        """Body of :meth:`MatUtils.find_duplicate_materials`."""
+        if materials is not None:
+            materials = [str(m) for m in materials if m]
+            if not materials:
+                return {}
+        found = cls._find_materials_with_duplicate_textures(
+            materials=materials, strict=False, verify=True
+        )
+        return {str(dup): str(kept) for kept, dups in found.items() for dup in dups}
+
+    @classmethod
+    def _merge_duplicate_materials(cls, pairs):
+        """Body of :meth:`MatUtils.merge_duplicate_materials`.
+
+        The merge takes the MATERIALS to scan, every one in the pairs: handed
+        only the kept ones, it found nothing duplicated and merged nothing."""
+        pairs = {str(dup): str(kept) for dup, kept in dict(pairs or {}).items()}
+        present = [dup for dup in pairs if cmds.objExists(dup)]
+        if not present:
+            return 0
+        cls._reassign_duplicate_materials(
+            materials=sorted(set(pairs) | set(pairs.values())),
+            delete=True,
+            strict=False,
+            verify=True,
+        )
+        return sum(1 for dup in present if not cmds.objExists(dup))
+
     # UV-placement attrs that change how a texture reads on the surface —
     # the axes the duplicate-material fingerprint is blind to.
     _PLACE2D_SIG_ATTRS = (

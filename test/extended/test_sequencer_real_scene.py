@@ -494,13 +494,13 @@ class TestWidgetPopulation(unittest.TestCase):
             self.assertAlmostEqual(rh[0], shot.start, places=1)
             self.assertAlmostEqual(rh[1], shot.end, places=1)
 
-    def test_frame_shot_no_crash(self):
-        """frame_shot does not crash after population."""
+    def test_frame_range_no_crash(self):
+        """frame_range does not crash after population."""
         for shot in self.store.shots:
             self.widget.clear()
             self._populate_shot(shot.shot_id)
             _process_events()
-            self.widget.frame_shot()
+            self.widget.frame_range()
             _process_events()
 
     def test_clear_and_repopulate(self):

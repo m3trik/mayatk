@@ -118,6 +118,24 @@ class BakeSet:
         return cmds.ls(members, long=True) or []
 
     @classmethod
+    def member_names(cls) -> List[str]:
+        """The members' short names, for display (a live tooltip, a report)."""
+        return [member.rsplit("|", 1)[-1] for member in cls.members()]
+
+    @classmethod
+    def select(cls) -> List[str]:
+        """Select the set's members, hidden ones too; returns the members selected.
+
+        Leaves the selection alone when the scene has no set. blendertk's mirror
+        leaves out what its view layer cannot select, so a caller reports
+        ``len(members()) - len(select())`` as the members it could not select.
+        """
+        members = cls.members()
+        if members:
+            cmds.select(members, replace=True)
+        return members
+
+    @classmethod
     def meshes(cls) -> List[str]:
         """The mesh transforms the set covers -- a group member counts its descendants.
 

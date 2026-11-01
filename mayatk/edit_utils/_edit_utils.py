@@ -27,6 +27,25 @@ from mayatk.edit_utils.naming._naming import Naming
 class _EditUtilsInternal(object):
     """Internal helpers for EditUtils."""
 
+    @staticmethod
+    def _mesh_command(objects, command: str, whole_as_faces: bool = False) -> List[str]:
+        """Run the MEL menu command *command* (it acts on the selection) on the
+        meshes and poly faces of *objects*, selected first: what the panel ops
+        that keep Maya's own option-box settings share. *whole_as_faces* selects
+        a whole mesh as its faces, for a command that refuses a transform.
+        Returns the mesh transforms; ``[]`` (nothing runs) when *objects* holds
+        none."""
+        targets = _EditUtilsInternal._mesh_targets(objects, "f")
+        if not targets:
+            return []
+        members = []
+        for obj, faces in targets.items():
+            whole = [f"{obj}.f[*]"] if whole_as_faces else [obj]
+            members.extend(faces or whole)
+        cmds.select(members, replace=True)
+        mel.eval(command)
+        return list(targets)
+
     # polyListComponentConversion-able poly components: vtx, edge, face, uv, vtxFace.
     _POLY_COMPONENT_MASKS = (31, 32, 34, 35, 70)
 
@@ -681,6 +700,75 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
     conform_to_surface = staticmethod(Snap.snap_to_surface)
 
     @staticmethod
+    def get_symmetry() -> dict:
+        """Maya's modeling symmetry (``symmetricModelling``): what tentacle's
+        symmetry panel mirrors. Twin of blendertk's ``EditUtils.get_symmetry``
+        (the active mesh's mirror flags there).
+
+        Returns:
+            dict: ``enabled`` (bool); ``axes`` (the mirrored axis, ``[]`` when off
+                or topological: Maya mirrors one axis at a time); ``space``
+                (``"world"``, ``"object"`` or ``"topo"``); ``by_axis`` (False
+                under topological symmetry, which a seam edge seeds and no axis
+                governs).
+        """
+        enabled = bool(cmds.symmetricModelling(query=True, symmetry=True))
+        space = cmds.symmetricModelling(query=True, about=True) or "world"
+        by_axis = space != "topo"
+        axis = (cmds.symmetricModelling(query=True, axis=True) or "x").lower()
+        return {
+            "enabled": enabled,
+            "axes": [axis] if enabled and by_axis else [],
+            "space": space,
+            "by_axis": by_axis,
+        }
+
+    @staticmethod
+    @CoreUtils.undoable
+    def set_symmetry(
+        axis: Optional[str] = None, state: bool = True, space: Optional[str] = None
+    ) -> dict:
+        """Set Maya's modeling symmetry: an axis on or off, and/or its space.
+
+        Twin of blendertk's ``EditUtils.set_symmetry`` (the selected meshes'
+        mirror flags there). Maya mirrors one axis at a time, scene-wide: turning
+        an axis on replaces the current one, and turning off an axis that is not
+        the current one changes nothing.
+
+        Parameters:
+            axis (str, optional): ``"x"``, ``"y"`` or ``"z"``.
+            state (bool): On or off, for *axis*.
+            space (str, optional): ``"world"``, ``"object"`` or ``"topo"``.
+                Topological symmetry is seeded by a selected seam edge, and turns
+                symmetry on.
+
+        Returns:
+            dict: The resulting :meth:`get_symmetry`.
+
+        Raises:
+            ValueError: ``"topo"`` with no edge selected, or Maya refusing it.
+        """
+        if space == "topo":
+            if not cmds.filterExpand(selectionMask=32):
+                raise ValueError("Select an edge first to seed topological symmetry.")
+            try:
+                cmds.symmetricModelling(edit=True, symmetry=True, about="topo")
+            except RuntimeError as error:
+                raise ValueError(
+                    "Topological symmetry could not be activated: "
+                    "select a seam edge before activation."
+                ) from error
+        elif space is not None:
+            cmds.symmetricModelling(edit=True, about=space)
+        if axis is not None:
+            axis = axis.lower()
+            if state:
+                cmds.symmetricModelling(edit=True, symmetry=True, axis=axis)
+            elif (cmds.symmetricModelling(query=True, axis=True) or "").lower() == axis:
+                cmds.symmetricModelling(edit=True, symmetry=False)
+        return EditUtils.get_symmetry()
+
+    @staticmethod
     @CoreUtils.undoable
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation
@@ -874,8 +962,10 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         center_pivots: bool = True,
         rename: bool = False,
         uninstance: bool = False,
+        select: bool = False,
     ) -> List:
-        """Separate meshes into individual objects.
+        """Separate meshes into individual objects. ``select``: select the
+        results (the separated meshes, or the groups) after.
 
         Args:
             objects: Mesh transforms to process. Defaults to selection.
@@ -1002,8 +1092,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             separated_objects.extend(current_results)
 
         if group_by_material and separated_objects:
-            return EditUtils._group_results_by_material(results_by_source)
-
+            separated_objects = EditUtils._group_results_by_material(results_by_source)
+        if select and separated_objects:
+            cmds.select(separated_objects, replace=True)
         return separated_objects
 
     @staticmethod
@@ -1065,15 +1156,35 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         return groups
 
     @staticmethod
-    def merge_vertices(objects, tolerance=0.001, selected_only=False):
-        """Merge Vertices on the given objects.
+    @CoreUtils.undoable
+    def merge_vertices(objects=None, tolerance=0.001, selected_only=None):
+        """Merge the vertices within *tolerance*. One undo step. Twin of
+        blendertk's ``EditUtils.merge_vertices``.
 
         Parameters:
-            objects (str/obj/list): The object(s) to merge vertices on.
-            tolerance (float) = The maximum merge distance.
-            selected_only (bool): Merge only the currently selected components
-                (operates on the live selection; ``objects`` is not used).
+            objects (str/obj/list, optional): Meshes, every vertex of which
+                merges, or components. ``None``: the selection.
+            tolerance (float): The maximum merge distance.
+            selected_only (bool, optional): Merge only the selected components
+                (selected vertices merge; selected edges and faces collapse to
+                their center). ``None``: when *objects* holds components.
+
+        Returns:
+            (list/None): ``[]`` with nothing to merge; otherwise None.
         """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        if not nodes:
+            return []
+        components = cmds.filterExpand(nodes, selectionMask=(31, 32, 34)) or []
+        if selected_only is None:
+            selected_only = bool(components)
+        if selected_only and objects is not None and components:
+            cmds.select(components, replace=True)
+        objects = nodes
         if selected_only:  # Merge only selected components (selection-based;
             # runs once — this used to sit inside the per-object loop and
             # re-merged the same selection N times).
@@ -1105,6 +1216,131 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
 
         cmds.select(clear=True)
         cmds.select(objects_str)
+
+    #: Boolean operations -> Maya's interactive boolean tool for each.
+    _BOOLEAN_TOOLS = {
+        "union": "PolygonBooleanUnion",
+        "difference": "PolygonBooleanDifference",
+        "intersection": "PolygonBooleanIntersection",
+    }
+
+    @staticmethod
+    @CoreUtils.undoable
+    def boolean_objects(objects=None, operation="difference", interactive=False):
+        """Boolean meshes: the first is the base, the rest its operands. One
+        undo step. Twin of blendertk's ``EditUtils.boolean_objects`` (Boolean
+        modifiers there).
+
+        Parameters:
+            objects (list, optional): Meshes, base first. ``None``: the selection.
+            operation (str): ``"union"``, ``"difference"`` or ``"intersection"``.
+            interactive (bool): Maya's interactive boolean tool, which keeps the
+                operation editable, instead of the baked ``polyCBoolOp``.
+
+        Returns:
+            list: The result; ``[]`` with fewer than two meshes.
+
+        Raises:
+            ValueError: An unknown *operation*.
+        """
+        tool = EditUtils._BOOLEAN_TOOLS.get(operation)
+        if tool is None:
+            raise ValueError(
+                f"Unknown boolean operation {operation!r}: "
+                f"use one of {sorted(EditUtils._BOOLEAN_TOOLS)}."
+            )
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        nodes = cmds.ls(nodes, objectsOnly=True, flatten=True) or [] if nodes else []
+        if len(nodes) < 2:
+            return []
+        if interactive:
+            cmds.select(nodes, replace=True)
+            mel.eval(tool)
+            return cmds.ls(selection=True) or nodes
+        from mayatk.edit_utils.macros._macros import Macros
+
+        result = Macros.m_boolean(nodes, operation=operation)
+        return [result] if result else []
+
+    @staticmethod
+    @CoreUtils.undoable
+    def wedge(objects=None, angle=None, divisions=None):
+        """Wedge the selected faces about a selected edge of theirs: they sweep
+        *angle* degrees around it in *divisions* steps (Maya's Wedge). One undo
+        step. Twin of blendertk's ``EditUtils.wedge``.
+
+        Parameters:
+            objects: The faces plus the hinge edge(s); ``None``: the selection.
+            angle (float, optional): The sweep, in degrees; ``None``: Maya's
+                Wedge setting.
+            divisions (int, optional): The steps; ``None``: Maya's Wedge setting.
+
+        Returns:
+            (int/list): 1 when wedged, 0 when Maya refused the selection (it
+                needs faces plus one of their edges); ``[]`` with nothing
+                selected.
+        """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        if not nodes:
+            return []
+        if objects is not None:
+            cmds.select(nodes, replace=True)
+        settings = {}
+        if angle is not None:
+            settings["polyWedgeFaceAngle"] = float(angle)
+        if divisions is not None:
+            settings["polyWedgeFaceDivisions"] = int(divisions)
+        with CoreUtils.temp_option_vars(settings):
+            try:
+                mel.eval("WedgePolygon")
+            except RuntimeError:
+                return 0
+        return 1
+
+    @staticmethod
+    @CoreUtils.undoable
+    def select_edges_by_angle(objects=None, low_angle=0.0, high_angle=180.0):
+        """Select the edges whose two faces meet at an angle within
+        ``[low_angle, high_angle]`` degrees, in edge component mode. One undo
+        step. Twin of blendertk's ``EditUtils.select_edges_by_angle``.
+
+        Parameters:
+            objects: Meshes; ``None``: the selection (a component stands for its
+                object).
+
+        Returns:
+            (int/list): The number of edges selected; ``[]`` with nothing
+                selected.
+        """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        nodes = cmds.ls(nodes, objectsOnly=True) or [] if nodes else []
+        if not nodes:
+            return []
+        edges = (
+            Components.get_edges_by_normal_angle(
+                nodes, low_angle=low_angle, high_angle=high_angle
+            )
+            or []
+        )
+        if edges:
+            cmds.select(edges, replace=True)
+        else:
+            cmds.select(clear=True)
+        cmds.selectMode(component=True)
+        cmds.selectType(edge=True)
+        return len(cmds.ls(edges, flatten=True) or []) if edges else 0
 
     @staticmethod
     @CoreUtils.undoable
@@ -1310,6 +1546,103 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         else:
             mel.eval("DetachComponent")
             return None
+
+    #: The keywords each Decimate algorithm honors -- ``"reduce"``
+    #: (:meth:`decimate`) and ``"planar"`` (:meth:`dissolve_coplanar`): what a
+    #: panel offers per algorithm. Twin of blendertk's ``DECIMATE_OPTIONS``.
+    #: Maya's planar dissolve always keeps open borders and dissolves across
+    #: hard edges and UV borders alike.
+    DECIMATE_OPTIONS = {
+        "reduce": (
+            "percentage",
+            "preserve_borders",
+            "preserve_hard_edges",
+            "preserve_uv_borders",
+            "preserve_quads",
+            "symmetry",
+        ),
+        "planar": ("angle_tolerance",),
+    }
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def quadrangulate(objects=None) -> List[str]:
+        """Quadrangulate the meshes or faces of *objects* (None: the selection):
+        Maya's Quadrangulate (``performPolyQuadrangulate``), with the settings its
+        option box last applied. Twin of blendertk's ``EditUtils.quadrangulate``.
+        One undo step.
+
+        Returns:
+            (list): The mesh transforms; ``[]`` (nothing runs) with no mesh.
+        """
+        return _EditUtilsInternal._mesh_command(objects, "performPolyQuadrangulate 0")
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def triangulate(objects=None) -> List[str]:
+        """Triangulate the meshes or faces of *objects* (None: the selection)
+        (``polyTriangulate``). Twin of blendertk's ``EditUtils.triangulate``.
+        One undo step.
+
+        Returns:
+            (list): The mesh transforms; ``[]`` (nothing runs) with no mesh.
+        """
+        return _EditUtilsInternal._mesh_command(objects, "polyTriangulate")
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def subdivide_mesh(objects=None) -> List[str]:
+        """Add Divisions to the meshes or faces of *objects* (None: the selection):
+        Maya's Add Divisions (``SubdividePolygon``), with the settings its option
+        box last applied. Twin of blendertk's ``EditUtils.subdivide_mesh`` (one
+        cut by default there). One undo step.
+
+        Returns:
+            (list): The mesh transforms; ``[]`` (nothing runs) with no mesh.
+        """
+        # performPolySubdivide errors on a selected transform (its MEL IF test)
+        # and changes nothing, so a whole mesh goes as its faces.
+        return _EditUtilsInternal._mesh_command(
+            objects, "SubdividePolygon", whole_as_faces=True
+        )
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def apply_subdivision(objects=None) -> List[str]:
+        """Convert the smooth mesh preview of the meshes in *objects* (None: the
+        selection) into polygons: Maya's ``performSmoothMeshPreviewToPolygon`` (a
+        ``polySmooth`` at each mesh's preview level, the preview switched off).
+        Twin of blendertk's ``EditUtils.apply_subdivision`` (it applies the
+        Subdivision Surface modifier). One undo step; the selection is kept.
+
+        Returns:
+            (list): The mesh transforms converted; ``[]`` when none shows a
+                smooth preview.
+        """
+        meshes = (
+            cmds.filterExpand(
+                CoreUtils.as_strings(objects),
+                expand=True,
+                fullPath=True,
+                selectionMask=12,
+            )
+            or []
+        )
+        previewed = [m for m in meshes if cmds.getAttr(f"{m}.displaySmoothMesh")]
+        if not previewed:
+            return []
+        with CoreUtils.preserved_selection():
+            cmds.select(previewed, replace=True)
+            mel.eval("performSmoothMeshPreviewToPolygon")
+        # filterExpand names the shapes; the contract is their transforms.
+        return [
+            (cmds.listRelatives(m, parent=True, fullPath=True) or [m])[0]
+            for m in previewed
+        ]
 
     @staticmethod
     @CoreUtils.undoable
@@ -1642,15 +1975,9 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         Returns:
             list[float]: One signed offset per cut, in index order.
         """
-        if amount <= 0:
-            return []
-        curve_fn = ptk.ProgressionCurves.get_curve_function(distribution)
-        offsets = []
-        for i in range(amount):
-            t = i / (amount - 1) if amount > 1 else 0.5
-            f = curve_fn(t, weight_curve, weight_bias)
-            offsets.append((f - 0.5) * span)
-        return offsets
+        return ptk.ProgressionCurves.centered_offsets(
+            amount, span, distribution, weight_bias, weight_curve
+        )
 
     @classmethod
     @CoreUtils.undoable
@@ -1935,6 +2262,10 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                     mergeMode=1,
                     axis_frame=frame or "world",
                 )
+
+    #: The ``mergeMode`` values :meth:`mirror` does: -1 OFF (separate), 0
+    #: combine, 1 merge border edges, 2 extrude (bridge the seam).
+    MIRROR_MERGE_MODES = (-1, 0, 1, 2)
 
     @classmethod
     @CoreUtils.undoable
@@ -2967,6 +3298,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         return inverted
 
     @staticmethod
+    @CoreUtils.undoable
     def delete_selected():
         """Delete selected components and/or objects in Autodesk Maya.
 
@@ -3029,6 +3361,65 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             cmds.delete(other_components)
         if whole_objects:
             cmds.delete(whole_objects)
+
+    #: The Convert menu (:meth:`get_conversion_types` / :meth:`convert_objects`):
+    #: label -> the MEL that converts the selection, with its saved options.
+    _CONVERSIONS = {
+        "NURBS to Polygons": "performnurbsToPoly 0;",
+        "NURBS to Subdiv": "performSubdivCreate 0;",
+        "Polygons to Subdiv": "performSubdivCreate 0;",
+        "Smooth Mesh Preview to Polygons": "performSmoothMeshPreviewToPolygon;",
+        "Polygon Edges to Curve": "polyToCurve -form 2 -degree 3 -conformToSmoothMeshPreview 1;",
+        "Type to Curves": "convertTypeCapsToCurves;",
+        "Subdiv to Polygons": "performSubdivTessellate  false;",
+        "Subdiv to NURBS": "performSubdToNurbs 0;",
+        "NURBS Curve to Bezier": "nurbsCurveToBezier;",
+        "Bezier Curve to NURBS": "bezierCurveToNurbs;",
+        "Paint Effects to NURBS": "performPaintEffectsToNurbs  false;",
+        "Paint Effects to Curves": "performPaintEffectsToCurve  false;",
+        "Texture to Geometry": "performTextureToGeom 0;",
+        "Displacement to Polygons": "displacementToPoly;",
+        "Displacement to Poly w/ History": "setupAnimatedDisplacement;",
+        "Fluid to Polygons": "fluidToPoly;",
+        "nParticle to Polygons": "particleToPoly;",
+        "Instance to Object": "convertInstanceToObject;",
+        "Geometry to Bounding Box": "performGeomToBBox 0;",
+    }
+
+    @classmethod
+    def get_conversion_types(cls) -> Dict[str, str]:
+        """The Convert menu: ``{label: MEL}`` in menu order, each a conversion
+        :meth:`convert_objects` runs. Twin of blendertk's
+        ``EditUtils.get_conversion_types`` (Blender's own conversions there). A
+        copy: editing it changes nothing."""
+        return dict(cls._CONVERSIONS)
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def convert_objects(cls, objects, conversion: str) -> List[str]:
+        """Convert *objects* (``None``: the selection) by a :meth:`get_conversion_types`
+        label, as Maya's Modify > Convert menu does. Twin of blendertk's
+        ``EditUtils.convert_objects``.
+
+        Returns:
+            List[str]: The selection the conversion left (what it made); ``[]``
+                with nothing selected.
+
+        Raises:
+            ValueError: An unknown *conversion*.
+            RuntimeError: Maya refused it.
+        """
+        command = cls._CONVERSIONS.get(conversion)
+        if command is None:
+            raise ValueError(
+                f"Unknown conversion '{conversion}': {', '.join(cls._CONVERSIONS)}."
+            )
+        nodes = [str(o) for o in CoreUtils.as_strings(objects)]
+        if set(nodes) != set(cmds.ls(selection=True) or []):
+            cmds.select(nodes, replace=True)
+        mel.eval(command)
+        return cmds.ls(selection=True) or []
 
     @staticmethod
     @DisplayUtils.add_to_isolation

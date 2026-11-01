@@ -61,7 +61,7 @@ class _CurveOptimizeInternal:
             return None  # branch: "" is a falsy config value, not a bad level
         if not isinstance(level, str):  # True, or a legacy truthy bool flag
             return cls.DEFAULT_OPTIMIZE_LEVEL
-        key = cls._resolve_retired_level(level.strip().lower())
+        key = level.strip().lower()
         if key not in cls.OPTIMIZE_LEVELS:
             raise ValueError(
                 f"Unknown optimize level {level!r}; expected one of "
@@ -622,6 +622,8 @@ class _CurveOptimizeInternal:
         if extremes:
             value_tolerance = 0.001
 
+        if objects is None:  # the whole scene
+            objects = cmds.ls(type="transform") or []
         # Convert the input objects into curves once (avoid 3 redundant calls)
         if isinstance(objects, str):
             objects = [objects]

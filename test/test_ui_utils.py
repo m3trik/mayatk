@@ -66,6 +66,31 @@ class TestUIUtils(MayaTkTestCase):
         self.assertEqual(cmds.ls(selection=True), [cube])
 
 
+class TestNodeIconsAudio(MayaTkTestCase):
+    """``NodeIcons.audio_icon``: an audio row's icon, read from the ``audio``
+    node type alone (the clip's node may not exist yet). The shared Shot
+    Manifest panel asks either host for it by this one name."""
+
+    def test_it_is_the_audio_node_types_resource_icon(self):
+        from qtpy import QtGui
+
+        from mayatk.ui_utils.node_icons import NodeIcons
+
+        with mock.patch.object(QtGui, "QIcon") as icon:
+            icon.return_value.isNull.return_value = False
+            self.assertIs(NodeIcons.audio_icon(), icon.return_value)
+        icon.assert_called_once_with(":/out_audio.png")
+
+    def test_a_missing_resource_reads_none(self):
+        from qtpy import QtGui
+
+        from mayatk.ui_utils.node_icons import NodeIcons
+
+        with mock.patch.object(QtGui, "QIcon") as icon:
+            icon.return_value.isNull.return_value = True
+            self.assertIsNone(NodeIcons.audio_icon())
+
+
 class TestEditorRegistry(MayaTkTestCase):
     """UiUtils.get_editor_types / open_editor -- the mirror of blendertk's pair.
 
@@ -133,6 +158,261 @@ class TestLogLinks(MayaTkTestCase):
         self.assertTrue(handled)
         self.assertEqual(sorted(cmds.ls(selection=True, long=True)), sorted([a, b]))
         self.assertIn("|gone", logger.warning.call_args.args[0])
+
+
+class TestToolRegistry(MayaTkTestCase):
+    """UiUtils.get_tool_types / set_tool / current_tool -- the mirror of
+    blendertk's trio, what a panel shared by both hosts calls to pick a tool.
+
+    ``mel.eval`` is stubbed where it would activate a real tool (GUI-only); what
+    is pinned here is the lookup and the raise-on-refusal contract.
+    """
+
+    @skipIfBatch("tool runtime commands and contexts are registered by the GUI")
+    def test_every_tool_maps_to_a_context_or_a_command(self):
+        for name, command in mtk.UiUtils.get_tool_types().items():
+            if command.startswith("setToolTo "):
+                ok = cmds.contextInfo(command.split(" ", 1)[1], exists=True)
+            else:
+                ok = cmds.runTimeCommand(command, exists=True) or mel.eval(
+                    f'exists "{command}"'
+                )
+            self.assertTrue(ok, f"{name}: {command} is no context or command")
+
+    def test_a_copy_is_returned(self):
+        mtk.UiUtils.get_tool_types()["Multi-Cut"] = "nope"
+        self.assertEqual(mtk.UiUtils.get_tool_types()["Multi-Cut"], "dR_multiCutTool")
+
+    def test_set_runs_the_mapped_mel_a_context_or_a_raw_command(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev, mock.patch.object(
+            _ui_utils.cmds,
+            "contextInfo",
+            side_effect=lambda name, **_: name == "lassoSelectContext",
+        ):
+            self.assertEqual(mtk.UiUtils.set_tool("Multi-Cut"), "dR_multiCutTool")
+            self.assertEqual(
+                mtk.UiUtils.set_tool("Marquee Select"), "setToolTo selectSuperContext"
+            )
+            self.assertEqual(
+                mtk.UiUtils.set_tool("lassoSelectContext"),
+                "setToolTo lassoSelectContext",
+            )
+            self.assertEqual(mtk.UiUtils.set_tool("MergeVertexTool"), "MergeVertexTool")
+        self.assertEqual(
+            [c.args[0] for c in ev.call_args_list],
+            [
+                "dR_multiCutTool",
+                "setToolTo selectSuperContext",
+                "setToolTo lassoSelectContext",
+                "MergeVertexTool",
+            ],
+        )
+
+    def test_a_refused_tool_raises(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.mel, "eval", side_effect=RuntimeError("Cannot find procedure")
+        ):
+            with self.assertRaises(RuntimeError):
+                mtk.UiUtils.set_tool("Quad Draw")
+
+    def test_current_tool_names_a_registered_context(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.cmds, "currentCtx", return_value="lassoSelectContext"
+        ):
+            self.assertEqual(mtk.UiUtils.current_tool(), "Lasso Select")
+        with mock.patch.object(
+            _ui_utils.cmds, "currentCtx", return_value="moveSuperContext"
+        ):
+            self.assertEqual(mtk.UiUtils.current_tool(), "moveSuperContext")
+
+    @skipIfBatch("tool contexts need a GUI session")
+    def test_a_select_style_round_trips(self):
+        prior = cmds.currentCtx()
+        try:
+            mtk.UiUtils.set_tool("Lasso Select")
+            self.assertEqual(mtk.UiUtils.current_tool(), "Lasso Select")
+        finally:
+            cmds.setToolTo(prior)
+
+
+class TestAnnotateAndPencil(MayaTkTestCase):
+    """UiUtils.annotate / open_pencil: Maya's own annotation and pencil, what
+    tentacle's composed utilities panel calls. ``mel.eval`` is stubbed: the real
+    commands open a modal prompt (annotate) and a toolbar (Blue Pencil)."""
+
+    def test_annotate_runs_create_annotation_and_arms_no_tool(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev:
+            self.assertIsNone(mtk.UiUtils.annotate())
+        ev.assert_called_once_with("CreateAnnotateNode")
+
+    def test_open_pencil_runs_blue_pencil(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev:
+            self.assertEqual(mtk.UiUtils.open_pencil(), "OpenBluePencil")
+        ev.assert_called_once_with("OpenBluePencil")
+
+    def test_a_refusal_raises(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.mel, "eval", side_effect=RuntimeError("Cannot find procedure")
+        ):
+            with self.assertRaises(RuntimeError):
+                mtk.UiUtils.open_pencil()
+
+    @skipIfBatch("the runtime commands are registered by the GUI")
+    def test_both_runtime_commands_exist(self):
+        for command in ("CreateAnnotateNode", "OpenBluePencil"):
+            self.assertTrue(cmds.runTimeCommand(command, exists=True), command)
+
+
+class TestEditorCategoriesAndToggles(MayaTkTestCase):
+    """``get_editor_categories`` / ``toggle_editor`` and the editor names
+    tentacle's shared Editors panel opens -- the mirror of blendertk's.
+
+    ``mel.eval`` is stubbed where it would open or toggle real UI (GUI-only);
+    what is pinned is the registry and the toggle rule.
+    """
+
+    def test_every_listed_editor_opens(self):
+        categories = mtk.UiUtils.get_editor_categories()
+        self.assertEqual(
+            list(categories),
+            [
+                "General Editors",
+                "Modeling Editors",
+                "Animation Editors",
+                "Rendering Editors",
+                "Relationship Editors",
+            ],
+        )
+        listed = [name for names in categories.values() for name in names]
+        self.assertEqual(len(listed), 59)
+        self.assertEqual(set(listed) - set(mtk.UiUtils.get_editor_types()), set())
+
+    def test_the_panels_editor_names_open_their_windows(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval"):
+            for name, command in (
+                ("Attribute Editor", "AttributeEditor"),
+                ("Outliner", "OutlinerWindow"),
+                ("Tool Settings", "ToolSettingsWindow"),
+                ("Layer Editor", "OpenLayerEditor"),
+                ("Channel Box", "OpenChannelBox"),
+                ("Node Editor", "NodeEditorWindow"),
+                ("Hypergraph: Hierarchy", "HypergraphHierarchyWindow"),
+            ):
+                self.assertEqual(mtk.UiUtils.open_editor(name), command)
+
+    @staticmethod
+    def _toggle(editor, visible):
+        """(shown afterwards, the toggle commands run) with *visible* showing."""
+        from mayatk.ui_utils import _ui_utils
+
+        ran = []
+
+        def fake(command):
+            if command.startswith("isUIComponentVisible"):
+                return command.split('"')[1] in visible
+            ran.append(command)
+            return None
+
+        with mock.patch.object(_ui_utils.mel, "eval", side_effect=fake):
+            shown = mtk.UiUtils.toggle_editor(editor)
+        return shown, ran
+
+    def test_the_timeline_hides_what_shows_and_shows_both_when_hidden(self):
+        both = ["ToggleTimeSlider", "ToggleRangeSlider"]
+        self.assertEqual(
+            self._toggle("Timeline", {"Time Slider", "Range Slider"}), (False, both)
+        )
+        self.assertEqual(
+            self._toggle("Timeline", {"Time Slider"}), (False, ["ToggleTimeSlider"])
+        )
+        self.assertEqual(
+            self._toggle("Timeline", {"Range Slider"}), (False, ["ToggleRangeSlider"])
+        )
+        self.assertEqual(self._toggle("Timeline", set()), (True, both))
+
+    def test_a_single_component_toggles(self):
+        self.assertEqual(
+            self._toggle("Status Line", {"Status Line"}), (False, ["ToggleStatusLine"])
+        )
+        self.assertEqual(self._toggle("Tool Box", set()), (True, ["ToggleToolbox"]))
+
+    def test_an_unknown_component_raises(self):
+        with self.assertRaises(ValueError):
+            mtk.UiUtils.toggle_editor("Attribute Editor")
+
+    @skipIfBatch("the UI-component runtime commands are registered by the GUI")
+    def test_every_component_toggle_is_a_runtime_command(self):
+        for name, command in mtk.UiUtils._UI_COMPONENTS.items():
+            self.assertTrue(
+                cmds.runTimeCommand(command, exists=True), f"{name}: {command}"
+            )
+
+
+class TestBrowseDirectory(MayaTkTestCase):
+    """``browse_directory`` is Maya's own folder browser: the twin of blendertk's
+    platform dialog, what the shared Workspace tab's Set Workspace asks."""
+
+    def test_a_pick_is_returned_and_a_dismissal_is_empty(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.cmds, "fileDialog2", return_value=["C:/proj"]
+        ) as dialog:
+            picked = mtk.UiUtils.browse_directory(
+                "C:/", caption="Set Workspace", ok_caption="Set"
+            )
+        self.assertEqual(picked, "C:/proj")
+        kwargs = dialog.call_args.kwargs
+        self.assertEqual(kwargs["fileMode"], 3)
+        self.assertEqual(kwargs["caption"], "Set Workspace")
+        self.assertEqual(kwargs["okCaption"], "Set")
+        self.assertEqual(kwargs["startingDirectory"], "C:/")
+        with mock.patch.object(
+            _ui_utils.cmds, "fileDialog2", return_value=None
+        ) as dialog:
+            self.assertEqual(mtk.UiUtils.browse_directory(), "")
+        self.assertNotIn("startingDirectory", dialog.call_args.kwargs)
+
+    def test_the_project_window_is_an_editor(self):
+        self.assertEqual(
+            mtk.UiUtils.get_editor_types().get("Project Window"), "ProjectWindow"
+        )
+
+
+class TestOpenPreferences(MayaTkTestCase):
+    """``open_preferences``: Maya's own preference windows by section, the mirror
+    of blendertk's Preferences tabs (what the shared Preferences panel opens)."""
+
+    def test_each_section_runs_its_window(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev:
+            self.assertEqual(mtk.UiUtils.open_preferences(), "PreferencesWindow")
+            for section, command in (
+                ("colors", "colorPrefWnd"),
+                ("hotkeys", "HotkeyPreferencesWindow"),
+                ("plugins", "PluginManager"),
+            ):
+                self.assertEqual(mtk.UiUtils.open_preferences(section), command)
+        self.assertEqual(ev.call_count, 4)
+
+    def test_an_unknown_section_raises(self):
+        with self.assertRaises(ValueError):
+            mtk.UiUtils.open_preferences("nowhere")
 
 
 if __name__ == "__main__":

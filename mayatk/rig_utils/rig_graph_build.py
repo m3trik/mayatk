@@ -135,9 +135,7 @@ class _RigGraphBuilderInternal:
         return node
 
     def _plug(self, plug: str) -> str:
-        from pythontk.core_utils.engines.rig_graph.rig_model import RigGraph
-
-        node_id, channel = RigGraph.split_plug(plug)
+        node_id, channel = ptk.RigGraph.split_plug(plug)
         node = self._require(node_id)
         attr = self._CHANNEL_ATTR.get(channel, channel)
         if attr not in self._CHANNEL_ATTR.values() and not cmds.attributeQuery(

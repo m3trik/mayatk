@@ -15,13 +15,6 @@ import os
 import unittest
 from pathlib import Path
 
-# Ensure QApplication exists before Maya standalone initialises (mayapy only
-# creates QCoreApplication, which is insufficient for QWidget-based tests).
-from qtpy import QtCore, QtWidgets as _QtWidgets
-
-if _QtWidgets.QApplication.instance() is None:
-    _QtWidgets.QApplication([])
-
 import maya.cmds as cmds
 
 # --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
@@ -57,6 +50,9 @@ from mayatk.env_utils.hierarchy_sync._hierarchy_sync import (
     MayaObjectMatcher,
     ObjectSwapper,
     HierarchyMapBuilder,
+)
+from mayatk.env_utils.hierarchy_sync.hierarchy_sync_session import (
+    HierarchySyncSession,
 )
 
 from base_test import MayaTkTestCase, skipUnlessExtended, TEST_ASSETS, asset_path
@@ -2919,466 +2915,90 @@ class TestHierarchySync(MayaTkTestCase):
 
 
 # ---------------------------------------------------------------------------
-# Ignore Feature Tests (Controller logic — no full UI required)
+# Session repair (the shared panel's Fix; its ignored paths are the panel's)
 # ---------------------------------------------------------------------------
 
 
-class TestIgnoreFeature(MayaTkTestCase):
-    """Tests for the tree-item ignore/unignore feature.
-
-    These tests exercise the ignore logic on the controller directly,
-    using lightweight Qt tree widgets as stand-ins for the full UI.
-    Added: 2026-03-05
+class TestSessionRepair(MayaTkTestCase):
+    """``HierarchySyncSession.repair``: the Fix the shared Hierarchy Sync panel
+    runs. The panel's ignored-path filtering is tentacle's
+    (``test/test_hierarchy_sync_panel.py``).
+    Added: 2026-03-06
     """
 
     def setUp(self):
         super().setUp()
-        from qtpy import QtWidgets
+        self.session = HierarchySyncSession()
 
-        # Minimal stub so the controller can initialise.
-        class _FakeUI:
-            class _FakeTree(QtWidgets.QTreeWidget):
-                def __init__(self):
-                    super().__init__()
-                    self.menu = type(
-                        "Menu",
-                        (),
-                        {"add": lambda *a, **kw: None, "setTitle": lambda *a: None},
-                    )()
-                    self.is_initialized = True
+    @staticmethod
+    def _diff(missing):
+        return {"missing": missing, "extra": [], "reparented": [], "fuzzy_matches": []}
 
-            def __init__(self):
-                self.tree000 = self._FakeTree()
-                self.tree001 = self._FakeTree()
-                self.txt003 = type(
-                    "W",
-                    (),
-                    {
-                        "append": lambda *a: None,
-                        "setHtml": lambda *a: None,
-                        "setText": lambda *a: None,
-                        "clear": lambda *a: None,
-                    },
-                )()
+    def test_repair_requires_prior_analysis(self):
+        """repair returns False when no diff analysis exists."""
+        self.assertFalse(self.session.repair(dry_run=True))
 
-        class _FakeSB:
-            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
-
-        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncController,
-        )
-
-        self.controller = HierarchySyncController(fake_slots)
-        self.tree000 = fake_slots.ui.tree000
-        self.tree001 = fake_slots.ui.tree001
-
-    # -- helpers --
-
-    def _populate_tree(self, tree, hierarchy):
-        """Populate a QTreeWidget from a nested dict.
-
-        Example::
-
-            {"GRP": {"child1": {"leaf": {}}, "child2": {}}}
-        """
-        tree.clear()
-        tree.setColumnCount(1)
-
-        def _add(parent_item, children_dict):
-            from qtpy import QtWidgets
-
-            for name, sub in children_dict.items():
-                item = QtWidgets.QTreeWidgetItem(parent_item, [name])
-                _add(item, sub)
-
-        _add(tree.invisibleRootItem(), hierarchy)
-
-    # -- is_path_ignored --
-
-    def test_is_path_ignored_exact_match(self):
-        """Exact path in ignored set returns True."""
-        self.controller._ignored_ref_paths.add("GRP|child1")
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child1"))
-
-    def test_is_path_ignored_ancestor_match(self):
-        """A descendant of an ignored path is also considered ignored."""
-        self.controller._ignored_ref_paths.add("GRP")
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child1"))
-        self.assertTrue(
-            self.controller.is_path_ignored(self.tree000, "GRP|child1|leaf")
-        )
-
-    def test_is_path_ignored_no_false_prefix(self):
-        """Paths that share a prefix but are NOT descendants are not ignored.
-
-        Bug guard: 'GRP2' should not match ignored 'GRP'.
-        """
-        self.controller._ignored_ref_paths.add("GRP")
-        self.assertFalse(self.controller.is_path_ignored(self.tree000, "GRP2"))
-        self.assertFalse(self.controller.is_path_ignored(self.tree000, "GRP2|child"))
-
-    def test_is_path_ignored_different_tree(self):
-        """Ignored paths for reference tree should not affect current tree."""
-        self.controller._ignored_ref_paths.add("GRP|child1")
-        self.assertFalse(self.controller.is_path_ignored(self.tree001, "GRP|child1"))
-
-    def test_is_path_ignored_empty_set(self):
-        """Nothing ignored => everything returns False."""
-        self.assertFalse(self.controller.is_path_ignored(self.tree000, "anything"))
-
-    # -- clear_ignored_paths --
-
-    def test_clear_ignored_paths(self):
-        """clear_ignored_paths empties both sets."""
-        self.controller._ignored_ref_paths.update({"A", "B"})
-        self.controller._ignored_cur_paths.update({"C"})
-        self.controller.clear_ignored_paths()
-        self.assertEqual(len(self.controller._ignored_ref_paths), 0)
-        self.assertEqual(len(self.controller._ignored_cur_paths), 0)
-
-    # -- _build_item_path --
-
-    def test_build_item_path_root(self):
-        """Root-level item returns just its name."""
-        self._populate_tree(self.tree000, {"GRP": {}})
-        root_item = self.tree000.topLevelItem(0)
-        self.assertEqual(self.controller.tree.build_item_path(root_item), "GRP")
-
-    def test_build_item_path_nested(self):
-        """Nested item returns pipe-separated ancestor chain."""
-        self._populate_tree(self.tree000, {"GRP": {"child": {"leaf": {}}}})
-        root = self.tree000.topLevelItem(0)
-        child = root.child(0)
-        leaf = child.child(0)
-        self.assertEqual(self.controller.tree.build_item_path(leaf), "GRP|child|leaf")
-
-    # -- _apply_ignore_styling --
-
-    def test_apply_ignore_styling_strikethrough(self):
-        """Ignored items get strikethrough font; non-ignored do not."""
-        self._populate_tree(self.tree000, {"GRP": {"child1": {}, "child2": {}}})
-        self.controller._ignored_ref_paths.add("GRP|child1")
-        self.controller.tree.apply_ignore_styling(self.tree000)
-
-        root = self.tree000.topLevelItem(0)
-        child1 = root.child(0)
-        child2 = root.child(1)
-
-        self.assertTrue(
-            child1.font(0).strikeOut(), "Ignored item should have strikethrough"
-        )
-        self.assertFalse(
-            child2.font(0).strikeOut(), "Non-ignored item should NOT have strikethrough"
-        )
-
-    def test_apply_ignore_styling_clears_on_unignore(self):
-        """After removing an item from the ignored set, re-applying styling clears strikethrough."""
-        self._populate_tree(self.tree000, {"GRP": {"child1": {}}})
-        self.controller._ignored_ref_paths.add("GRP|child1")
-        self.controller.tree.apply_ignore_styling(self.tree000)
-
-        root = self.tree000.topLevelItem(0)
-        child1 = root.child(0)
-        self.assertTrue(child1.font(0).strikeOut())
-
-        # Unignore
-        self.controller._ignored_ref_paths.discard("GRP|child1")
-        self.controller.tree.apply_ignore_styling(self.tree000)
-        self.assertFalse(
-            child1.font(0).strikeOut(), "Strikethrough should be removed after unignore"
-        )
-
-    def test_apply_ignore_styling_ancestor_propagation(self):
-        """Ignoring a parent styles it with strikethrough; descendants get italic (inherited)."""
-        self._populate_tree(self.tree000, {"GRP": {"child": {"leaf": {}}}})
-        self.controller._ignored_ref_paths.add("GRP")
-        self.controller.tree.apply_ignore_styling(self.tree000)
-
-        root = self.tree000.topLevelItem(0)
-        child = root.child(0)
-        leaf = child.child(0)
-
-        self.assertTrue(
-            root.font(0).strikeOut(), "Directly-ignored root should have strikethrough"
-        )
-        # Descendants are inherited-ignored → italic, not strikethrough
-        self.assertTrue(
-            child.font(0).italic(),
-            "Inherited-ignored descendant should be italic",
-        )
-        self.assertFalse(
-            child.font(0).strikeOut(),
-            "Inherited-ignored descendant should NOT have strikethrough",
-        )
-        self.assertTrue(
-            leaf.font(0).italic(), "Deep inherited-ignored descendant should be italic"
-        )
-
-    # -- Edge cases --
-
-    def test_unignore_child_of_ignored_parent_is_noop(self):
-        """Unignoring a child that is only implicitly ignored (via parent) changes nothing.
-
-        The child's path is not in the set, so discard is a no-op.
-        The parent remains ignored, so the child remains visually ignored.
-        """
-        self.controller._ignored_ref_paths.add("GRP")
-        # Attempt to unignore child
-        self.controller._ignored_ref_paths.discard("GRP|child1")
-        # Parent still present
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child1"))
-
-    def test_unignore_parent_frees_descendants(self):
-        """Unignoring a parent also frees all implicitly-ignored descendants."""
-        self.controller._ignored_ref_paths.add("GRP")
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "GRP|child|leaf"))
-
-        self.controller._ignored_ref_paths.discard("GRP")
-        self.assertFalse(
-            self.controller.is_path_ignored(self.tree000, "GRP|child|leaf")
-        )
-
-    def test_ignore_multiple_roots_independent(self):
-        """Ignoring two independent roots does not interfere with each other."""
-        self.controller._ignored_ref_paths.update({"A", "B"})
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "A|child"))
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "B|child"))
-
-        self.controller._ignored_ref_paths.discard("A")
-        self.assertFalse(self.controller.is_path_ignored(self.tree000, "A|child"))
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "B|child"))
-
-    def test_ignore_set_per_tree(self):
-        """Reference and current trees maintain separate ignored sets."""
-        self.controller._ignored_ref_paths.add("shared_path")
-        self.controller._ignored_cur_paths.add("other_path")
-
-        self.assertTrue(self.controller.is_path_ignored(self.tree000, "shared_path"))
-        self.assertFalse(self.controller.is_path_ignored(self.tree001, "shared_path"))
-
-        self.assertFalse(self.controller.is_path_ignored(self.tree000, "other_path"))
-        self.assertTrue(self.controller.is_path_ignored(self.tree001, "other_path"))
-
-    # -- _filter_ignored_from_diff --
-
-    def test_filter_ignored_from_diff_excludes_ignored_missing(self):
-        """_filter_ignored_from_diff removes missing items whose path is ignored.
-
-        Added: 2026-03-06 (fix C1/C2)
-        """
-        self.controller._current_diff_result = {
-            "missing": ["GRP|child1", "GRP|child2"],
-            "extra": [],
-            "reparented": [],
-            "fuzzy_matches": [],
-        }
-        self.controller._ignored_ref_paths.add("GRP|child1")
-
-        effective = self.controller._filter_ignored_from_diff()
-        self.assertNotIn("GRP|child1", effective["missing"])
-        self.assertIn("GRP|child2", effective["missing"])
-
-    def test_filter_ignored_from_diff_excludes_ignored_extra(self):
-        """_filter_ignored_from_diff removes extra items whose path is ignored.
-
-        Added: 2026-03-06 (fix C1/C2)
-        """
-        self.controller._current_diff_result = {
-            "missing": [],
-            "extra": ["GRP|extra1", "GRP|extra2"],
-            "reparented": [],
-            "fuzzy_matches": [],
-        }
-        self.controller._ignored_cur_paths.add("GRP|extra1")
-
-        effective = self.controller._filter_ignored_from_diff()
-        self.assertNotIn("GRP|extra1", effective["extra"])
-        self.assertIn("GRP|extra2", effective["extra"])
-
-    def test_filter_ignored_from_diff_excludes_reparented_both_sides(self):
-        """Reparented items are excluded when either side is ignored.
-
-        Added: 2026-03-06 (fix C1/C2)
-        """
-        self.controller._current_diff_result = {
-            "missing": [],
-            "extra": [],
-            "reparented": [
-                {
-                    "leaf": "node",
-                    "current_path": "A|node",
-                    "reference_path": "B|node",
-                },
-            ],
-            "fuzzy_matches": [],
-        }
-        # Ignoring the current-side path should exclude it
-        self.controller._ignored_cur_paths.add("A|node")
-
-        effective = self.controller._filter_ignored_from_diff()
-        self.assertEqual(len(effective["reparented"]), 0)
-
-    def test_filter_ignored_from_diff_no_diff_returns_empty(self):
-        """_filter_ignored_from_diff returns empty lists when no diff exists.
-
-        Added: 2026-03-06
-        """
-        self.controller._current_diff_result = None
-        effective = self.controller._filter_ignored_from_diff()
-        self.assertEqual(effective["missing"], [])
-        self.assertEqual(effective["extra"], [])
-        self.assertEqual(effective["reparented"], [])
-        self.assertEqual(effective["fuzzy_matches"], [])
-
-    # -- _apply_ignore_styling: direct vs inherited --
-
-    def test_apply_ignore_styling_direct_vs_inherited(self):
-        """Directly-ignored items get strikethrough; inherited get italic.
-
-        Added: 2026-03-06 (fix E2)
-        """
-        self._populate_tree(self.tree000, {"GRP": {"child": {"leaf": {}}}})
-        self.controller._ignored_ref_paths.add("GRP|child")
-        self.controller.tree.apply_ignore_styling(self.tree000)
-
-        root = self.tree000.topLevelItem(0)
-        child = root.child(0)
-        leaf = child.child(0)
-
-        # Direct: strikethrough, NOT italic
-        self.assertTrue(
-            child.font(0).strikeOut(), "Direct-ignored should be strikethrough"
-        )
-        self.assertFalse(child.font(0).italic(), "Direct-ignored should NOT be italic")
-
-        # Inherited: italic, NOT strikethrough
-        self.assertTrue(leaf.font(0).italic(), "Inherited-ignored should be italic")
-        self.assertFalse(
-            leaf.font(0).strikeOut(), "Inherited-ignored should NOT be strikethrough"
-        )
-
-        # Non-ignored root: neither
-        self.assertFalse(root.font(0).strikeOut())
-        self.assertFalse(root.font(0).italic())
-
-    # -- _clear_analysis_cache clears ignored paths --
-
-    def test_clear_analysis_cache_clears_ignored_paths(self):
-        """_clear_analysis_cache also resets ignored path sets.
-
-        Added: 2026-03-06 (fix B1)
-        """
-        self.controller._ignored_ref_paths.add("GRP|child")
-        self.controller._ignored_cur_paths.add("OTHER")
-        self.controller._clear_analysis_cache()
-        self.assertEqual(len(self.controller._ignored_ref_paths), 0)
-        self.assertEqual(len(self.controller._ignored_cur_paths), 0)
-
-    # -- repair_hierarchies --
-
-    def test_repair_hierarchies_requires_prior_analysis(self):
-        """repair_hierarchies returns False when no diff analysis exists.
-
-        Added: 2026-03-06
-        """
-        self.controller.hierarchy_sync = None
-        self.controller._current_diff_result = None
-        result = self.controller.repair_hierarchies(dry_run=True)
-        self.assertFalse(result)
-
-    def test_repair_hierarchies_dry_run_restore(self):
-        """repair_hierarchies restores hierarchy_sync.dry_run after execution.
-
-        Bug: method mutated dry_run on the manager without save/restore.
+    def test_repair_restores_the_engines_dry_run(self):
+        """Bug: the repair mutated dry_run on the manager without save/restore.
         Fixed: 2026-03-06 (critique fix #1)
         """
         manager = HierarchySync(fuzzy_matching=False, dry_run=False)
         manager.differences = {"missing": ["grp|stub"], "extra": [], "reparented": []}
+        self.session.hierarchy_sync = manager
+        self.session.diff_result = self._diff(["grp|stub"])
 
-        self.controller.hierarchy_sync = manager
-        self.controller._current_diff_result = {
-            "missing": ["grp|stub"],
-            "extra": [],
-            "reparented": [],
-            "fuzzy_matches": [],
-        }
-
-        # Call with dry_run=True — should NOT permanently change manager.dry_run
-        self.controller.repair_hierarchies(dry_run=True)
+        self.session.repair(dry_run=True)
         self.assertFalse(
             manager.dry_run,
             "Manager dry_run should be restored to original value (False)",
         )
 
-    def test_repair_hierarchies_cache_invalidation_after_live(self):
-        """repair_hierarchies invalidates cache after live (non-dry-run) changes.
-
-        Bug: stale diff cache persisted after a live repair.
+    def test_a_live_repair_clears_the_stale_analysis(self):
+        """Bug: stale diff cache persisted after a live repair.
         Fixed: 2026-03-06 (critique fix #2/6)
         """
         cmds.group(empty=True, name="grp")
-
         manager = HierarchySync(fuzzy_matching=False, dry_run=False)
-        manager.differences = {
-            "missing": ["grp|new_stub"],
-            "extra": [],
-            "reparented": [],
-        }
+        manager.differences = {"missing": ["grp|new_stub"], "extra": [], "reparented": []}
+        self.session.hierarchy_sync = manager
+        self.session.diff_result = self._diff(["grp|new_stub"])
 
-        self.controller.hierarchy_sync = manager
-        self.controller._current_diff_result = {
-            "missing": ["grp|new_stub"],
-            "extra": [],
-            "reparented": [],
-            "fuzzy_matches": [],
-        }
-
-        self.controller.repair_hierarchies(dry_run=False)
-
-        # After live repair, cache should be cleared
+        self.session.repair(dry_run=False)
         self.assertIsNone(
-            self.controller._current_diff_result,
-            "Diff cache should be cleared after live repair",
+            self.session.diff_result, "Diff cache should be cleared after live repair"
         )
         self.assertIsNone(
-            self.controller.hierarchy_sync,
+            self.session.hierarchy_sync,
             "hierarchy_sync should be cleared after live repair",
         )
 
-    def test_repair_hierarchies_respects_ignored_paths(self):
-        """repair_hierarchies excludes ignored missing items from stub creation.
+    def test_repair_takes_only_the_differences_it_is_given(self):
+        """The panel hands over its differences with the ignored paths left
+        out; the session repairs those, not the whole analysis."""
+        from unittest import mock
 
-        Added: 2026-03-06
-        """
         cmds.group(empty=True, name="grp")
-
         manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         manager.differences = {
             "missing": ["grp|keep", "grp|skip"],
             "extra": [],
             "reparented": [],
         }
+        self.session.hierarchy_sync = manager
+        self.session.diff_result = self._diff(["grp|keep", "grp|skip"])
 
-        self.controller.hierarchy_sync = manager
-        self.controller._current_diff_result = {
-            "missing": ["grp|keep", "grp|skip"],
-            "extra": [],
-            "reparented": [],
-            "fuzzy_matches": [],
-        }
-        # Ignore "grp|skip" in the reference tree
-        self.controller._ignored_ref_paths.add("grp|skip")
-
-        result = self.controller.repair_hierarchies(
-            create_stubs=True,
-            quarantine_extras=False,
-            fix_reparented=False,
-            dry_run=True,
-        )
+        with mock.patch.object(
+            manager, "create_stubs", wraps=manager.create_stubs
+        ) as stubs:
+            result = self.session.repair(
+                self._diff(["grp|keep"]),
+                create_stubs=True,
+                quarantine_extras=False,
+                fix_reparented=False,
+                dry_run=True,
+            )
         self.assertTrue(result)
-        # Since it's dry-run, nothing created, but the stubs list should only contain "keep"
-        # The manager was called with filtered missing — verify no stub created for "skip"
+        stubs.assert_called_once_with(["grp|keep"])
         self.assertFalse(cmds.objExists("skip"))
 
 
@@ -3388,104 +3008,66 @@ class TestIgnoreFeature(MayaTkTestCase):
 
 
 class TestCachedReferenceImport(MayaTkTestCase):
-    """Tests for the cached reference import mechanism in HierarchySyncController.
-
-    Verifies that the controller reuses a single import rather than importing
-    the reference file multiple times, and that cache invalidation works correctly.
+    """The reference a ``HierarchySyncSession`` holds: one import, reused while
+    its file is unchanged and its nodes exist, released on demand.
     Added: 2026-03-08
     """
 
     def setUp(self):
         super().setUp()
-        from qtpy import QtWidgets
-
-        # Minimal stub so the controller can initialise (same pattern as TestIgnoreFeature).
-        class _FakeTree(QtWidgets.QTreeWidget):
-            def __init__(self):
-                super().__init__()
-                self.menu = type(
-                    "Menu",
-                    (),
-                    {"add": lambda *a, **kw: None, "setTitle": lambda *a: None},
-                )()
-                self.is_initialized = True
-
-            def create_item(self, data, obj=None, parent=None):
-                item = QtWidgets.QTreeWidgetItem(parent or self, data)
-                return item
-
-        class _FakeUI:
-            def __init__(self):
-                self.tree000 = _FakeTree()
-                self.tree001 = _FakeTree()
-                self.txt003 = type(
-                    "W",
-                    (),
-                    {
-                        "append": lambda *a: None,
-                        "setHtml": lambda *a: None,
-                        "setText": lambda *a: None,
-                        "clear": lambda *a: None,
-                    },
-                )()
-
-        class _FakeSB:
-            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
-
-        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncController,
-        )
-
-        self.controller = HierarchySyncController(fake_slots)
-        self.tree000 = fake_slots.ui.tree000
-        self.tree001 = fake_slots.ui.tree001
+        self.session = HierarchySyncSession()
 
     def test_cached_reference_starts_none(self):
-        """_cached_reference_import is None on fresh controller."""
-        self.assertIsNone(self.controller._cached_reference_import)
+        """Nothing is held by a fresh session."""
+        self.assertIsNone(self.session._cached_reference_import)
+        self.assertFalse(self.session.is_loaded(self._temp_path("none.ma")))
 
-    def test_clear_analysis_cache_clears_cached_import(self):
-        """_clear_analysis_cache resets _cached_reference_import to None.
+    def test_clear_analysis_clears_cached_import(self):
+        """clear_analysis drops the analysis and releases the held import.
 
         Added: 2026-03-08
         """
-        # Simulate a cached import entry (without a real sandbox).
-        self.controller._cached_reference_import = {
+        self.session._cached_reference_import = {
             "path": "/fake/path.ma",
             "sandbox": None,
             "transforms": [],
         }
-        self.controller._clear_analysis_cache()
-        self.assertIsNone(
-            self.controller._cached_reference_import,
-            "Cached import should be cleared after _clear_analysis_cache()",
-        )
+        self.session.diff_result = {"missing": ["a"]}
+        self.session.clear_analysis()
+        self.assertIsNone(self.session._cached_reference_import)
+        self.assertIsNone(self.session.diff_result)
 
-    def test_analysis_preserves_cache_after_populate_reference_tree(self):
-        """Analysis results survive a subsequent populate_reference_tree call.
+    def test_is_loaded_names_the_held_file_only(self):
+        """is_loaded is what keeps an analysis across a tree refresh: True for
+        the held file (any spelling that resolves to it), False otherwise."""
+        held = self._temp_path("held.ma")
+        self.session._cached_reference_import = {
+            "path": str(Path(held).resolve()),
+            "sandbox": None,
+            "transforms": [],
+        }
+        self.assertTrue(self.session.is_loaded(held))
+        self.assertFalse(self.session.is_loaded(self._temp_path("other.ma")))
+        self.assertFalse(self.session.is_loaded(""))
 
-        Regression: previously, populate_reference_tree() called
-        _clear_analysis_cache() unconditionally, which destroyed the diff
-        result even for the same reference path.
+    def test_analysis_survives_on_the_session(self):
+        """An analysis stays on the session until it is cleared.
+
+        Regression: populate_reference_tree once cleared the analysis even for
+        the same reference path (the panel now asks ``is_loaded`` first).
         Added: 2026-03-08
         """
-        # Build a scene & reference in-process (no file I/O needed).
         if not cmds.namespace(exists="ref"):
             cmds.namespace(add="ref")
-
         root_cur = cmds.group(empty=True, name="root")
         cmds.group(empty=True, name="child_a", parent=root_cur)
-
         root_ref = cmds.group(empty=True, name="ref:root")
         cmds.group(empty=True, name="ref:child_a", parent=root_ref)
         cmds.group(empty=True, name="ref:child_b", parent=root_ref)
-
         ref_objects = [root_ref] + list(
             (cmds.listRelatives(str(root_ref), children=True) or [])
         )
 
-        # Run analysis directly on the core HierarchySync.
         manager = HierarchySync(fuzzy_matching=False, dry_run=True)
         diff = manager.analyze_hierarchies(
             current_tree_root="SCENE_WIDE_MODE",
@@ -3494,44 +3076,33 @@ class TestCachedReferenceImport(MayaTkTestCase):
             filter_cameras=True,
             filter_lights=True,
         )
+        self.session.hierarchy_sync = manager
+        self.session.diff_result = diff
 
-        # Simulate the controller state after a successful analysis.
-        self.controller.hierarchy_sync = manager
-        self.controller._current_diff_result = diff
-
-        # Verify analysis detected something.
         self.assertIn("root|child_b", diff["missing"])
-
-        # Now verify the analysis result still exists.
-        # (In the old code, populate_reference_tree() would destroy it.)
-        self.assertIsNotNone(
-            self.controller._current_diff_result,
-            "Diff result should survive (no file-based tree population in this test)",
-        )
-        self.assertIn("root|child_b", self.controller._current_diff_result["missing"])
+        self.assertFalse(self.session.fuzzy_matching)
+        self.assertIn("root|child_b", self.session.diff_result["missing"])
 
     def test_cleanup_cached_reference_import_noop_when_none(self):
-        """_cleanup_cached_reference_import is safe to call when cache is None.
+        """release_reference is safe to call when nothing is held.
 
         Added: 2026-03-08
         """
-        self.controller._cached_reference_import = None
-        # Should not raise.
-        self.controller._cleanup_cached_reference_import()
-        self.assertIsNone(self.controller._cached_reference_import)
+        self.session._cached_reference_import = None
+        self.session.release_reference()
+        self.assertIsNone(self.session._cached_reference_import)
 
     def test_stale_mtime_bypasses_cache(self):
         """Cache is bypassed when the reference file has been modified on disk.
 
-        Bug: _import_reference_cached only checked whether the first cached
-        transform still existed; if the external file was updated after import,
-        the stale in-scene objects would be reused silently.
+        Bug: the cached import only checked whether the first cached transform
+        still existed; if the external file was updated after import, the
+        stale in-scene objects would be reused silently.
         Fixed: 2026-04-10
         """
         import tempfile
         import time
 
-        # Create a temp .ma file so os.path.getmtime works on a real path.
         tmp = tempfile.NamedTemporaryFile(
             suffix=".ma", delete=False, dir=self._temp_dir()
         )
@@ -3539,39 +3110,28 @@ class TestCachedReferenceImport(MayaTkTestCase):
         tmp.close()
         tmp_path = tmp.name
         self.addCleanup(os.unlink, tmp_path)
-
         original_mtime = os.path.getmtime(tmp_path)
-
-        # Create a real transform that "exists" in the current scene.
         node = cmds.group(empty=True, name="cached_node")
-
-        # Seed the cache with the original mtime.
-        self.controller._cached_reference_import = {
+        self.session._cached_reference_import = {
             "path": str(Path(tmp_path).resolve()),
             "mtime": original_mtime,
             "sandbox": None,
             "transforms": [node],
         }
 
-        # Touch the file so its mtime changes.
         time.sleep(0.05)
         Path(tmp_path).write_bytes(b"//Maya ASCII 2025 scene\n// modified\n")
 
-        # Calling _import_reference_cached should NOT return the cached
-        # transforms because the file was modified on disk.  It will fall
-        # through and attempt a fresh import from the temp file, which will
-        # fail (it's not a real Maya file) and return None.
-        result = self.controller._import_reference_cached(tmp_path)
+        # Not the cached transforms: a fresh import of the (not real) file,
+        # which fails.
         self.assertIsNone(
-            result,
+            self.session.load_reference(tmp_path),
             "Stale cache should have been invalidated by mismatched mtime",
         )
 
     def test_fresh_mtime_reuses_cache(self):
         """Cache is reused when the reference file has NOT been modified.
 
-        Verifies the normal cache-hit path returns the existing transforms
-        without re-importing.
         Added: 2026-04-10
         """
         import tempfile
@@ -3583,27 +3143,42 @@ class TestCachedReferenceImport(MayaTkTestCase):
         tmp.close()
         tmp_path = tmp.name
         self.addCleanup(os.unlink, tmp_path)
-
         node = cmds.group(empty=True, name="valid_cached_node")
-
-        self.controller._cached_reference_import = {
+        self.session._cached_reference_import = {
             "path": str(Path(tmp_path).resolve()),
             "mtime": os.path.getmtime(tmp_path),
             "sandbox": None,
             "transforms": [node],
         }
 
-        # File unchanged — should return the cached transforms directly.
-        result = self.controller._import_reference_cached(tmp_path)
-        self.assertIsNotNone(result)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0], node)
+        result = self.session.load_reference(tmp_path)
+        self.assertEqual(result, [node])
+
+    def test_current_scene_nodes_leave_cameras_and_imports_out(self):
+        """The current-scene tree's nodes: no default camera, no temporary
+        import, nothing from the held reference's namespaces."""
+        cmds.group(empty=True, name="CSN_ROOT")
+        if not cmds.namespace(exists="temp_import_csn"):
+            cmds.namespace(add="temp_import_csn")
+        cmds.group(empty=True, name="temp_import_csn:CSN_IMPORTED")
+        if not cmds.namespace(exists="heldref"):
+            cmds.namespace(add="heldref")
+        cmds.group(empty=True, name="heldref:CSN_HELD")
+        self.session._reference_namespaces = ["heldref"]
+
+        names = [n.split("|")[-1] for n in self.session.current_scene_nodes()]
+        self.assertIn("CSN_ROOT", names)
+        for left_out in ("temp_import_csn:CSN_IMPORTED", "heldref:CSN_HELD", "persp"):
+            self.assertNotIn(left_out, names)
 
     def _temp_dir(self):
         """Return (and create) a temp directory for test artifacts."""
         d = Path(__file__).parent / "temp_tests"
         d.mkdir(exist_ok=True)
         return str(d)
+
+    def _temp_path(self, name):
+        return str(Path(self._temp_dir()) / name)
 
 
 class TestBatchPyMELOptimizations(MayaTkTestCase):
@@ -3678,13 +3253,12 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         self.assertEqual(path_map["A|B"], cmds.ls(str(b), l=True)[0])
 
     def test_build_hierarchy_structure_basic(self):
-        """build_hierarchy_structure returns correct parent/type info using cmds."""
-        from mayatk.env_utils.hierarchy_sync.tree_utils import TreePathMatcher
-
+        """HierarchySyncSession.hierarchy_structure returns correct parent/type
+        info using cmds."""
         parent = cmds.group(empty=True, name="Parent")
         child = cmds.group(empty=True, name="Child", parent=parent)
 
-        items, roots = TreePathMatcher.build_hierarchy_structure([parent, child])
+        items, roots = HierarchySyncSession.hierarchy_structure([parent, child])
         parent_key = cmds.ls(str(parent), l=True)[0]
         child_key = cmds.ls(str(child), l=True)[0]
 
@@ -3697,6 +3271,18 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         self.assertIsNone(items[parent_key]["parent"])
         self.assertIn(parent_key, roots)
         self.assertNotIn(child_key, roots)
+        self.assertEqual(items[child_key]["node_name"], child_key)
+
+    def test_hierarchy_structure_displays_names_without_their_namespace(self):
+        """A reference node shows its name without the namespace; its own name
+        keeps it."""
+        if not cmds.namespace(exists="hsref"):
+            cmds.namespace(add="hsref")
+        node = cmds.group(empty=True, name="hsref:NS_ROOT")
+        items, roots = HierarchySyncSession.hierarchy_structure([node])
+        info = items[roots[0]]
+        self.assertEqual(info["short_name"], "hsref:NS_ROOT")
+        self.assertEqual(info["display_name"], "NS_ROOT")
 
     # ── Auto-detect quarantine container ──
 
@@ -3891,534 +3477,6 @@ class TestBatchPyMELOptimizations(MayaTkTestCase):
         self.assertNotIn("dry_anim_extra", moved)
         # No quarantine group created in dry-run
         self.assertFalse(cmds.objExists("_QUARANTINE"))
-
-
-# ---------------------------------------------------------------------------
-# Renderer Tests (presentation-only — no Maya scene needed for most)
-# ---------------------------------------------------------------------------
-
-
-class TestHierarchyTreeRenderer(MayaTkTestCase):
-    """Tests for HierarchyTreeRenderer presentation methods.
-
-    Validates that populate_reference_tree, show_reference_placeholder, and
-    show_reference_error produce correct tree widget content without side effects.
-    Added: 2026-06-18
-    """
-
-    def setUp(self):
-        super().setUp()
-        from qtpy import QtWidgets
-
-        class _FakeTree(QtWidgets.QTreeWidget):
-            def __init__(self):
-                super().__init__()
-                self.menu = type(
-                    "Menu",
-                    (),
-                    {"add": lambda *a, **kw: None, "setTitle": lambda *a: None},
-                )()
-                self.is_initialized = True
-
-            def create_item(self, data, obj=None, parent=None):
-                item = QtWidgets.QTreeWidgetItem(parent or self, data)
-                return item
-
-        class _FakeUI:
-            def __init__(self):
-                self.tree000 = _FakeTree()
-                self.tree001 = _FakeTree()
-                self.txt003 = type(
-                    "W",
-                    (),
-                    {
-                        "append": lambda *a: None,
-                        "setHtml": lambda *a: None,
-                        "setText": lambda *a: None,
-                        "clear": lambda *a: None,
-                    },
-                )()
-
-        class _FakeSB:
-            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
-
-        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncController,
-        )
-
-        self.controller = HierarchySyncController(fake_slots)
-        self.renderer = self.controller.tree
-        self.tree = fake_slots.ui.tree000
-
-    # -- show_reference_placeholder --
-
-    def test_show_reference_placeholder_content(self):
-        """show_reference_placeholder inserts a browse item with underline and UserRole data."""
-        self.renderer.show_reference_placeholder(self.tree, "My Reference")
-        self.assertEqual(self.tree.headerItem().text(0), "My Reference")
-        self.assertEqual(self.tree.topLevelItemCount(), 1)
-        item = self.tree.topLevelItem(0)
-        self.assertEqual(item.text(0), "Browse for Reference Scene")
-        self.assertTrue(item.font(0).underline())
-        self.assertEqual(item.data(0, QtCore.Qt.UserRole), "browse_placeholder")
-
-    def test_show_reference_placeholder_default_name(self):
-        """show_reference_placeholder uses default header when name omitted."""
-        self.renderer.show_reference_placeholder(self.tree)
-        self.assertEqual(self.tree.headerItem().text(0), "Reference Scene")
-
-    # -- show_reference_error --
-
-    def test_show_reference_error_default_message(self):
-        """show_reference_error displays 'File Not Found' by default."""
-        self.renderer.show_reference_error(self.tree, "Ref")
-        self.assertEqual(self.tree.headerItem().text(0), "Ref")
-        self.assertEqual(self.tree.topLevelItemCount(), 1)
-        self.assertEqual(self.tree.topLevelItem(0).text(0), "File Not Found")
-
-    def test_show_reference_error_custom_message(self):
-        """show_reference_error displays a custom message."""
-        self.renderer.show_reference_error(self.tree, "Ref", "Import failed")
-        self.assertEqual(self.tree.topLevelItem(0).text(0), "Import failed")
-
-    def test_show_reference_error_clears_existing_items(self):
-        """show_reference_error clears previous tree content before displaying."""
-        # Pre-populate with junk.
-        self.tree.create_item(["old_item_1"])
-        self.tree.create_item(["old_item_2"])
-        self.assertEqual(self.tree.topLevelItemCount(), 2)
-
-        self.renderer.show_reference_error(self.tree, "Ref", "Error")
-        self.assertEqual(self.tree.topLevelItemCount(), 1)
-        self.assertEqual(self.tree.topLevelItem(0).text(0), "Error")
-
-    # -- populate_reference_tree (renderer) --
-
-    def test_populate_reference_tree_empty_transforms(self):
-        """populate_reference_tree shows 'No objects' when transforms list is empty."""
-        self.renderer.populate_reference_tree(self.tree, [], "Empty Ref")
-        self.assertEqual(self.tree.headerItem().text(0), "Empty Ref")
-        self.assertEqual(self.tree.topLevelItemCount(), 1)
-        self.assertIn("No objects", self.tree.topLevelItem(0).text(0))
-
-    def test_populate_reference_tree_with_transforms(self):
-        """populate_reference_tree builds a hierarchy from real Maya transforms."""
-        if not cmds.namespace(exists="ref"):
-            cmds.namespace(add="ref")
-        root = cmds.group(empty=True, name="ref:Root")
-        child = cmds.group(empty=True, name="ref:Child", parent=root)
-
-        self.renderer.populate_reference_tree(self.tree, [root, child], "TestRef")
-        self.assertEqual(self.tree.headerItem().text(0), "TestRef")
-        # At least one top-level item (the root).
-        self.assertGreater(self.tree.topLevelItemCount(), 0)
-        # Root item text should be namespace-stripped.
-        root_item = self.tree.topLevelItem(0)
-        self.assertEqual(root_item.text(0), "Root")
-
-    def test_populate_reference_tree_clears_existing(self):
-        """populate_reference_tree clears previous content before populating."""
-        self.tree.create_item(["stale_item"])
-        self.assertEqual(self.tree.topLevelItemCount(), 1)
-
-        root = cmds.group(empty=True, name="fresh_root")
-        self.renderer.populate_reference_tree(self.tree, [root], "Fresh")
-        # Old item should be gone, only new content present.
-        for i in range(self.tree.topLevelItemCount()):
-            self.assertNotEqual(self.tree.topLevelItem(i).text(0), "stale_item")
-
-
-# ---------------------------------------------------------------------------
-# Diff Formatting, Delegate, and Tooltip Tests
-# ---------------------------------------------------------------------------
-
-
-class TestDiffFormattingAndDelegate(MayaTkTestCase):
-    """Tests for selection_style integration, _apply_diff_color, tooltips, and
-    the full apply_difference_formatting / clear_tree_colors cycle.
-
-    Validates that selection_style switches to 'tint' during diff mode,
-    diff tooltips are applied without clobbering existing ones, and
-    clear_tree_colors restores 'border' selection style.
-    Added: 2026-04-10
-    """
-
-    def setUp(self):
-        super().setUp()
-        from qtpy import QtWidgets
-
-        class _FakeTree(QtWidgets.QTreeWidget):
-            def __init__(self):
-                super().__init__()
-                self.setColumnCount(1)
-                self.selection_style = "border"
-                self.menu = type(
-                    "Menu",
-                    (),
-                    {"add": lambda *a, **kw: None, "setTitle": lambda *a: None},
-                )()
-                self.is_initialized = True
-
-            def create_item(self, data, obj=None, parent=None):
-                item = QtWidgets.QTreeWidgetItem(parent or self, data)
-                return item
-
-        class _FakeUI:
-            def __init__(self):
-                self.tree000 = _FakeTree()
-                self.tree001 = _FakeTree()
-                self.txt003 = type(
-                    "W",
-                    (),
-                    {
-                        "append": lambda *a: None,
-                        "setHtml": lambda *a: None,
-                        "setText": lambda *a: None,
-                        "clear": lambda *a: None,
-                    },
-                )()
-
-        class _FakeSB:
-            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
-
-        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncController,
-        )
-
-        self.controller = HierarchySyncController(fake_slots)
-        self.renderer = self.controller.tree
-        self.tree000 = fake_slots.ui.tree000
-        self.tree001 = fake_slots.ui.tree001
-
-    def _add_item(self, tree, name, parent=None):
-        """Add a QTreeWidgetItem and return it."""
-        from qtpy import QtWidgets
-
-        return QtWidgets.QTreeWidgetItem(parent or tree, [name])
-
-    # -- selection_style integration --
-
-    def test_selection_style_set_after_apply_difference_formatting(self):
-        """apply_difference_formatting sets selection_style to 'tint'."""
-        # Need a diff result so formatting proceeds.
-        self.controller._current_diff_result = {
-            "missing": [],
-            "extra": [],
-            "reparented": [],
-            "fuzzy_matches": [],
-        }
-        self.renderer.apply_difference_formatting(self.tree001, self.tree000)
-        self.assertEqual(self.tree001.selection_style, "tint")
-        self.assertEqual(self.tree000.selection_style, "tint")
-
-    def test_selection_style_restored_after_clear_tree_colors(self):
-        """clear_tree_colors restores selection_style to 'border'."""
-        self.tree001.selection_style = "tint"
-        self.renderer.clear_tree_colors(self.tree001)
-        self.assertEqual(self.tree001.selection_style, "border")
-
-    def test_delegate_has_diff_detects_solid_brush(self):
-        """Delegate identifies items with SolidPattern background as diff-coloured."""
-        from qtpy import QtGui
-
-        item = self._add_item(self.tree001, "coloured")
-        item.setBackground(0, QtGui.QBrush(QtGui.QColor("#3D2929")))
-        index = self.tree001.indexFromItem(item, 0)
-        bg = index.data(QtCore.Qt.BackgroundRole)
-        # Must be detected as diff (SolidPattern, not NoBrush).
-        self.assertIsNotNone(bg)
-        self.assertNotEqual(bg.style(), QtCore.Qt.NoBrush)
-
-    def test_delegate_ignores_default_brush(self):
-        """Delegate does not treat a default/cleared brush as diff-coloured."""
-        item = self._add_item(self.tree001, "plain")
-        index = self.tree001.indexFromItem(item, 0)
-        bg = index.data(QtCore.Qt.BackgroundRole)
-        # PySide returns None for unset roles.
-        if bg is not None:
-            self.assertEqual(bg.style(), QtCore.Qt.NoBrush)
-
-    # -- _apply_diff_color --
-
-    def test_apply_diff_color_sets_foreground_and_background(self):
-        """_apply_diff_color sets both foreground and background brushes."""
-
-        item = self._add_item(self.tree001, "test_item")
-        self.renderer._apply_diff_color(item, "extra")
-
-        fg = item.foreground(0)
-        bg = item.background(0)
-        self.assertNotEqual(fg.style(), QtCore.Qt.NoBrush)
-        self.assertNotEqual(bg.style(), QtCore.Qt.NoBrush)
-
-    def test_apply_diff_color_unknown_type_is_noop(self):
-        """Unknown diff_type silently does nothing."""
-
-        item = self._add_item(self.tree001, "test_item")
-        self.renderer._apply_diff_color(item, "nonexistent_type")
-        # Background should remain default.
-        bg = item.background(0)
-        self.assertEqual(bg.style(), QtCore.Qt.NoBrush)
-
-    # -- Tooltip behaviour --
-
-    def test_tooltip_set_on_diff_item(self):
-        """_apply_diff_color with a tooltip string sets the item tooltip."""
-        item = self._add_item(self.tree001, "extra_item")
-        self.renderer._apply_diff_color(item, "extra", "Extra — not in reference")
-        self.assertIn("Extra", item.toolTip(0))
-
-    def test_tooltip_appended_to_existing(self):
-        """Diff tooltip is appended (not replaced) when item already has a tooltip.
-
-        Bug: diff tooltip was overwriting reference tree's 'Full Name' tooltip.
-        Fixed: 2026-04-10
-        """
-        item = self._add_item(self.tree001, "ref_item")
-        item.setToolTip(0, "Full Name: |root|child\nType: transform")
-
-        self.renderer._apply_diff_color(
-            item, "missing", "Missing — not in current scene"
-        )
-
-        tip = item.toolTip(0)
-        self.assertIn("Full Name", tip, "Original tooltip preserved")
-        self.assertIn("Missing", tip, "Diff tooltip appended")
-
-    def test_tooltip_not_set_when_empty(self):
-        """No tooltip set when tooltip parameter is empty string."""
-        item = self._add_item(self.tree001, "no_tip")
-        self.renderer._apply_diff_color(item, "extra", "")
-        self.assertEqual(item.toolTip(0), "")
-
-    def test_tooltip_does_not_stack_on_reapply(self):
-        """Tooltip must not accumulate stale diff text across clear/reapply cycles.
-
-        Bug: clear_tree_colors reset fg/bg but left tooltip intact, so the
-        append logic in _apply_diff_color doubled the diff annotation on
-        each _refresh_tree_styling cycle.
-        Fixed: 2026-04-10
-        """
-        item = self._add_item(self.tree001, "ref_item")
-        original_tip = "Full Name: |root|child\nType: transform"
-        item.setToolTip(0, original_tip)
-
-        # First apply — tooltip should contain original + diff.
-        self.renderer._apply_diff_color(
-            item, "missing", "Missing — not in current scene"
-        )
-        tip_after_first = item.toolTip(0)
-        self.assertEqual(tip_after_first.count("Missing"), 1)
-
-        # Simulate re-apply cycle: clear then re-apply.
-        self.renderer.clear_tree_colors(self.tree001)
-        self.assertEqual(item.toolTip(0), original_tip, "Original restored after clear")
-
-        self.renderer._apply_diff_color(
-            item, "missing", "Missing — not in current scene"
-        )
-        tip_after_second = item.toolTip(0)
-        self.assertEqual(tip_after_second.count("Missing"), 1, "No stale duplication")
-
-    # -- Full cycle: apply → clear → reapply --
-
-    def test_clear_tree_colors_resets_all_item_brushes(self):
-        """clear_tree_colors removes fg/bg from all items in the tree."""
-
-        item1 = self._add_item(self.tree001, "item1")
-        item2 = self._add_item(self.tree001, "item2")
-        self.renderer._apply_diff_color(item1, "extra")
-        self.renderer._apply_diff_color(item2, "missing")
-
-        # Both should be coloured now.
-        self.assertNotEqual(item1.background(0).style(), QtCore.Qt.NoBrush)
-        self.assertNotEqual(item2.background(0).style(), QtCore.Qt.NoBrush)
-
-        self.renderer.clear_tree_colors(self.tree001)
-
-        # Both should be cleared.
-        self.assertEqual(item1.background(0).style(), QtCore.Qt.NoBrush)
-        self.assertEqual(item2.background(0).style(), QtCore.Qt.NoBrush)
-
-    def test_clear_removes_old_stylesheet_remnant(self):
-        """clear_tree_colors strips the old transparent-selection stylesheet block.
-
-        Transitional cleanup: the previous border-only approach appended
-        a stylesheet block with 'selection-background-color: transparent'.
-        clear_tree_colors must remove it so it doesn't accumulate.
-        """
-        old_block = (
-            "\n        QTreeWidget {\n"
-            "            selection-background-color: transparent;\n"
-            "        }\n"
-            "        QTreeWidget::item:selected {\n"
-            "            background-color: transparent;\n"
-            "            border: 1px solid rgba(90, 140, 190, 0.7);\n"
-            "        }\n"
-            "        QTreeWidget::item:hover:!selected {\n"
-            "            background-color: rgba(255, 255, 255, 0.05);\n"
-            "        }\n"
-        )
-        base_ss = "QTreeWidget { background: #333; }"
-        self.tree001.setStyleSheet(base_ss + old_block)
-
-        self.renderer.clear_tree_colors(self.tree001)
-
-        ss = self.tree001.styleSheet()
-        self.assertNotIn("selection-background-color: transparent", ss)
-        # Base style should survive.
-        self.assertIn("background: #333", ss)
-
-    # -- Diff colors from Palette.diff() --
-
-    def test_diff_colors_has_all_domain_aliases(self):
-        """DIFF_COLORS palette has aliases for all four domain categories."""
-        from mayatk.env_utils.hierarchy_sync.tree_renderer import (
-            HierarchyTreeRenderer,
-        )
-
-        for key in ("missing", "extra", "fuzzy", "reparented"):
-            pair = HierarchyTreeRenderer.DIFF_COLORS.get(key)
-            self.assertIsNotNone(pair, f"DIFF_COLORS missing alias '{key}'")
-            fg, bg = pair
-            self.assertTrue(fg, f"'{key}' fg should be non-empty")
-            self.assertTrue(bg, f"'{key}' bg should be non-empty")
-
-
-# ---------------------------------------------------------------------------
-# Controller Tree Orchestration Tests
-# ---------------------------------------------------------------------------
-
-
-class TestControllerTreeOrchestration(MayaTkTestCase):
-    """Tests for Controller.populate_reference_tree and Controller.refresh_trees.
-
-    These exercise the orchestration layer that sits between Slots and the
-    Renderer — handling cache invalidation, import delegation, and selection
-    save/restore.
-    Added: 2026-06-18
-    """
-
-    def setUp(self):
-        super().setUp()
-        from qtpy import QtWidgets
-
-        class _FakeTree(QtWidgets.QTreeWidget):
-            def __init__(self):
-                super().__init__()
-                self.menu = type(
-                    "Menu",
-                    (),
-                    {"add": lambda *a, **kw: None, "setTitle": lambda *a: None},
-                )()
-                self.is_initialized = True
-
-            def create_item(self, data, obj=None, parent=None):
-                item = QtWidgets.QTreeWidgetItem(parent or self, data)
-                return item
-
-        class _FakeLineEdit:
-            def __init__(self, text=""):
-                self._text = text
-
-            def text(self):
-                return self._text
-
-        class _FakeUI:
-            def __init__(self):
-                self.tree000 = _FakeTree()
-                self.tree001 = _FakeTree()
-                self.txt001 = _FakeLineEdit("")
-                self.txt003 = type(
-                    "W",
-                    (),
-                    {
-                        "append": lambda *a: None,
-                        "setHtml": lambda *a: None,
-                        "setText": lambda *a: None,
-                        "clear": lambda *a: None,
-                    },
-                )()
-
-        class _FakeSB:
-            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
-
-        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncController,
-        )
-
-        self.controller = HierarchySyncController(fake_slots)
-        self.tree000 = fake_slots.ui.tree000
-        self.tree001 = fake_slots.ui.tree001
-        self.fake_ui = fake_slots.ui
-
-    # -- Controller.populate_reference_tree --
-
-    def test_populate_reference_tree_no_path_shows_placeholder(self):
-        """Controller.populate_reference_tree shows placeholder when path is None."""
-        self.controller.populate_reference_tree(self.tree000, reference_path=None)
-        self.assertEqual(self.tree000.topLevelItemCount(), 1)
-        item = self.tree000.topLevelItem(0)
-        self.assertEqual(item.text(0), "Browse for Reference Scene")
-
-    def test_populate_reference_tree_empty_path_shows_placeholder(self):
-        """Controller.populate_reference_tree shows placeholder when path is empty string."""
-        self.controller.populate_reference_tree(self.tree000, reference_path="")
-        item = self.tree000.topLevelItem(0)
-        self.assertEqual(item.text(0), "Browse for Reference Scene")
-
-    def test_populate_reference_tree_nonexistent_path_shows_error(self):
-        """Controller.populate_reference_tree shows error for non-existent file."""
-        self.controller.populate_reference_tree(
-            self.tree000, reference_path="/nonexistent/file.ma"
-        )
-        self.assertEqual(self.tree000.topLevelItemCount(), 1)
-        self.assertEqual(self.tree000.topLevelItem(0).text(0), "File Not Found")
-
-    def test_populate_reference_tree_clears_cache_on_path_change(self):
-        """Controller.populate_reference_tree invalidates cache when path changes."""
-        self.controller._cached_reference_import = {
-            "path": "C:/old/path.ma",
-            "sandbox": None,
-            "transforms": [],
-        }
-        self.controller._current_diff_result = {"missing": ["a"]}
-
-        # New path triggers cache clear (file won't exist, so we'll get error).
-        self.controller.populate_reference_tree(
-            self.tree000, reference_path="/new/path.ma"
-        )
-        self.assertIsNone(self.controller._cached_reference_import)
-        self.assertIsNone(self.controller._current_diff_result)
-
-    # -- Controller.refresh_trees --
-
-    def test_refresh_trees_populates_current_scene(self):
-        """refresh_trees populates the current-scene tree (tree001)."""
-        # Create some scene content.
-        cmds.group(empty=True, name="scene_root")
-
-        self.controller.refresh_trees()
-
-        # tree001 should have at least one item (the scene_root).
-        self.assertGreater(self.tree001.topLevelItemCount(), 0)
-
-    def test_refresh_trees_skips_reference_when_no_path(self):
-        """refresh_trees shows placeholder in reference tree when txt001 is empty."""
-        self.fake_ui.txt001 = type(
-            "LE", (), {"text": lambda self: "", "strip": str.strip}
-        )()
-        self.fake_ui.txt001 = type("LE", (), {"text": lambda s: ""})()
-
-        self.controller.refresh_trees()
-
-        # Reference tree should not have been populated with a file import.
-        # It may be empty or have a placeholder depending on implementation.
-        # The key assertion: no crash and current tree was still populated.
-        self.assertGreater(self.tree001.topLevelItemCount(), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -4659,97 +3717,84 @@ class TestMergeHierarchiesReplaceInPlace(MayaTkTestCase):
 
 
 class TestDeleteSelectedObjects(MayaTkTestCase):
-    """Tests for the b018 delete-selected-objects slot logic.
-
-    The slot reads selected tree items, extracts Maya nodes, sorts by depth,
-    and deletes inside an undo chunk.  These tests exercise the core deletion
-    logic (depth sorting, undo support) using the same Maya primitives.
+    """``HierarchySyncSession.delete_nodes``: the shared panel's Delete
+    Selected. Deepest first, one undo chunk, a locked stub unlocked.
     Added: 2026-04-10
     """
 
+    def setUp(self):
+        super().setUp()
+        self.session = HierarchySyncSession()
+
+    @staticmethod
+    def _long(*names):
+        return [cmds.ls(n, long=True)[0] for n in names]
+
     def test_delete_child_before_parent(self):
-        """Deleting a parent and child should succeed when sorted deepest-first.
+        """Deleting a parent and child succeeds, deepest first.
 
         Bug: reversed(selectedItems()) did not guarantee children precede parents.
-        A deeply-nested child could appear above its parent in visual order.
-        Fixed: 2026-04-10 — nodes sorted by longName depth before pm.delete.
+        Fixed: 2026-04-10 — nodes sorted by long-name depth before the delete.
         """
         parent = cmds.group(empty=True, name="DEL_PARENT")
         child = cmds.group(empty=True, name="DEL_CHILD", parent=parent)
-        grandchild = cmds.group(empty=True, name="DEL_GRANDCHILD", parent=child)
+        cmds.group(empty=True, name="DEL_GRANDCHILD", parent=child)
 
-        # Sort deepest-first (same logic as b018)
-        nodes = [parent, child, grandchild]
-
-        def _depth(n):
-            return len(cmds.ls(str(n), l=True)[0].split("|"))
-
-        nodes.sort(key=_depth, reverse=True)
+        deleted = self.session.delete_nodes(
+            self._long("DEL_PARENT", "DEL_PARENT|DEL_CHILD", "DEL_GRANDCHILD")
+        )
         self.assertEqual(
-            nodes[0].rsplit("|", 1)[-1] if "|" in str(nodes[0]) else str(nodes[0]),
+            deleted[0].split("|")[-1],
             "DEL_GRANDCHILD",
             "Deepest node should be first after sorting",
         )
+        for name in ("DEL_PARENT", "DEL_CHILD", "DEL_GRANDCHILD"):
+            self.assertFalse(cmds.objExists(name))
 
-        cmds.delete(nodes)
-        self.assertFalse(cmds.objExists("DEL_PARENT"))
-        self.assertFalse(cmds.objExists("DEL_CHILD"))
-        self.assertFalse(cmds.objExists("DEL_GRANDCHILD"))
-
-    def test_delete_is_undoable(self):
-        """Deletion wrapped in an undo chunk should be fully reversible.
+    def test_delete_is_one_undo(self):
+        """Nodes at different depths go in one chunk: one undo restores all.
 
         Added: 2026-04-10 — undo support was missing from b018.
         """
-        grp = cmds.group(empty=True, name="UNDO_TARGET")
-        self.assertTrue(cmds.objExists("UNDO_TARGET"))
+        root_a = cmds.group(empty=True, name="ROOT_A")
+        cmds.group(empty=True, name="CHILD_A", parent=root_a)
+        cmds.group(empty=True, name="ROOT_B")
 
-        cmds.undoInfo(openChunk=True, chunkName="test_delete")
-        cmds.delete(grp)
-        cmds.undoInfo(closeChunk=True)
-        self.assertFalse(cmds.objExists("UNDO_TARGET"))
+        self.session.delete_nodes(self._long("ROOT_A", "CHILD_A", "ROOT_B"))
+        for name in ("ROOT_A", "CHILD_A", "ROOT_B"):
+            self.assertFalse(cmds.objExists(name))
 
         cmds.undo()
-        self.assertTrue(
-            cmds.objExists("UNDO_TARGET"),
-            "Object should be restored after undo",
-        )
+        for name in ("ROOT_A", "CHILD_A", "ROOT_B"):
+            self.assertTrue(cmds.objExists(name), f"{name} restored after undo")
 
     def test_delete_only_selected_nodes(self):
-        """Only the targeted nodes should be deleted; siblings must survive."""
+        """Only the given nodes are deleted; siblings survive."""
         cmds.group(empty=True, name="KEEP_ME")
-        delete_me = cmds.group(empty=True, name="DELETE_ME")
-
-        cmds.delete(delete_me)
+        cmds.group(empty=True, name="DELETE_ME")
+        self.session.delete_nodes(self._long("DELETE_ME"))
         self.assertFalse(cmds.objExists("DELETE_ME"))
         self.assertTrue(cmds.objExists("KEEP_ME"), "Sibling should survive deletion")
 
-    def test_delete_mixed_depth_nodes(self):
-        """Selecting nodes at different depths should all be deleted correctly."""
-        root_a = cmds.group(empty=True, name="ROOT_A")
-        child_a = cmds.group(empty=True, name="CHILD_A", parent=root_a)
-        root_b = cmds.group(empty=True, name="ROOT_B")
+    def test_a_dead_node_or_placeholder_is_skipped(self):
+        """Regression 2026-05-07: the panel's items hold string node paths (and
+        prompt rows a placeholder string); only live nodes are deleted."""
+        real = cmds.group(empty=True, name="HM_DEL_REAL")
+        deleted = self.session.delete_nodes(
+            [cmds.ls(real, long=True)[0], "open_scene_placeholder", "|HM_GONE", None]
+        )
+        self.assertEqual([d.split("|")[-1] for d in deleted], ["HM_DEL_REAL"])
+        self.assertFalse(cmds.objExists("HM_DEL_REAL"))
+        self.assertEqual(self.session.delete_nodes(["open_scene_placeholder"]), [])
 
-        nodes = [root_a, child_a, root_b]
-
-        def _depth(n):
-            return len(cmds.ls(str(n), l=True)[0].split("|"))
-
-        nodes.sort(key=_depth, reverse=True)
-
-        cmds.undoInfo(openChunk=True, chunkName="test_mixed_delete")
-        cmds.delete(nodes)
-        cmds.undoInfo(closeChunk=True)
-
-        self.assertFalse(cmds.objExists("ROOT_A"))
-        self.assertFalse(cmds.objExists("CHILD_A"))
-        self.assertFalse(cmds.objExists("ROOT_B"))
-
-        # Full undo should restore all
-        cmds.undo()
-        self.assertTrue(cmds.objExists("ROOT_A"))
-        self.assertTrue(cmds.objExists("CHILD_A"))
-        self.assertTrue(cmds.objExists("ROOT_B"))
+    def test_a_locked_stub_is_deleted(self):
+        """Locked stubs are unlocked before deletion (one cannot fail the batch)."""
+        stub = cmds.createNode("transform", name="SLP_LOCKED_STUB")
+        HierarchySync._finalize_stub_node(stub)  # locks the node
+        cmds.group(empty=True, name="SLP_PLAIN")
+        self.session.delete_nodes(self._long("SLP_LOCKED_STUB", "SLP_PLAIN"))
+        self.assertFalse(cmds.objExists("SLP_LOCKED_STUB"))
+        self.assertFalse(cmds.objExists("SLP_PLAIN"))
 
 
 class TestAnimationSafety(MayaTkTestCase):
@@ -7586,180 +6631,120 @@ class TestLocatorGroupAtomicity(MayaTkTestCase):
         sandbox.cleanup_all_namespaces()
 
 
-class TestHierarchySyncSlotsUserDataPaths(MayaTkTestCase):
-    """Regression: tree-driven slot ops must work against string user data.
+class TestSessionSceneEdits(MayaTkTestCase):
+    """The current-scene tree's edits by node path (what the shared panel's
+    items hold): rename, reparent, select.
 
-    Bug fixed 2026-05-07: ``b018`` (delete), ``b017`` (fuzzy rename),
-    ``_on_current_tree_item_renamed`` (in-place rename), and
-    ``_on_tree001_drop_reparent`` (drag reparent) all skipped tree items
-    whose user data was a string — but the renderer only ever stores cmds
-    string node names there. Result: every UI op was a silent no-op.
-    Fix: drop the ``isinstance(node, str)`` skip and use ``cmds.objExists``
-    + ``cmds.rename`` instead of PyMel ``node.exists()`` / ``node.rename()``.
+    Regression 2026-05-07: the panel's delete, rename and drag-reparent all
+    skipped string node data -- the only kind the tree stores -- so every
+    edit was a silent no-op.
     """
 
     def setUp(self):
         super().setUp()
-        from types import SimpleNamespace
-        from unittest.mock import MagicMock
+        self.session = HierarchySyncSession()
 
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncSlots,
-        )
+    @staticmethod
+    def _long(node):
+        return cmds.ls(node, long=True)[0]
 
-        self.HierarchySyncSlots = HierarchySyncSlots
-
-        # Minimal slot scaffold.
-        self.slot = HierarchySyncSlots.__new__(HierarchySyncSlots)
-        self.slot.sb = SimpleNamespace(QtCore=QtCore)
-        self.slot.ui = MagicMock()
-        self.slot.controller = MagicMock()
-        self.slot.logger = MagicMock()
-
-    def _make_item(self, node_path):
-        """Create a real QTreeWidgetItem with the node path as user data."""
-        item = _QtWidgets.QTreeWidgetItem([node_path.split("|")[-1]])
-        item.setData(0, QtCore.Qt.UserRole, node_path)
-        return item
-
-    # ------------------------------------------------------------------
-    # b018 — delete selected
-    # ------------------------------------------------------------------
-
-    def test_b018_deletes_string_user_data(self):
-        """b018 must delete nodes whose user data is a string DAG path."""
-        a = cmds.group(empty=True, name="HM_DEL_A")
-        b = cmds.group(empty=True, name="HM_DEL_B")
-
-        items = [self._make_item(a), self._make_item(b)]
-        self.slot.ui.tree001.selectedItems.return_value = items
-
-        self.slot.b018()
-
-        self.assertFalse(cmds.objExists(a), "HM_DEL_A should have been deleted")
-        self.assertFalse(cmds.objExists(b), "HM_DEL_B should have been deleted")
-        self.slot.controller.refresh_trees.assert_called_once()
-
-    def test_b018_skips_placeholders(self):
-        """b018 must ignore items whose user data is a placeholder string."""
-        a = cmds.group(empty=True, name="HM_DEL_REAL")
-        placeholder = _QtWidgets.QTreeWidgetItem(["Open Scene"])
-        placeholder.setData(0, QtCore.Qt.UserRole, "open_scene_placeholder")
-
-        items = [self._make_item(a), placeholder]
-        self.slot.ui.tree001.selectedItems.return_value = items
-
-        self.slot.b018()
-
-        self.assertFalse(cmds.objExists(a))
-
-    def test_b018_warns_when_nothing_valid_selected(self):
-        """If only placeholders are selected, b018 warns and returns."""
-        placeholder = _QtWidgets.QTreeWidgetItem(["Open Scene"])
-        placeholder.setData(0, QtCore.Qt.UserRole, "open_scene_placeholder")
-        self.slot.ui.tree001.selectedItems.return_value = [placeholder]
-
-        self.slot.b018()
-
-        self.slot.logger.warning.assert_called()
-        self.slot.controller.refresh_trees.assert_not_called()
-
-    # ------------------------------------------------------------------
-    # _on_current_tree_item_renamed — in-place rename
-    # ------------------------------------------------------------------
-
-    def test_in_place_rename_updates_maya_and_user_data(self):
-        """Editing a tree item's name must rename the Maya node and update user data."""
+    def test_rename_returns_the_new_path(self):
         node = cmds.group(empty=True, name="HM_RN_OLD")
-        item = self._make_item(node)
-        item.setText(0, "HM_RN_NEW")
-
-        self.slot._on_current_tree_item_renamed(item, 0)
-
+        renamed = self.session.rename_nodes([(self._long(node), "HM_RN_NEW")])
         self.assertFalse(cmds.objExists("HM_RN_OLD"))
         self.assertTrue(cmds.objExists("HM_RN_NEW"))
-        # User data must point at the post-rename path.
-        new_data = item.data(0, QtCore.Qt.UserRole)
-        self.assertIn("HM_RN_NEW", new_data)
+        self.assertIn("HM_RN_NEW", renamed[0])
 
-    def test_in_place_rename_skips_when_unchanged(self):
-        """If the new name equals the old name, no rename happens."""
-        node = cmds.group(empty=True, name="HM_RN_SAME")
-        item = self._make_item(node)
-        item.setText(0, "HM_RN_SAME")
-
-        self.slot._on_current_tree_item_renamed(item, 0)
-
+    def test_rename_skips_an_unchanged_name_an_empty_one_or_a_dead_node(self):
+        node = self._long(cmds.group(empty=True, name="HM_RN_SAME"))
+        renamed = self.session.rename_nodes(
+            [(node, "HM_RN_SAME"), (node, ""), ("|HM_RN_GONE", "X")]
+        )
+        self.assertEqual(renamed, [None, None, None])
         self.assertTrue(cmds.objExists("HM_RN_SAME"))
 
-    # ------------------------------------------------------------------
-    # _on_tree001_drop_reparent — drag-drop reparent
-    # ------------------------------------------------------------------
+    def test_rename_renames_a_parent_and_its_child_together(self):
+        """Renaming a parent and its child in one batch must not skip the
+        child due to its stale stored path (deepest first)."""
+        parent = cmds.group(empty=True, name="SLP_B17_PAR")
+        child = cmds.group(empty=True, name="SLP_B17_CHILD", parent=parent)
+        renamed = self.session.rename_nodes(
+            [
+                (self._long(parent), "SLP_B17_PAR_NEW"),
+                (self._long(child), "SLP_B17_CHILD_NEW"),
+            ]
+        )
+        self.assertTrue(all(renamed), renamed)
+        self.assertTrue(cmds.objExists("SLP_B17_PAR_NEW"))
+        self.assertTrue(
+            cmds.objExists("SLP_B17_CHILD_NEW"),
+            "Child rename must survive the parent being renamed first",
+        )
 
-    def test_drop_reparent_to_node(self):
-        """Drag-drop reparent must move the Maya node under the new parent.
-
-        The handler takes the whole dropped selection as (item, new_parent)
-        pairs — batching lets multi-select drags reparent everything in one
-        undo chunk with a single tree rebuild at the end.
-        """
+    def test_reparent_to_node(self):
         parent = cmds.group(empty=True, name="HM_RP_PARENT")
         child = cmds.group(empty=True, name="HM_RP_CHILD")
-        # Currently child is at world root.
-        self.assertIsNone(cmds.listRelatives(child, parent=True))
+        moved = self.session.reparent_nodes([(self._long(child), self._long(parent))])
+        self.assertEqual(moved, 1)
+        self.assertEqual(cmds.listRelatives("HM_RP_CHILD", parent=True), ["HM_RP_PARENT"])
 
-        child_item = self._make_item(child)
-        parent_item = self._make_item(parent)
-
-        self.slot._on_tree001_drop_reparent([(child_item, parent_item)])
-
-        new_parent = cmds.listRelatives(child, parent=True)
-        self.assertIsNotNone(new_parent, "Child should now have a parent")
-        self.assertEqual(new_parent[0].split("|")[-1].split(":")[-1], "HM_RP_PARENT")
-        self.slot.controller.refresh_trees.assert_called_once()
-
-    def test_drop_reparent_to_world(self):
-        """Drag-drop with no target must world-parent the node."""
+    def test_reparent_to_world(self):
         parent = cmds.group(empty=True, name="HM_RP_W_PARENT")
         child = cmds.group(empty=True, name="HM_RP_W_CHILD", parent=parent)
-        self.assertEqual(
-            cmds.listRelatives(child, parent=True)[0].split("|")[-1], "HM_RP_W_PARENT"
-        )
-
-        child_item = self._make_item(
-            cmds.ls(child, long=True)[0]  # use the long path post-parent
-        )
-
-        self.slot._on_tree001_drop_reparent([(child_item, None)])
-
+        self.session.reparent_nodes([(self._long(child), None)])
         self.assertIsNone(
             cmds.listRelatives("HM_RP_W_CHILD", parent=True),
             "Child should now be at world root",
         )
 
-    def test_drop_reparent_multi_select_batches(self):
-        """A multi-item drop reparents EVERY item — the old per-item loop
-        refreshed (rebuilt) the tree inside the first callback, deleting the
-        remaining QTreeWidgetItems mid-iteration (RuntimeError, partial
+    def test_reparent_many_in_one_batch(self):
+        """A multi-item drop reparents EVERY item -- the old per-item loop
+        rebuilt the tree inside the first callback (RuntimeError, partial
         reparent)."""
-        parent = cmds.group(empty=True, name="HM_RP_M_PARENT")
-        child_a = cmds.group(empty=True, name="HM_RP_M_A")
-        child_b = cmds.group(empty=True, name="HM_RP_M_B")
-
-        parent_item = self._make_item(parent)
-        moves = [
-            (self._make_item(child_a), parent_item),
-            (self._make_item(child_b), parent_item),
-        ]
-
-        self.slot._on_tree001_drop_reparent(moves)
-
+        parent = self._long(cmds.group(empty=True, name="HM_RP_M_PARENT"))
+        a = self._long(cmds.group(empty=True, name="HM_RP_M_A"))
+        b = self._long(cmds.group(empty=True, name="HM_RP_M_B"))
+        self.assertEqual(self.session.reparent_nodes([(a, parent), (b, parent)]), 2)
         for child in ("HM_RP_M_A", "HM_RP_M_B"):
-            got = cmds.listRelatives(child, parent=True)
-            self.assertIsNotNone(got, f"{child} should have been reparented")
-            self.assertEqual(got[0].split("|")[-1], "HM_RP_M_PARENT")
-        # One rebuild for the whole batch, not one per item.
-        self.slot.controller.refresh_trees.assert_called_once()
+            self.assertEqual(cmds.listRelatives(child, parent=True), ["HM_RP_M_PARENT"])
+
+    def test_reparent_a_parent_and_its_child_together(self):
+        """Moving a parent and its child in one drag reparents both -- the
+        child's stored DAG path goes stale after the parent moves (UUIDs)."""
+        a = cmds.group(empty=True, name="SLP_NEST_A")
+        b = cmds.group(empty=True, name="SLP_NEST_B", parent=a)
+        target = self._long(cmds.group(empty=True, name="SLP_NEST_TGT"))
+        self.session.reparent_nodes(
+            [(self._long(a), target), (self._long(b), target)]
+        )
+        for name in ("SLP_NEST_A", "SLP_NEST_B"):
+            self.assertEqual(cmds.listRelatives(name, parent=True), ["SLP_NEST_TGT"])
+
+    def test_reparent_a_locked_stub(self):
+        stub = cmds.createNode("transform", name="SLP_DRAG_STUB")
+        HierarchySync._finalize_stub_node(stub)
+        new_parent = cmds.group(empty=True, name="SLP_DRAG_PAR")
+        self.session.reparent_nodes([(self._long(stub), self._long(new_parent))])
+        self.assertEqual(
+            cmds.listRelatives("SLP_DRAG_STUB", parent=True),
+            ["SLP_DRAG_PAR"],
+            "Locked stub must be reparentable via drag",
+        )
+
+    def test_a_move_already_in_place_is_skipped(self):
+        """A same-parent reorder (or a micro-drag) mirrors nothing."""
+        parent = cmds.group(empty=True, name="HM_RP_SAME_PAR")
+        child = cmds.group(empty=True, name="HM_RP_SAME_CHILD", parent=parent)
+        self.assertEqual(
+            self.session.reparent_nodes([(self._long(child), self._long(parent))]), 0
+        )
+        self.assertEqual(self.session.reparent_nodes([(self._long(parent), None)]), 0)
+
+    def test_select_takes_the_nodes(self):
+        node = cmds.group(empty=True, name="HM_SEL")
+        cmds.select(clear=True)
+        self.assertEqual(self.session.select_nodes([self._long(node)]), 1)
+        self.assertEqual(cmds.ls(selection=True), ["HM_SEL"])
 
 
 class TestTransferAllOrNothing(MayaTkTestCase):
@@ -8275,38 +7260,6 @@ class TestReparentedPairingAndResolution(MayaTkTestCase):
         """Quarantining an extra parent must not strand its reparented child:
         reparent runs before quarantine so the child reaches its reference
         position."""
-        from qtpy import QtWidgets
-
-        class _FakeUI:
-            class _FakeTree(QtWidgets.QTreeWidget):
-                def __init__(self):
-                    super().__init__()
-                    self.is_initialized = True
-
-            def __init__(self):
-                self.tree000 = self._FakeTree()
-                self.tree001 = self._FakeTree()
-                self.txt003 = type(
-                    "W",
-                    (),
-                    {
-                        "append": lambda *a: None,
-                        "setHtml": lambda *a: None,
-                        "setText": lambda *a: None,
-                        "clear": lambda *a: None,
-                    },
-                )()
-
-        class _FakeSB:
-            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
-
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncController,
-        )
-
-        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        controller = HierarchySyncController(fake_slots)
-
         cmds.group(empty=True, name="RO_ROOT_GRP")
         extra_parent = cmds.group(empty=True, name="RO_EXTRA_PAR")
         child = cmds.group(empty=True, name="RO_CHILD", parent=extra_parent)
@@ -8318,8 +7271,9 @@ class TestReparentedPairingAndResolution(MayaTkTestCase):
             "RO_EXTRA_PAR|RO_CHILD": cmds.ls(child, long=True)[0],
         }
         hm.clean_to_raw_current = {k: k for k in hm.current_scene_path_map}
-        controller.hierarchy_sync = hm
-        controller._current_diff_result = {
+        session = HierarchySyncSession()
+        session.hierarchy_sync = hm
+        session.diff_result = {
             "missing": [],
             "extra": ["RO_EXTRA_PAR"],
             "reparented": [
@@ -8332,7 +7286,7 @@ class TestReparentedPairingAndResolution(MayaTkTestCase):
             "fuzzy_matches": [],
         }
 
-        controller.repair_hierarchies(
+        session.repair(
             create_stubs=False,
             quarantine_extras=True,
             fix_reparented=True,
@@ -8417,241 +7371,26 @@ class TestPullIntegrationRobustness(MayaTkTestCase):
         self.assertTrue(cmds.objExists("PIR_LOCKED"))
 
 
-class TestSlotsLockedAndStalePaths(MayaTkTestCase):
-    """Slot-level operations on locked stubs and multi-item drags."""
+class TestSessionFileTypes(MayaTkTestCase):
+    """What the shared panel's two file dialogs offer.
 
-    def setUp(self):
-        super().setUp()
-        from types import SimpleNamespace
-        from unittest.mock import MagicMock
-
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncSlots,
-        )
-
-        self.slot = HierarchySyncSlots.__new__(HierarchySyncSlots)
-        self.slot.sb = SimpleNamespace(QtCore=QtCore)
-        self.slot.ui = MagicMock()
-        self.slot.controller = MagicMock()
-        self.slot.logger = MagicMock()
-
-    def _make_item(self, node_path):
-        item = _QtWidgets.QTreeWidgetItem([node_path.split("|")[-1]])
-        item.setData(0, QtCore.Qt.UserRole, node_path)
-        return item
-
-    def test_b018_deletes_locked_stub(self):
-        stub = cmds.createNode("transform", name="SLP_LOCKED_STUB")
-        HierarchySync._finalize_stub_node(stub)  # locks the node
-        plain = cmds.group(empty=True, name="SLP_PLAIN")
-
-        self.slot.ui.tree001.selectedItems.return_value = [
-            self._make_item(stub),
-            self._make_item(plain),
-        ]
-        self.slot.b018()
-
-        self.assertFalse(
-            cmds.objExists("SLP_LOCKED_STUB"),
-            "Locked stubs must be unlocked before deletion",
-        )
-        self.assertFalse(cmds.objExists("SLP_PLAIN"))
-
-    def test_drop_reparent_locked_stub(self):
-        stub = cmds.createNode("transform", name="SLP_DRAG_STUB")
-        HierarchySync._finalize_stub_node(stub)
-        new_parent = cmds.group(empty=True, name="SLP_DRAG_PAR")
-
-        moves = [(self._make_item(stub), self._make_item(new_parent))]
-        self.slot._on_tree001_drop_reparent(moves)
-
-        got = cmds.listRelatives("SLP_DRAG_STUB", parent=True)
-        self.assertIsNotNone(got, "Locked stub must be reparentable via drag")
-        self.assertEqual(got[0].split("|")[-1], "SLP_DRAG_PAR")
-
-    def test_drop_reparent_nested_multi_select(self):
-        """Moving a parent and its child in one drag must reparent both —
-        the child's stored DAG path goes stale after the parent moves."""
-        a = cmds.group(empty=True, name="SLP_NEST_A")
-        b = cmds.group(empty=True, name="SLP_NEST_B", parent=a)
-        target = cmds.group(empty=True, name="SLP_NEST_TGT")
-
-        a_path = cmds.ls("SLP_NEST_A", long=True)[0]
-        b_path = cmds.ls(b, long=True)[0]
-        target_item = self._make_item(target)
-        moves = [
-            (self._make_item(a_path), target_item),
-            (self._make_item(b_path), target_item),
-        ]
-        self.slot._on_tree001_drop_reparent(moves)
-
-        for name in ("SLP_NEST_A", "SLP_NEST_B"):
-            got = cmds.listRelatives(name, parent=True)
-            self.assertIsNotNone(got, f"{name} must have been reparented")
-            self.assertEqual(got[0].split("|")[-1], "SLP_NEST_TGT")
-
-    def test_b017_renames_parent_and_child_together(self):
-        """Renaming a parent and its child in one batch must not skip the
-        child due to its stale stored path."""
-        parent = cmds.group(empty=True, name="SLP_B17_PAR")
-        child = cmds.group(empty=True, name="SLP_B17_CHILD", parent=parent)
-        child_path = cmds.ls(child, long=True)[0]
-
-        parent_item = self._make_item(cmds.ls(parent, long=True)[0])
-        child_item = self._make_item(child_path)
-        ref_par = _QtWidgets.QTreeWidgetItem(["SLP_B17_PAR_NEW"])
-        ref_child = _QtWidgets.QTreeWidgetItem(["SLP_B17_CHILD_NEW"])
-
-        self.slot.ui.tree001.selectedItems.return_value = [parent_item, child_item]
-        self.slot.ui.tree000.selectedItems.return_value = [ref_par, ref_child]
-        self.slot.b017()
-
-        self.assertTrue(cmds.objExists("SLP_B17_PAR_NEW"))
-        self.assertTrue(
-            cmds.objExists("SLP_B17_CHILD_NEW"),
-            "Child rename must survive the parent being renamed first",
-        )
-
-
-class TestControllerSettingsCoercion(MayaTkTestCase):
-    """QSettings may return a bare string for a one-item list — the recent-
-    reference helpers must coerce instead of crashing/iterating chars."""
-
-    def setUp(self):
-        super().setUp()
-        from qtpy import QtWidgets
-
-        class _FakeSettings:
-            def __init__(self):
-                self.store = {}
-
-            def value(self, key, default=None):
-                return self.store.get(key, default)
-
-            def setValue(self, key, val):
-                self.store[key] = val
-
-        class _FakeUI:
-            class _FakeTree(QtWidgets.QTreeWidget):
-                def __init__(self):
-                    super().__init__()
-                    self.is_initialized = True
-
-            def __init__(self):
-                self.tree000 = self._FakeTree()
-                self.tree001 = self._FakeTree()
-                self.settings = _FakeSettings()
-                self.txt003 = type(
-                    "W",
-                    (),
-                    {
-                        "append": lambda *a: None,
-                        "setHtml": lambda *a: None,
-                        "setText": lambda *a: None,
-                        "clear": lambda *a: None,
-                    },
-                )()
-
-        class _FakeSB:
-            registered_widgets = type("RW", (), {"TextEditLogHandler": None})()
-
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncController,
-        )
-
-        fake_slots = type("Slots", (), {"sb": _FakeSB(), "ui": _FakeUI()})()
-        self.controller = HierarchySyncController(fake_slots)
-        self.settings = fake_slots.ui.settings
-
-    def test_get_recent_handles_bare_string(self):
-        this_file = str(Path(__file__).resolve())
-        self.settings.store["recent_reference_scenes"] = this_file
-        recent = self.controller.get_recent_reference_scenes()
-        self.assertEqual(recent, [this_file])
-
-    def test_save_recent_handles_bare_string(self):
-        this_file = str(Path(__file__).resolve())
-        self.settings.store["recent_reference_scenes"] = this_file
-        other = str(Path(__file__).parent.resolve() / "base_test.py")
-        self.controller.save_recent_reference_scene(other)
-        stored = self.settings.store["recent_reference_scenes"]
-        self.assertIsInstance(stored, list)
-        self.assertIn(other, stored)
-        self.assertIn(this_file, stored)
-
-
-class TestTreeUtilsExtraction(MayaTkTestCase):
-    """Tree-item object extraction must prefer the stored DAG path over the
-    ambiguous leaf name."""
-
-    def test_extract_object_name_prefers_user_role_path(self):
-        from mayatk.env_utils.hierarchy_sync.tree_utils import TreePathMatcher
-
-        item = _QtWidgets.QTreeWidgetItem(["LEAF"])
-        item.setData(0, QtCore.Qt.UserRole, "|GRP_A|LEAF")
-        item._raw_name = "LEAF"
-        self.assertEqual(
-            TreePathMatcher._extract_object_name_from_item(item),
-            "|GRP_A|LEAF",
-            "Stored DAG path must win over the leaf name",
-        )
-
-
-class TestReferenceBrowseDialog(MayaTkTestCase):
-    """The reference browser must offer EVERY importable format at once.
-
-    Regression 2026-08-17: ``b003`` handed ``sb.file_dialog`` a pre-formatted
-    multi-entry Qt filter string (``"Maya Files (*.ma *.mb);;FBX Files
-    (*.fbx);;All Files (*.*)"``); the helper wraps whatever it gets as
-    ``"<description> (<globs>)"``, so the dialog opened with only ``*.ma *.mb``
-    active and FBX hidden behind a second dropdown entry -- an FBX reference
-    "could not be loaded". The filter is now a glob list derived from the
-    importer contract (``NamespaceSandbox.get_supported_formats``).
+    Regression 2026-08-17: the reference browser handed ``sb.file_dialog`` a
+    pre-formatted multi-entry Qt filter, which opened with only ``*.ma *.mb``
+    active and FBX hidden behind a second entry -- an FBX reference "could not
+    be loaded". The panel builds one glob list from ``reference_formats``.
     """
 
-    def setUp(self):
-        super().setUp()
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sync_slots import (
-            HierarchySyncSlots,
+    def test_the_reference_formats_are_the_importers(self):
+        self.assertEqual(
+            HierarchySyncSession.reference_formats(),
+            NamespaceSandbox.get_supported_formats(),
         )
+        self.assertIn(".fbx", HierarchySyncSession.reference_formats())
 
-        calls = self.calls = []
-
-        class _FakeSb:
-            def file_dialog(self, **kwargs):
-                calls.append(kwargs)
-                return []  # user cancelled -- nothing downstream runs
-
-        class _FakeController:
-            workspace = os.getcwd()
-
-        # No full UI init: only the two dialog slots are exercised.
-        self.slots = HierarchySyncSlots.__new__(HierarchySyncSlots)
-        self.slots.sb = _FakeSb()
-        self.slots.controller = _FakeController()
-
-    def _globs(self, kwargs):
-        globs = kwargs["file_types"]
-        self.assertIsInstance(globs, list)
-        for g in globs:  # never a pre-formatted Qt filter fragment
-            self.assertRegex(g, r"^\*\.[A-Za-z0-9]+$", globs)
-        return globs
-
-    def test_reference_browse_offers_every_importer_format_in_one_filter(self):
-        self.slots.b003()
-        self.assertEqual(len(self.calls), 1)
-        globs = self._globs(self.calls[0])
-        expected = {f"*{ext}" for ext in NamespaceSandbox.get_supported_formats()}
-        self.assertEqual(set(globs), expected)
-        self.assertIn("*.fbx", globs)
-        self.assertTrue(self.calls[0].get("filter_description"))
-
-    def test_open_scene_dialog_offers_maya_scenes_and_fbx(self):
-        self.slots._open_scene_dialog()
-        self.assertEqual(len(self.calls), 1)
-        globs = self._globs(self.calls[0])
-        self.assertTrue({"*.ma", "*.mb", "*.fbx"} <= set(globs), globs)
-        self.assertTrue(self.calls[0].get("filter_description"))
+    def test_the_open_scene_types_are_maya_scenes_and_fbx(self):
+        self.assertTrue(
+            {"*.ma", "*.mb", "*.fbx"} <= set(HierarchySyncSession.SCENE_FILE_TYPES)
+        )
 
 
 if __name__ == "__main__":

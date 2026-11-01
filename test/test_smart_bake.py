@@ -5185,5 +5185,147 @@ class TestFoldOffsets(unittest.TestCase):
         self.assertEqual(self._state([cube]), state)
 
 
+class TestBakeReport(unittest.TestCase):
+    """``BakeResult.describe`` and ``restorable``: what the Smart Bake panel
+    reports of a bake (the panel: tentacle's ``test/test_smart_bake_panel.py``)."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(minTime=1, maxTime=10)
+
+    def tearDown(self):
+        if self.maya_available:
+            cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _constrained_cube(prefix):
+        cube = cmds.polyCube(name=f"{prefix}_cube")[0]
+        loc = cmds.spaceLocator(name=f"{prefix}_loc")[0]
+        cmds.setKeyframe(loc, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(loc, attribute="translateX", time=10, value=5)
+        return cube, cmds.parentConstraint(loc, cube)[0]
+
+    def test_describe_names_only_what_was_declined(self):
+        """Every already-keyed object is "skipped", so "Skipped N object(s)"
+        counted the scene and buried the refusals. The report names the
+        objects SmartBake declined, each with its reason, and nothing else.
+        Added: 2026-09-18 (as the panel's report; the report is the result's now)
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import BakeResult
+
+        result = BakeResult(baked={"|baked": ["tx"]}, time_range=(1, 10))
+        result.skip("|keyed", "nothing to bake: its channels are keyed", declined=False)
+        result.skip("|blend", "keyed AND constrained (a pairBlend)")
+        text = "\n".join(result.describe())
+        self.assertIn("|baked: tx", text)
+        self.assertNotIn("Skipped", text)
+        self.assertNotIn("|keyed", text)
+        self.assertIn("Declined |blend: keyed AND constrained (a pairBlend)", text)
+
+    def test_describe_names_the_layer_the_drivers_and_the_backup(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import BakeResult
+
+        lines = BakeResult(
+            baked={"|a": ["tx"]},
+            flattened={"|grp|a": "|a"},
+            override_layer="SmartBake_override",
+            muted_drivers=["pc1", "pc2"],
+            deleted=["expression1"],
+            backup_path="C:/scenes/shot_prebake.ma",
+        ).describe()
+        self.assertTrue(lines[1].startswith("Flattened 1 sheared chain node(s)"), lines)
+        for line in (
+            "Override layer: SmartBake_override",
+            "Muted 2 driver(s).",
+            "Deleted 1 driver node(s).",
+            "Backup saved: C:/scenes/shot_prebake.ma",
+        ):
+            self.assertIn(line, lines)
+        # The session is the caller's to word (it names Unbake).
+        self.assertFalse(any("session" in line.lower() for line in lines), lines)
+        self.assertEqual(BakeResult().describe(), [])
+
+    def test_restorable_tells_a_reversible_session_from_a_destructive_one(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        self._constrained_cube("kept")
+        result = SmartBake().execute()
+        self.assertTrue(result.session_id)
+        self.assertTrue(result.restorable)
+        SmartBake.restore(result.session_id)
+
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(minTime=1, maxTime=10)
+        _, constraint = self._constrained_cube("gone")
+        result = SmartBake(
+            use_override_layer=False, delete_inputs=True, backup_file=False
+        ).execute()
+        self.assertFalse(cmds.objExists(constraint))
+        self.assertTrue(result.session_id, "recorded, for Unbake to report on")
+        self.assertFalse(result.restorable)
+
+
+
+class TestNearestEulerThroughGimbal(unittest.TestCase):
+    """The layer bake's Euler filter keys a turn swept through gimbal lock on
+    the axis it rides. At the lock only the inner and outer angles' sum or
+    difference is fixed, and ``MEulerRotation`` puts the whole turn on the
+    inner one: a sweep carrying it on the outer one baked (0,87,30)
+    (-30,90,0) (0,93,30) in xyz, both curves spiking 30 degrees for one frame
+    (BACKLOG 2026-11-01, fresh-mayapy repro). The rule is
+    ``ptk.Quaternion.euler_near``, pythontk's glTF reader's too."""
+
+    ORDERS = ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx")
+
+    def test_a_sweep_through_the_lock_stays_on_its_axis_in_every_order(self):
+        import math
+
+        import maya.api.OpenMaya as om2
+
+        from mayatk.anim_utils.smart_bake._smart_bake import _SmartBakeInternal
+
+        axes = {"x": 0, "y": 1, "z": 2}
+        for index, order in enumerate(self.ORDERS):
+            inner, middle, outer = (axes[c] for c in order)
+            for lock in (90.0, -90.0):
+                for carried in (inner, outer):
+                    with self.subTest(order=order, lock=lock, carried="xyz"[carried]):
+                        previous, baked, authored = None, [], []
+                        # From inside the middle's range: a first key is
+                        # taken as read.
+                        for step in (-6.0, -3.0, 0.0, 3.0, 6.0)[:: 1 if lock > 0 else -1]:
+                            want = [0.0, 0.0, 0.0]
+                            want[middle], want[carried] = lock + step, 30.0
+                            authored.append(want)
+                            q = om2.MEulerRotation(
+                                [math.radians(v) for v in want], index
+                            ).asQuaternion()
+                            euler = _SmartBakeInternal._nearest_euler(
+                                q.asEulerRotation().reorder(index), previous
+                            )
+                            previous = euler
+                            baked.append(
+                                [math.degrees(v) for v in (euler.x, euler.y, euler.z)]
+                            )
+                        for got, want in zip(baked, authored):
+                            for g, w in zip(got, want):
+                                self.assertAlmostEqual(g, w, delta=1e-6, msg=baked)
+
+
 if __name__ == "__main__":
     unittest.main()

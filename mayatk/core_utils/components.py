@@ -8,9 +8,10 @@ from typing import Union, List, Dict, Set, Tuple, Optional
 
 try:
     import maya.cmds as cmds
+    import maya.mel as mel
     import maya.api.OpenMaya as om
 except Exception:
-    cmds = None
+    cmds = mel = None
     om = None
 import pythontk as ptk
 
@@ -273,6 +274,20 @@ class _ComponentsInternal(object):
     """Internal helpers for Components."""
 
     @staticmethod
+    def _transfer_surfaces() -> List[str]:
+        """The selection's surface transforms in selection order -- the transfer
+        source first -- each once; a selected component counts as its object
+        (``list_transforms`` cannot resolve a ``.vtx[...]`` string itself)."""
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        objects = [node.split(".")[0] for node in cmds.ls(selection=True, flatten=True) or []]
+        if not objects:
+            return []
+        return NodeUtils.list_transforms(
+            objects, dag=True, type="surfaceShape", noIntermediate=True
+        )
+
+    @staticmethod
     def _split_component(comp: str) -> Tuple[str, Optional[str], Optional[int]]:
         """Split ``"obj.vtx[5]"`` into ``("obj", "vtx", 5)``.
 
@@ -451,6 +466,33 @@ class _ComponentsInternal(object):
             if shapes:
                 pairs.append((xform, shapes[0]))
         return pairs
+
+
+    @staticmethod
+    def _polygon_components(components, mask):
+        """*components* (``None``: the selection) filtered to the polygon
+        component type(s) of the selection *mask* (31 vertices, 32 edges, 34
+        faces; a tuple for several), flattened; ``[]`` for none. An object is no
+        component, so it filters out (Maya's own command would take all of its
+        components, which a component tool must not)."""
+        nodes = (
+            CoreUtils.as_strings(components)
+            if components is not None
+            else cmds.ls(selection=True) or []
+        )
+        if not nodes:
+            return []
+        return cmds.filterExpand(nodes, selectionMask=mask, expand=True) or []
+
+    @staticmethod
+    def _run_mel_on(nodes, command):
+        """Select *nodes* and run *command*, MEL that acts on the selection (a
+        Maya menu item, with the user's option-box settings); returns *nodes*."""
+        import maya.mel as mel
+
+        cmds.select(nodes, replace=True)
+        mel.eval(command)
+        return nodes
 
 
 class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
@@ -997,9 +1039,27 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
     @staticmethod
     def adjusted_distance_between_vertices(
-        p1, p2, adjust: float = 0.0, as_percentage: bool = False
+        p1=None, p2=None, adjust: float = 0.0, as_percentage: bool = False
     ):
-        """Calculate adjusted distance between two points/vertices."""
+        """The distance between two points or vertices, adjusted by *adjust* (an
+        amount, or a percentage with *as_percentage*). Twin of blendertk's
+        ``Components.adjusted_distance_between_vertices``.
+
+        Parameters:
+            p1, p2: Points ``(x, y, z)`` or vertices. Both ``None``: the two
+                selected vertices, in world space (where Maya merges).
+            adjust (float): Added to the distance, or a percentage of it.
+            as_percentage (bool): Read *adjust* as a percentage.
+
+        Returns:
+            (float/None): The distance; ``None`` when called with ``None`` and
+                the selection is not exactly two vertices.
+        """
+        if p1 is None and p2 is None:
+            verts = cmds.filterExpand(selectionMask=31, expand=True) or []
+            if len(verts) != 2:
+                return None
+            p1, p2 = verts
         # Resolve component descriptors to positions if needed
         if isinstance(p1, str) and "." in p1:
             p1 = cmds.pointPosition(p1, world=True)
@@ -1333,6 +1393,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
     @classmethod
     @CoreUtils.undoable
+    @CoreUtils.selected
     def set_edge_hardness(
         cls,
         objects,
@@ -1441,6 +1502,11 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
             if lower_edges:
                 cmds.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
 
+        # Soft edges display dotted, so the new hardness reads in the viewport.
+        shown = [path for paths in object_to_paths.values() for path in paths]
+        if shown:
+            cmds.polyOptions(shown, se=True)
+
         # polySoftEdge / polySetToFaceNormal mutate the active selection.
         # Restore the caller's selection so downstream UI (HUD counts, etc.)
         # don't see thousands of accidentally-selected edges.
@@ -1522,8 +1588,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
     @classmethod
     @CoreUtils.undoable
+    @CoreUtils.selected
     def average_normals(cls, objects, by_uv_shell=False):
-        """Average the normals of the given objects."""
+        """Average the normals of the given objects (``None``: the selection)."""
         from mayatk.uv_utils._uv_utils import UvUtils
 
         components_dict = cls.map_components_to_objects(objects)
@@ -1539,10 +1606,82 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                 else:
                     cmds.polySoftEdge(obj, a=180)
 
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def set_edge_softness(cls, objects, soft: bool = True) -> None:
+        """Soften (``soft=True``) or harden the edge normals of *objects*.
+
+        Whole meshes, or just the given components; ``None`` takes the
+        selection. Soft edges then display dotted, so the result reads in the
+        viewport, and the selection is left as it was.
+        """
+        saved = cmds.ls(sl=True, long=True) or []
+        for components in cls.map_components_to_objects(objects).values():
+            cmds.polySoftEdge(components, angle=180 if soft else 0)
+            shapes = cmds.ls(components, objectsOnly=True, long=True) or []
+            if shapes:
+                cmds.polyOptions(shapes, se=True)
+        if saved:
+            cmds.select(saved, replace=True)
+
     @staticmethod
     @CoreUtils.undoable
+    @CoreUtils.selected
+    def set_to_face_normals(objects) -> None:
+        """Set the vertex normals of *objects* to their faces' (faceted shading).
+
+        ``None`` takes the selection, which is left as it was.
+        """
+        with CoreUtils.preserved_selection():
+            # polySetToFaceNormal acts on the active selection.
+            cmds.select(CoreUtils.as_strings(objects), replace=True)
+            cmds.polySetToFaceNormal()
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def reverse_normals(cls, objects, mode: int = 0) -> None:
+        """Reverse the normals of *objects* (meshes, or just the given faces).
+
+        ``mode`` is ``polyNormal``'s: 0 Reverse, 1 Propagate, 2 Conform,
+        3 Reverse and Extract, 4 Reverse and Propagate. ``None`` takes the
+        selection.
+        """
+        for components in cls.map_components_to_objects(objects).values():
+            cmds.polyNormal(components, normalMode=mode, userNormalMode=1)
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def toggle_normal_lock(objects) -> Optional[bool]:
+        """Lock the vertex normals of *objects*, or unlock them when every one
+        is locked already.
+
+        Objects take all their vertices, components their own (as vertices);
+        ``None`` takes the selection.
+
+        Returns:
+            True when the normals are now locked, False when unlocked, None when
+            *objects* hold no vertices.
+        """
+        vertices = cmds.polyListComponentConversion(
+            CoreUtils.as_strings(objects), toVertex=True
+        )
+        if not vertices:
+            return None
+        if all(cmds.polyNormalPerVertex(vertices, q=True, freezeNormal=True) or []):
+            cmds.polyNormalPerVertex(vertices, unFreezeNormal=True)
+            return False
+        cmds.polyNormalPerVertex(vertices, freezeNormal=True)
+        return True
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
     def transfer_normals(objects, space: str = "world"):
-        """Transfer vertex normals from source mesh to target meshes.
+        """Transfer vertex normals from the first mesh of *objects* to the rest
+        (``None``: the selection, in selection order).
 
         A target carrying deformers keeps them: the normals are baked into its
         input shape rather than the transfer being flattened with a Delete
@@ -1569,9 +1708,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                 if shapes and cmds.objectType(shapes[0]) == "mesh":
                     objs.append(obj)
         if len(objs) < 2:
-            raise ValueError(
-                "At least one source and one target mesh must be polygonal meshes."
-            )
+            raise ValueError("Transfer needs a source mesh and one or more target meshes.")
 
         source_mesh, *target_meshes = objs
         sample_space_value = space_map[space]
@@ -1603,6 +1740,84 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                 Components._bake_normals_through_deformers(target_mesh, nodes)
             else:
                 cmds.delete(target_mesh, constructionHistory=True)
+
+    #: The Transfer menu (:meth:`get_transfer_types` / :meth:`transfer`): Maya's
+    #: Transfer items -- label -> (MEL, the fewest source + target surfaces it
+    #: needs, whether it opens a window or tool the user finishes, what it does).
+    _TRANSFERS = {
+        "Maps": (
+            "performSurfaceSampling 1",
+            0,
+            True,
+            "Add source and target surfaces in the window, then bake.",
+        ),
+        "Attribute Values": (
+            "TransferAttributeValues",
+            2,
+            False,
+            "UVs, vertex positions and colors, source → targets.",
+        ),
+        "Shading Sets": (
+            "performTransferShadingSets 0",
+            2,
+            False,
+            "Shader assignments, source → targets.",
+        ),
+        "Vertex Order": (
+            "TransferVertexOrder",
+            2,
+            True,
+            "Click a source vertex, then the matching target vertex.",
+        ),
+    }
+
+    @classmethod
+    def get_transfer_types(cls) -> Dict[str, str]:
+        """The Transfer menu: ``{label: what it does}`` in menu order, each a
+        transfer :meth:`transfer` runs. Twin of blendertk's
+        ``Components.get_transfer_types`` (Blender's Data Transfer layers there)."""
+        return {label: spec[3] for label, spec in cls._TRANSFERS.items()}
+
+    @classmethod
+    @CoreUtils.undoable
+    def transfer(cls, objects, transfer_type: str):
+        """Run a :meth:`get_transfer_types` transfer from the first surface of
+        *objects* to the rest, as Maya's Transfer menu does. Twin of blendertk's
+        ``Components.transfer``.
+
+        Parameters:
+            objects (list/None): The surfaces, the source first; ``None`` takes the
+                selection, the source selected first (a selected component counts
+                as its object).
+            transfer_type (str): A :meth:`get_transfer_types` label.
+
+        Returns:
+            (list/None): ``[source, *targets]``; ``None`` for a window or tool the
+                user finishes (Maps, Vertex Order); ``[]`` with nothing selected.
+
+        Raises:
+            ValueError: An unknown type, or too few surfaces.
+            RuntimeError: Maya refused it.
+        """
+        spec = cls._TRANSFERS.get(transfer_type)
+        if spec is None:
+            raise ValueError(
+                f"Unknown transfer '{transfer_type}': {', '.join(cls._TRANSFERS)}."
+            )
+        command, needed, interactive, _ = spec
+        if objects is not None:
+            nodes = [str(o) for o in CoreUtils.as_strings(objects)]
+            cmds.select(nodes, replace=True) if nodes else cmds.select(clear=True)
+        surfaces = cls._transfer_surfaces()
+        if needed and not surfaces:
+            return []
+        if len(surfaces) < needed:
+            raise ValueError(
+                "A source and at least one target surface are needed: select the "
+                f"source first, then the target(s) ({len(surfaces)} of {needed} selected)."
+            )
+        mel.eval(command)
+        return None if interactive else surfaces
 
     @staticmethod
     def _bake_normals_through_deformers(target: str, transfer_nodes) -> None:
@@ -1717,28 +1932,49 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
         return normal_vector
 
     @staticmethod
+    @CoreUtils.undoable
     def crease_edges(edges=None, amount=None, angle=None):
-        """Adjust properties of the given edges with optional crease and edge softening/hardening."""
-        if edges is None:
-            if cmds.selectMode(q=True, object=True):
-                selected_objects = cmds.ls(sl=True, o=True) or []
-                edges = (
-                    cmds.polyListComponentConversion(selected_objects, toEdge=True)
-                    or []
-                )
-            else:
-                edges = cmds.ls(sl=True, fl=True) or []
+        """Crease *edges* (subdivision sharpness), optionally softening or hardening
+        them by angle. One undo step.
 
-        edges = cmds.ls(edges, flatten=True) or []
+        Twin of blendertk's ``Components.crease_edges`` (the Subdivision Surface
+        edge crease there): what tentacle's crease panel calls with ``None``.
 
-        if not edges:
-            return
+        Parameters:
+            edges (str/list, optional): Edges (or vertices, for a vertex crease),
+                or objects for all their edges. ``None`` takes the selection: the
+                selected components, else every edge of the selected objects.
+            amount (float, optional): The crease (``polyCrease``), 0 (none) to 10
+                (full); ``None`` leaves it.
+            angle (float, optional): Harden the edges whose angle exceeds it and
+                soften the rest (``polySoftEdge``), in degrees; ``None`` leaves
+                them.
+
+        Returns:
+            list: The edges acted on, flattened; ``[]`` when there were none.
+        """
+        nodes = (
+            CoreUtils.as_strings(edges)
+            if edges is not None
+            else cmds.ls(selection=True) or []
+        )
+        # Guarded: ``cmds.ls`` given an empty list answers as if given nothing.
+        nodes = (cmds.ls(nodes, flatten=True) or []) if nodes else []
+        components = [n for n in nodes if "." in n]
+        objects = [n for n in nodes if "." not in n]
+        if objects:
+            converted = cmds.polyListComponentConversion(objects, toEdge=True) or []
+            if converted:
+                components += cmds.ls(converted, flatten=True) or []
+        if not components:
+            return []
 
         if amount is not None:
-            cmds.polyCrease(edges, value=amount, vertexValue=amount)
+            cmds.polyCrease(components, value=amount, vertexValue=amount)
 
         if angle is not None:
-            cmds.polySoftEdge(edges, angle=angle)
+            cmds.polySoftEdge(components, angle=angle)
+        return components
 
     @staticmethod
     def get_creased_edges(edges):
@@ -1754,13 +1990,38 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
         return creased_edges
 
     @staticmethod
-    def transfer_creased_edges(frm, to):
-        """Transfer creased edges from the 'frm' object to the 'to' objects."""
-        source = cmds.ls(CoreUtils.as_strings(frm), objectsOnly=True) or []
-        targets = cmds.ls(CoreUtils.as_strings(to), objectsOnly=True) or []
+    @CoreUtils.undoable
+    def transfer_creased_edges(frm=None, to=None):
+        """Copy the edge creases of *frm* to the same edge ids on each of *to*
+        (meshes of one topology). One undo step.
+
+        ``frm`` ``None`` takes the selection in selection order: the first object
+        is the source, the rest the targets (``to`` ``None``). Twin of blendertk's
+        ``Components.transfer_creased_edges`` (nearest edge there, the active
+        mesh the source: Blender's convention).
+
+        Returns:
+            list: The targets; ``[]`` with nothing selected.
+
+        Raises:
+            ValueError: No source or no target.
+        """
+        if frm is None:
+            selection = cmds.ls(orderedSelection=True, objectsOnly=True) or []
+            if not selection:
+                return []
+            frm = selection[0]
+            if to is None:
+                to = selection[1:]
+        # Guarded: ``cmds.ls`` given an empty list answers as if given nothing.
+        frm, to = CoreUtils.as_strings(frm), CoreUtils.as_strings(to)
+        source = (cmds.ls(frm, objectsOnly=True) or []) if frm else []
+        targets = (cmds.ls(to, objectsOnly=True) or []) if to else []
 
         if not (source and targets):
-            raise ValueError("Both source and target objects must exist.")
+            raise ValueError(
+                "Transfer needs a source object and one or more target objects."
+            )
 
         src = source[0]
         try:
@@ -1772,7 +2033,332 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
             for edge_id, crease_value in enumerate(crease_values):
                 if crease_value > 0:
                     cmds.polyCrease(f"{target}.e[{edge_id}]", value=crease_value)
+        return targets
 
+
+    # ------------------------------------------------------------------ polygon operations
+    # What tentacle's polygons panel calls (twins in blendertk's ``Components``):
+    # ``None`` takes the selection; ``[]`` comes back with nothing to act on.
+
+    @staticmethod
+    @CoreUtils.undoable
+    def extrude(components=None, keep_faces_together=True, divisions=1, thickness=0.0):
+        """Extrude faces, edges or vertices with Maya's own Extrude, which
+        classifies the selection (any mask, multi-component included), batches
+        per object and leaves the extrude manipulator up. One undo step. Twin of
+        blendertk's ``Components.extrude``.
+
+        Maya's Extrude reads its settings from optionVars, so these are swapped
+        in for the call and Maya's own restored after.
+
+        Parameters:
+            components: Faces, edges, vertices or meshes (a mesh extrudes its
+                faces); ``None``: the selection.
+            keep_faces_together (bool): Extrude connected faces and edges as one
+                region; off, each face along its own normal.
+            divisions (int): Segments along the extrusion.
+            thickness (float): Push faces and edges along their normals by this
+                much (Maya's Extrude Thickness); 0 extrudes in place.
+
+        Returns:
+            list: What was extruded; ``[]`` with nothing selected.
+        """
+        import maya.mel as mel
+
+        nodes = (
+            CoreUtils.as_strings(components)
+            if components is not None
+            else cmds.ls(selection=True) or []
+        )
+        if not nodes:
+            return []
+        if components is not None:
+            cmds.select(nodes, replace=True)
+        with CoreUtils.temp_option_vars(
+            {
+                "polyKeepFacetsGrouped": bool(keep_faces_together),
+                "polyExtrudeFaceDivisions": int(divisions),
+                "polyExtrudeEdgeDivisions": int(divisions),
+                "polyExtrudeVertexDivisions": int(divisions),
+                "polyExtrudeFaceThickness": float(thickness),
+                "polyExtrudeEdgeThickness": float(thickness),
+            }
+        ):
+            mel.eval("PolyExtrude")
+        return nodes
+
+    @staticmethod
+    @CoreUtils.undoable
+    def inset_faces(faces=None, offset=0.1, depth=0.0, individual=False):
+        """Inset the selected faces: a new border ring *offset* inside the
+        region, the region raised or lowered by *depth* (``polyExtrudeFacet``).
+        One undo step. Twin of blendertk's ``Components.inset_faces``.
+
+        Parameters:
+            faces: Faces; ``None``: the selection (only its faces).
+            offset (float): How far the border sits inside the region's edge.
+            depth (float): Move the inset region along its normal.
+            individual (bool): Inset each face on its own.
+
+        Returns:
+            list: The extrude node(s); ``[]`` with no face.
+        """
+        faces = Components._polygon_components(faces, 34)
+        if not faces:
+            return []
+        return (
+            cmds.polyExtrudeFacet(
+                faces,
+                keepFacesTogether=not individual,
+                divisions=1,
+                offset=offset,
+                thickness=depth,
+                smoothingAngle=30,
+            )
+            or []
+        )
+
+    @staticmethod
+    @CoreUtils.undoable
+    def divide_faces(faces=None, u=True, v=True, cuts=1, tris=False):
+        """Divide the selected faces (``polySubdivideFacet``, face by face: on
+        several adjacent faces at once, a divided face turns its neighbor into an
+        n-gon that no longer divides). One undo step. Twin of blendertk's
+        ``Components.divide_faces``.
+
+        Parameters:
+            faces: Faces; ``None``: the selection (only its faces).
+            u (bool): Split along U (the face's first edge's direction).
+            v (bool): Split along V. With *u*: both ways.
+            cuts (int): Cuts in each split direction.
+            tris (bool): Divide into triangles.
+
+        Returns:
+            list: The faces divided; ``[]`` with no face.
+        """
+        faces = Components._polygon_components(faces, 34)
+        if not faces:
+            return []
+        cuts = max(int(cuts), 1)
+        both = (u and v) or tris
+        if both and cuts == 1:  # one exponential subdivision: 4 quads / 4 tris
+            divisions, divisions_u, divisions_v, method = 1, 0, 0, 0
+        else:  # linear: cuts + 1 segments along each enabled direction
+            divisions, method = 0, 1
+            divisions_u = cuts + 1 if (u or tris) else 0
+            divisions_v = cuts + 1 if (v or tris) else 0
+        for face in faces:
+            cmds.polySubdivideFacet(
+                face,
+                divisions=divisions,
+                divisionsU=divisions_u,
+                divisionsV=divisions_v,
+                mode=1 if tris else 0,
+                subdMethod=method,
+            )
+        return faces
+
+    @staticmethod
+    @CoreUtils.undoable
+    def circularize(components=None):
+        """Reshape the selected vertices, edges or faces into an even circle
+        (``polyCircularize``). One undo step. Twin of blendertk's (LoopTools
+        Circle there).
+
+        Returns:
+            list: The circularize node(s); ``[]`` with no component.
+        """
+        components = Components._polygon_components(components, (31, 32, 34))
+        if not components:
+            return []
+        return cmds.polyCircularize(components, ch=True) or []
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def fill_holes(components):
+        """Cap the open holes bounded by the selection's border edges (Maya's
+        Fill Hole: a mesh fills all of its holes). One undo step. Twin of
+        blendertk's.
+
+        Returns:
+            list: What was filled; ``[]`` with nothing selected.
+        """
+        return Components._run_mel_on(CoreUtils.as_strings(components), "FillHole")
+
+    @staticmethod
+    @CoreUtils.selected
+    def symmetrize(components):
+        """Mirror the selected components across the symmetry axis with Maya's
+        Symmetrize, which asks for the edge that defines the axis when symmetry
+        is off. Twin of blendertk's.
+
+        Returns:
+            list: What was mirrored; ``[]`` with nothing selected.
+        """
+        return Components._run_mel_on(CoreUtils.as_strings(components), "Symmetrize")
+
+    @staticmethod
+    @CoreUtils.undoable
+    def bridge_edges(edges=None):
+        """Span two edge selections with new faces (``polyBridgeEdge``), capping
+        the bridged border; edges that share a vertex bridge through
+        :meth:`bridge_connected_edges`. One undo step. Twin of blendertk's.
+
+        Returns:
+            list: The edges bridged; ``[]`` with no edge.
+
+        Raises:
+            ValueError: Edges sharing a vertex that do not make a bridge.
+        """
+        edges = Components._polygon_components(edges, 32)
+        if not edges:
+            return []
+        try:
+            if cmds.polyBridgeEdge(edges, curveType=0, divisions=0):
+                cmds.polyCloseBorder(edges)
+        except RuntimeError:  # edges that share a vertex
+            Components.bridge_connected_edges(edges)
+        return edges
+
+    @staticmethod
+    @CoreUtils.undoable
+    def collapse_components(components=None):
+        """Collapse each selected face to its own point; merge the selected edges
+        and vertices at one center. One undo step. Twin of blendertk's.
+
+        Routed on the selection, not the selectType mask (the multi-component
+        mask names no type). Faces picked through several instances fold onto
+        one path first, as Maya's own poly actions do. Edges or vertices picked
+        beside faces are left as they are, and returned as skipped.
+
+        Parameters:
+            components: Components; ``None``: the selection.
+
+        Returns:
+            tuple: ``(collapsed, skipped)``; ``([], [])`` with no component (an
+                object pick is refused: MergeToCenter would take all of its
+                vertices).
+        """
+        import maya.mel as mel
+
+        if components is not None:
+            nodes = CoreUtils.as_strings(components)
+            if not nodes:
+                return [], []
+            cmds.select(nodes, replace=True)
+        if not cmds.filterExpand(selectionMask=(31, 32, 34), expand=False):
+            return [], []
+        if cmds.filterInstances(q=True, shapes=True):
+            cmds.select(cmds.filterInstances(shapes=True), replace=True)
+        faces = cmds.filterExpand(selectionMask=34, expand=False)
+        if faces:
+            skipped = cmds.filterExpand(selectionMask=(31, 32), expand=False) or []
+            history = cmds.constructionHistory(q=True, toggle=True)
+            for object_faces in Components.map_components_to_objects(faces).values():
+                # polyCollapseFacet refuses a multi-object list
+                cmds.polyCollapseFacet(object_faces, constructionHistory=history)
+            return list(faces), list(skipped)
+        merged = cmds.filterExpand(selectionMask=(31, 32), expand=False) or []
+        was_edge = cmds.selectType(q=True, edge=True)
+        mel.eval("MergeToCenter")
+        if was_edge:
+            cmds.selectType(edge=True)
+        return list(merged), []
+
+    @staticmethod
+    def connect_components(components=None):
+        """Connect vertices and edges with Maya's interactive Connect tool,
+        which connects the selected ones and stays up for more picks. Twin of
+        blendertk's (a one-shot connect there).
+
+        Returns:
+            bool: True: the tool is active.
+        """
+        import maya.mel as mel
+
+        if components is not None:
+            cmds.select(CoreUtils.as_strings(components), replace=True)
+        mel.eval("dR_connectTool")
+        return True
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def poke_faces(faces):
+        """Add a center vertex to each selected face, fanning it into triangles
+        (Maya's Poke). One undo step. Twin of blendertk's.
+
+        Returns:
+            list: What was poked; ``[]`` with nothing selected.
+        """
+        return Components._run_mel_on(CoreUtils.as_strings(faces), "PokePolygon")
+
+    @staticmethod
+    def slide_edges(edges=None):
+        """Start Maya's Slide Edge tool: drag the selected edge loops along their
+        neighboring edges. Twin of blendertk's (the modal edge slide there).
+
+        Returns:
+            bool: True: the tool is active.
+        """
+        import maya.mel as mel
+
+        if edges is not None:
+            cmds.select(CoreUtils.as_strings(edges), replace=True)
+        mel.eval("SlideEdgeTool")
+        return True
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def offset_edge_loops(edges):
+        """Add an edge loop on each side of the selected edges (Maya's Offset
+        Edge Loop, with its option-box settings). One undo step. Twin of
+        blendertk's.
+
+        Returns:
+            list: What was offset; ``[]`` with nothing selected.
+        """
+        return Components._run_mel_on(
+            CoreUtils.as_strings(edges), "performPolyDuplicateEdge 0"
+        )
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def edit_edge_flow(edges):
+        """Move the selected edges to follow the surrounding surface curvature
+        (``polyEditEdgeFlow``). One undo step. Twin of blendertk's.
+
+        Returns:
+            list: The edges; ``[]`` with nothing selected.
+        """
+        edges = CoreUtils.as_strings(edges)
+        cmds.polyEditEdgeFlow(edges, adjustEdgeFlow=1)
+        return edges
+
+    @staticmethod
+    @CoreUtils.undoable
+    def toggle_face_holes(faces=None):
+        """Toggle the selected faces' hole state (``polyHole``): holes render
+        and display invisible. One state for all: restored when they are holes,
+        else made holes. One undo step. Maya's: Blender has no persistent hole
+        flag (tentacle's ``.ui`` tags the button ``requires="maya"``).
+
+        Returns:
+            (tuple/list): ``(holes, faces)``: whether the faces are holes now;
+                ``[]`` with no face.
+        """
+        faces = Components._polygon_components(faces, 34)
+        if not faces:
+            return []
+        current = cmds.polyHole(faces, q=True, assignHole=True)
+        if isinstance(current, (list, tuple)):
+            current = bool(current) and all(current)
+        holes = not current
+        cmds.polyHole(faces, assignHole=holes)
+        return holes, faces
 
 # -----------------------------------------------------------------------------
 

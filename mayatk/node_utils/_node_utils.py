@@ -939,6 +939,154 @@ class NodeUtils(ptk.HelpMixin):
             done.append(node)
         return done
 
+    #: Connections that only FILE a node -- display-layer and set membership.
+    #: They say nothing about anything depending on it, so they never keep a
+    #: leftover group alive: artists put whole hierarchies in layers, and counting
+    #: that as a dependency would retire the cleanup for the scenes that need it.
+    _ORGANIZATIONAL_CONNECTION_TYPES = ("displayLayer", "objectSet")
+
+    @classmethod
+    def _is_disposable_group(cls, node) -> bool:
+        """Is this empty transform junk, or is something depending on it?
+
+        Type alone does not make an empty transform disposable: rigs use them as
+        constraint targets, matrix sources and space-switch pivots, and every one
+        of those carries a DATA connection, so anything still wired to another
+        node stays. Referenced and locked nodes are never disposable either.
+        """
+        try:
+            if cmds.referenceQuery(node, isNodeReferenced=True):
+                return False
+            if cmds.lockNode(node, q=True, lock=True)[0]:
+                return False
+            connected = cmds.listConnections(node, source=True, destination=True) or []
+            if not connected:
+                return True
+            organizational = set(
+                cmds.ls(connected, type=cls._ORGANIZATIONAL_CONNECTION_TYPES) or []
+            )
+            return not (set(connected) - organizational)
+        except Exception:  # a node an earlier step of the cleanup consumed
+            return False
+
+    @staticmethod
+    def _history_scope(scope: str) -> Tuple[List[str], set]:
+        """``(objects, mesh shapes)`` for Delete History's *scope*: ``"selected"``
+        the selected objects and their shapes; ``"visible"`` / ``"all"`` every
+        visible / every non-intermediate mesh shape (as both). Long names."""
+        if scope == "selected":
+            objects = cmds.ls(selection=True, objectsOnly=True, long=True) or []
+            shapes = set(
+                cmds.listRelatives(
+                    objects, shapes=True, fullPath=True, noIntermediate=True
+                )
+                or []
+                if objects
+                else []
+            )
+            return objects, shapes
+        kwargs = {"type": "mesh", "long": True}
+        if scope == "visible":
+            kwargs["visible"] = True
+        intermediates = set(cmds.ls(intermediateObjects=True, long=True) or [])
+        shapes = set(cmds.ls(**kwargs) or []) - intermediates
+        return list(shapes), shapes
+
+    @staticmethod
+    def _optimize_scene() -> None:
+        """Maya's Optimize Scene Size (``OptimizeScene``), silently.
+
+        ``OptimizeScene`` (``performCleanUpScene``) pops a non-undoable-op OK/Cancel
+        dialog unless ``MAYA_TESTING_CLEANUP`` is set -- Autodesk's own suppression
+        hook. Set it around the call (through MEL, so MEL's ``getenv`` sees it) and
+        restore the prior value, so nothing leaks into the session.
+        """
+        prior = mel.eval('getenv "MAYA_TESTING_CLEANUP"')
+        mel.eval('putenv "MAYA_TESTING_CLEANUP" "1"')
+        try:
+            mel.eval("OptimizeScene")
+        except RuntimeError as error:
+            cmds.warning(f"Optimize Scene failed: {error}")
+        finally:
+            mel.eval(f'putenv "MAYA_TESTING_CLEANUP" "{prior}"')
+
+    @classmethod
+    @CoreUtils.undoable
+    def delete_history_in_scope(
+        cls,
+        scope: str = "selected",
+        preserve_deformers: bool = True,
+        delete_unused: bool = False,
+        optimize_scene: bool = False,
+    ) -> List[str]:
+        """Delete History on the objects *scope* names, with the viewport held.
+
+        Parameters:
+            scope (str): ``"selected"``, ``"visible"`` or ``"all"`` meshes.
+            preserve_deformers (bool): Keep the deformer stack (Delete Non-Deformer
+                History, on the mesh shapes); False is a full Delete History.
+            delete_unused (bool): First delete unused shading nodes
+                (``MLdeleteUnused``, scene-wide: Maya's cannot be scoped) and the
+                empty groups nothing depends on.
+            optimize_scene (bool): Last, run Optimize Scene Size, silently.
+
+        Returns:
+            List[str]: The nodes whose history was deleted; ``[]`` when the scope
+                holds none (the scene-wide steps still run).
+        """
+        objects, shapes = cls._history_scope(scope)
+        pool = sorted(shapes) if preserve_deformers else objects
+        done: List[str] = []
+        try:
+            with CoreUtils.suspended_refresh():
+                if delete_unused:
+                    mel.eval("MLdeleteUnused")
+                    # ``get_groups`` tests ``objectType == "transform"``, which is
+                    # exact; ``ls -dag -exactType transform`` is NOT (under -dag it
+                    # also matches joints, ikHandles and constraints).
+                    disposable = [
+                        group
+                        for group in cls.get_groups(empty=True)
+                        if cls._is_disposable_group(group)
+                    ]
+                    if disposable:
+                        cmds.delete(disposable)
+                if pool:
+                    done = cls.delete_history(
+                        pool, preserve_deformers=preserve_deformers
+                    )
+                if optimize_scene:
+                    cls._optimize_scene()
+        finally:
+            cmds.refresh(force=True)
+        return done
+
+    @staticmethod
+    @CoreUtils.undoable
+    def lock_nodes(objects=None, lock: bool = True) -> List[str]:
+        """Lock nodes against deletion, renaming and reparenting (``lockNode``), or
+        unlock them. Twin of blendertk's ``NodeUtils.lock_nodes`` (an unselectable
+        object there).
+
+        Parameters:
+            objects (str/obj/list): The nodes; ``None`` takes the selection, or
+                every node in the scene when nothing is selected.
+            lock (bool): Lock, or unlock.
+
+        Returns:
+            List[str]: The nodes changed (one Maya refuses is skipped).
+        """
+        if objects is None:
+            objects = cmds.ls(selection=True) or cmds.ls() or []
+        done = []
+        for node in CoreUtils.as_strings(objects):
+            try:
+                cmds.lockNode(node, lock=lock)
+            except RuntimeError:
+                continue
+            done.append(str(node))
+        return done
+
     @classmethod
     def bake_onto_input_shape(
         cls, target, transfer_nodes, capture, apply, label: str = "transfer"
@@ -1385,6 +1533,75 @@ class NodeUtils(ptk.HelpMixin):
         return _AssemblyHandle(assembly_node)
 
     @staticmethod
+    def selection_summary(limit: int = 10) -> Optional[Dict[str, Any]]:
+        """What is selected, as plain values: what a status readout (tentacle's
+        HUD) lists. Twin of blendertk's ``NodeUtils.selection_summary``.
+
+        Parameters:
+            limit (int): Name the objects only up to this many.
+
+        Returns:
+            (dict/None): None with nothing selected. In component mode
+            ``{"mode": "component", "component": "Verts" | "Edges" | "Faces" |
+            "UVs" | None, "selected": int, "total": int}``; else ``{"mode":
+            "object", "count": int, "objects": [(name, type), ...]`` (empty
+            past *limit*) ``, "instances": int`` (a lone mesh's instance
+            paths) ``, "normals_locked": bool`` (a lone mesh's are all locked)
+            ``, "faces", "tris", "uvs"}``: ints, None when no polygon mesh is
+            selected.
+        """
+        selection = cmds.ls(selection=True) or []
+        if not selection:
+            return None
+        if cmds.selectMode(query=True, component=True):
+            for flag, label, picked, total in (
+                ("vertex", "Verts", "vertexComponent", "vertex"),
+                ("edge", "Edges", "edgeComponent", "edge"),
+                ("facet", "Faces", "faceComponent", "face"),
+                ("polymeshUV", "UVs", "uvComponent", "uvcoord"),
+            ):
+                if cmds.selectType(query=True, **{flag: True}):
+                    return {
+                        "mode": "component",
+                        "component": label,
+                        "selected": cmds.polyEvaluate(**{picked: True}),
+                        "total": cmds.polyEvaluate(selection, **{total: True}),
+                    }
+            return {"mode": "component", "component": None, "selected": 0, "total": 0}
+
+        locked, instances = False, 0
+        if len(selection) == 1 and cmds.nodeType(selection[0]) == "transform":
+            shapes = cmds.listRelatives(
+                selection[0], shapes=True, noIntermediate=True, fullPath=True
+            ) or []
+            if shapes and cmds.objectType(shapes[0]) == "mesh":
+                flags = cmds.polyNormalPerVertex(
+                    f"{shapes[0]}.vtxFace[*][*]", query=True, allLocked=True
+                )
+                locked = bool(flags and any(flags))
+                instances = len(cmds.ls(shapes[0], allPaths=True) or [])
+
+        def count(**flag):
+            # polyEvaluate answers a sentence, not a number, with no mesh selected.
+            value = cmds.polyEvaluate(selection, **flag)
+            return value if isinstance(value, int) else None
+
+        return {
+            "mode": "object",
+            "count": len(selection),
+            "objects": (
+                [(n, cmds.objectType(n)) for n in selection]
+                if len(selection) <= limit
+                else []
+            ),
+            "instances": instances,
+            "normals_locked": locked,
+            "faces": count(face=True),
+            "tris": count(triangle=True),
+            "uvs": count(uvcoord=True),
+        }
+
+    @staticmethod
     def get_instances(objects=None, return_parent_objects=False):
         """Get any instances of given object, or if None given, get all instanced objects in the scene."""
         instances = []
@@ -1407,6 +1624,32 @@ class NodeUtils(ptk.HelpMixin):
                 instances = [i for i in instances if i not in obj_set]
 
         return instances
+
+    @classmethod
+    @CoreUtils.undoable
+    def select_instances(cls, objects=None, whole_scene: bool = False) -> List[str]:
+        """Select *objects* together with their instances, or every instanced
+        object in the scene. Twin of blendertk's ``NodeUtils.select_instances``.
+
+        Parameters:
+            objects: Node(s); ``None``: the selection.
+            whole_scene (bool): Select every instanced object in the scene instead.
+
+        Returns:
+            list: What was selected; ``[]`` -- the selection left as it was --
+            when nothing given has an instance.
+        """
+        if whole_scene:
+            selection = cls.get_instances()
+        else:
+            if objects is None:
+                objects = CoreUtils.selected_objects()
+            objects = cmds.ls(CoreUtils.as_strings(objects), long=True) if objects else []
+            instances = cls.get_instances(objects) if objects else []
+            selection = list(objects) + instances if instances else []
+        if selection:
+            cmds.select(selection, replace=True)
+        return selection
 
     @staticmethod
     def _local_bbox_size(node):
@@ -1489,8 +1732,9 @@ class NodeUtils(ptk.HelpMixin):
         (channel copy), where the ``retain_bbox_*`` options apply.
 
         Parameters:
-            objects (list): Source first, then targets (selection order
-                when None).
+            objects (list): Source first, then targets. ``None``: the
+                selected transforms in selection order (the first selected
+                is the source); nothing selected returns ``[]``.
             freeze_transforms (bool): Freeze TRANSLATION only before
                 instancing.  Rotation and scale are deliberately left
                 unfrozen — freezing them would bake the source's pose into
@@ -1517,18 +1761,24 @@ class NodeUtils(ptk.HelpMixin):
 
         Returns:
             list: The newly created instance objects.
+
+        Raises:
+            ValueError: Fewer than two objects (twin of blendertk's).
         """
         from mayatk import XformUtils
 
         if objects is None:
-            objects = cmds.ls(orderedSelection=True, long=True) or []
+            objects = cmds.ls(orderedSelection=True, transforms=True, long=True) or []
+            if not objects:
+                return []
         else:
             objects = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
-        try:
-            source, targets = objects[0], objects[1:]
-        except IndexError:
-            cmds.warning("Operation requires a selection of at least two objects.")
-            return
+        if len(objects) < 2:
+            raise ValueError(
+                "Convert to Instances needs at least two objects: the source "
+                "(selected first) and one or more targets."
+            )
+        source, targets = objects[0], objects[1:]
 
         if freeze_transforms:
             XformUtils.freeze_transforms(
@@ -1816,8 +2066,11 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def uninstance(cls, objects, freeze=False, delete_history=False, quiet=True):
-        """Un-Instance the given objects.
+    @CoreUtils.selected
+    def uninstance(cls, objects=None, freeze=False, delete_history=False, quiet=True):
+        """Un-Instance the given objects (``None``: the selection, ``[]`` with
+        nothing selected; ``"all"``: every instance in the scene). Twin of
+        blendertk's ``NodeUtils.uninstance``.
 
         ``freeze`` (optional additional step): after breaking the link, bake the
         object's SCALE into the now-unique geometry. Breaking the link alone

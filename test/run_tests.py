@@ -37,7 +37,7 @@ Usage:
     python run_tests.py --timeout 7200           # GUI-pass hard ceiling (seconds); a
                                                  # stalled pass ends sooner, on its own
     python run_tests.py --keep-maya              # Keep GUI Maya open after tests
-    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene; implies --gui)
+    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene; implies --gui; left open)
 
 Notes:
     --jobs > 1 runs multiple mayapy chunks concurrently.  Standalone
@@ -132,63 +132,20 @@ EXIT_USAGE = 3
 # offenders here so they skip the wasted crash/relaunch cycle.
 GUI_REQUIRED = {
     "test_sequencer": "Qt table classes hard-crash mayapy (0xC0000409)",
-    "test_shots_panel": (
-        "loads the shots panel through MayaUiHandler, which is built against a GUI Maya"
-    ),
-    "test_tube_rig_panel": (
-        "loads the tube_rig panel through MayaUiHandler; native-crashes mayapy "
-        "on load (2026-10-06)"
-    ),
-    "test_light_rig_panel": "loads the light_rig panel through MayaUiHandler (a GUI Maya)",
-    "test_texture_combine_panel": (
-        "loads the texture_combine panel; its uitk TableWidget hard-crashes "
-        "mayapy in batch (same 0xC0000409 as test_sequencer)"
-    ),
-    "test_emissive_groups_panel": (
-        "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
-        "mayapy in batch (same 0xC0000409 as test_sequencer)"
-    ),
-    "test_lightmap_baker_panel": (
-        "loads the lightmap_baker panel through MayaUiHandler; native-crashes "
-        "mayapy on load (re-confirmed ALONE, 2026-10-21)"
-    ),
-    "test_reference_manager": (
-        "TestToggleReferenceOnCurrentSceneIsOneClick builds a real uitk "
-        "TableWidget, which hard-crashes mayapy in batch (re-confirmed ALONE in "
-        "a fresh process, 2026-09-14); the whole module passes in the GUI pass"
-    ),
     "test_shot_manifest": (
         "shots adapters register OpenMaya/scriptJob callbacks that "
         "segfault without a real Maya event loop"
-    ),
-    "test_render_opacity": (
-        "the pulse page embeds a live uitk ColorRampEditor, so building "
-        "it constructs real QWidgets (2026-09-11); crashes mayapy in batch"
     ),
     "test_hotkey_collisions": (
         "cmds.hotkeySet raises RuntimeError under mayapy batch "
         "(hotkey infrastructure is GUI-only)"
     ),
-    # Confirmed native mayapy crashers (2026-07-17 full run; hierarchy_sync
-    # re-confirmed crashing ALONE in a fresh process — Qt reference-tree
-    # population). All pass under the GUI pass.
-    "test_hierarchy_sync": "native-crashes mayapy at Qt reference-tree population",
+    # Confirmed native mayapy crashers (2026-07-17 full run). All pass under the
+    # GUI pass. (test_hierarchy_sync left this list 2026-10-28: its Qt reference
+    # tree moved to tentacle with the panel.)
     "test_hdr_manager": "native-crashes mayapy (2026-07-17 full run)",
     "test_mat_marmoset_bridge": "native-crashes mayapy (2026-07-17 full run)",
     "test_maya_menu_handler": "builds native GUI menus; native-crashes mayapy",
-    "test_preview": "native-crashes mayapy (2026-07-17 full run)",
-    "test_shadow_rig_panel": (
-        "drives the shadow_rig panel's Preview (Qt) end to end; the Preview "
-        "class itself native-crashes mayapy (see test_preview)"
-    ),
-    "test_key_stash_panel": (
-        "loads the key_stash panel through MayaUiHandler, whose construction "
-        "needs a GUI Maya (see test_maya_ui_handler)"
-    ),
-    "test_articulated_rig_panel": (
-        "loads the articulated_rig panel; its uitk TableWidget hard-crashes "
-        "mayapy (see test_emissive_groups_panel)"
-    ),
     "test_script_output": "Qt console embed; native-crashes mayapy",
     "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
     "test_uv_rizom_bridge": "native-crashes mayapy (2026-07-17 full run)",
@@ -1990,10 +1947,18 @@ def main() -> int:
         return 130
     finally:
         if not keep_maya and runner.connection and runner.connection.is_connected:
-            print("\nClosing Maya instance ...")
+            # shutdown() closes only the Maya this run launched (by its PID);
+            # a session --reuse attached to is the user's and stays open --
+            # only the connection state resets.
+            launched = bool(getattr(runner.connection, "_launched_pid", None))
+            print(
+                "\nClosing Maya instance ..."
+                if launched
+                else "\nLeaving the attached Maya open ..."
+            )
             try:
                 runner.connection.shutdown(force=True)
-                print("[OK] Maya closed.")
+                print("[OK] Maya closed." if launched else "[OK] Detached.")
             except Exception as e:
                 print(f"[WARNING] Failed to close Maya gracefully: {e}")
                 # Last resort: the Maya this run launched, by its PID -- never

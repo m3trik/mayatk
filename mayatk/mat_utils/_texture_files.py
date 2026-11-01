@@ -32,6 +32,43 @@ from mayatk.core_utils._core_utils import CoreUtils
 class _TextureFilesInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
+    #: The texture readers a move must leave their files to, by node type: its
+    #: path attribute. Every one in the scene counts, in a command's scope or
+    #: not (a row selection, Exclude Arnold Nodes), Arnold's own image node too.
+    _TEXTURE_READERS = {"file": "fileTextureName", "aiImage": "filename"}
+
+    @classmethod
+    def _texture_reader_paths(
+        cls, exclude=(), workspace: Optional[str] = None, sourceimages=None
+    ) -> List[str]:
+        """The files the scene's texture readers read, absolute -- every node
+        of :attr:`_TEXTURE_READERS`' types but *exclude*. What a move keeps:
+        the Texture Path Editor's ``read_elsewhere`` (the readers outside a
+        Collect) and Normalize Paths' move (every reader once repointed).
+
+        Parameters:
+            exclude: Nodes not to count (by identity: a renamed or namespaced
+                spelling of one counts as it).
+            workspace / sourceimages: The roots a stored path resolves against
+                (``to_absolute``'s; looked up when ``None``).
+        """
+        names = [str(n) for n in exclude]
+        held = set(cmds.ls(names, uuid=True) or []) if names else set()
+        files = []
+        for node_type, attr in cls._TEXTURE_READERS.items():
+            try:
+                readers = cmds.ls(type=node_type) or []
+            except RuntimeError:  # the type's plug-in is not loaded
+                continue
+            uuids = (cmds.ls(readers, uuid=True) or []) if readers else []
+            for node, uuid in zip(readers, uuids):
+                if uuid in held:
+                    continue
+                path = cmds.getAttr(f"{node}.{attr}") or ""
+                if path:
+                    files.append(cls.to_absolute(path, workspace, sourceimages))
+        return files
+
     @classmethod
     def _texture_content_id(cls, path: str) -> Optional[tuple]:
         """(size, partial-hash) identity of the file behind *path*.
@@ -66,9 +103,14 @@ class _TextureFilesInternal:
         """True when two stored texture paths denote the same image CONTENT.
 
         Same normalized path is trivially identical; different paths are
-        identical only when both resolve and their (size, partial-hash) ids
-        match — the consolidation case (external copy vs sourceimages copy)
-        the loose basename fingerprint exists for, minus its false positives.
+        identical only when both resolve and hold the same bytes -- the
+        consolidation case (external copy vs sourceimages copy) the loose
+        basename fingerprint exists for, minus its false positives. The (size,
+        partial-hash) id is the cheap NEGATIVE that spares reading files that
+        differ; equal ids are settled on the whole bytes (one file however
+        spelled, or a full compare): two bakes of one map that differ only
+        between the hashed ends share an id, and a move that took one for the
+        other deleted the new bake.
         """
 
         def norm(p):
@@ -77,7 +119,13 @@ class _TextureFilesInternal:
         if norm(path_a) == norm(path_b):
             return True
         id_a = cls._texture_content_id(path_a)
-        return id_a is not None and id_a == cls._texture_content_id(path_b)
+        if id_a is None or id_a != cls._texture_content_id(path_b):
+            return False
+        a, b = (
+            cls.probe_texture_path(cls.resolve_path(p, search=False))
+            for p in (path_a, path_b)
+        )
+        return ptk.FileUtils.is_same_file(a, b) or ptk.FileUtils.has_same_content(a, b)
 
     @staticmethod
     def _unique_ordered(nodes: List[Any]) -> List[Any]:
@@ -302,13 +350,12 @@ class _TextureFilesInternal:
         # never pays for the scan.
         scene_refs: Optional[set] = None
 
-        #: Stored path -> staged relative form, MOVE mode only. A second node
-        #: storing the SAME external path is routine (duplicated file nodes),
-        #: and after the first node's move the source is gone -- re-checking
-        #: the disk would misread "shared" as "missing" and strand the second
-        #: node absolute on a deleted file. It rebinds to the twin the first
-        #: move staged instead.
-        moved_this_run: Dict[str, str] = {}
+        #: ``(external, staged)`` per tile, MOVE mode: the originals go only
+        #: after every node is repointed (``ptk.FileCollect.finish_move``), so a
+        #: second node storing the same external path (duplicated file nodes)
+        #: still finds it, and a reader outside the batch -- or one whose plug
+        #: refused the repath -- keeps it.
+        staged_pairs: List[Tuple[str, str]] = []
 
         def _unread_by_scene(path: str) -> bool:
             """True when no ``file`` node in the scene reads *path*.
@@ -443,11 +490,6 @@ class _TextureFilesInternal:
             sources = cls.texture_tiles(norm)
 
             if not sources:
-                moved_rel = moved_this_run.get(os.path.normcase(norm))
-                if moved_rel is not None:
-                    _store_relative(node, moved_rel)
-                    results[node] = "moved+relativized"
-                    continue
                 results[node] = "skipped:missing-source"
                 continue
 
@@ -486,24 +528,10 @@ class _TextureFilesInternal:
                 continue
 
             if external_mode == "move":
-                # Every tile's staged twin is in place, so the external
-                # original is redundant — including when an identical-content
-                # resident made the copy itself unnecessary. A removal failure
-                # downgrades the move to a copy, loudly, and never blocks the
-                # rebind: the staged file is what the node reads from here on.
-                for src in sources:
-                    dst = _dst_for(src, index)
-                    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
-                        os.path.abspath(dst)
-                    ):
-                        continue
-                    try:
-                        os.remove(src)
-                    except OSError as e:
-                        cmds.warning(
-                            f"Move: staged copy of '{src}' is in place but the "
-                            f"original could not be removed (kept): {e}"
-                        )
+                # Every tile's staged twin is in place -- or an identical
+                # resident made the copy unnecessary; the original goes once
+                # the batch is repointed (below).
+                staged_pairs.extend((src, _dst_for(src, index)) for src in sources)
 
             staged = _variant_name(basename, index)
             if index:
@@ -543,8 +571,6 @@ class _TextureFilesInternal:
                 os.path.join(src_dir, staged), workspace, src_dir
             )
             _store_relative(node, rel_form)
-            if external_mode == "move":
-                moved_this_run[os.path.normcase(norm)] = rel_form
             if index:
                 results[node] = "variant+relativized"
             else:
@@ -554,6 +580,21 @@ class _TextureFilesInternal:
                     else "copied+relativized"
                 )
 
+        if staged_pairs:
+            # A move takes an original away only once its staged copy holds
+            # its whole bytes, never when the "twin" IS it however spelled (an
+            # external path through a junction or mapped drive naming
+            # sourceimages), and never while any texture reader still reads it
+            # -- one outside the batch, or one whose plug refused the repath.
+            _taken, kept = ptk.FileCollect.finish_move(
+                staged_pairs, keep=cls._texture_reader_paths((), workspace, src_dir)
+            )
+            if kept:
+                cmds.warning(
+                    f"Move: {len(kept)} original(s) left in place -- other "
+                    f"texture readers still read them: {', '.join(kept[:5])}"
+                    f"{', ...' if len(kept) > 5 else ''}"
+                )
         return results
 
     @classmethod
@@ -664,17 +705,16 @@ class _TextureFilesInternal:
         def _copy_one(src_path, filename):
             """``(src, dst, status)`` -- ``"copied"``, ``"uptodate"`` or ``"collision"``.
 
-            The Texture Path Editor's documented collision policy, applied by
-            the primitive itself (Set Directory had its own copy of it; this
-            one silently overwrote until 2026-08-26): a destination already
-            holding a SAME-SIZE file of that name is reused without rewriting
-            -- hundreds of files the user already copied would otherwise make a
-            cloud-sync client re-hash and re-upload every one -- and one holding
-            a DIFFERENT-SIZE file is refused, in either mode: overwriting it
-            would destroy an external, and the caller's repath would then bind
-            to bytes it never chose. Same size is the equivalence test, as the
-            policy states; the warning is raised by the caller on the main
-            thread -- ``cmds`` is not thread-safe.
+            The Texture Path Editor's collision policy, applied by the
+            primitive itself (this one silently overwrote until 2026-08-26): a
+            destination already holding IDENTICAL bytes of that name is reused
+            without rewriting -- hundreds of files the user already copied
+            would otherwise make a cloud-sync client re-hash and re-upload
+            every one -- and one holding any other file is refused, in either
+            mode: overwriting it would destroy an external, and the caller's
+            repath would then bind to bytes it never chose. The warning is
+            raised by the caller on the main thread -- ``cmds`` is not
+            thread-safe.
             """
             dst_path = os.path.join(new_dir, filename)
             if ptk.FileUtils.is_same_file(src_path, dst_path):
@@ -699,11 +739,11 @@ class _TextureFilesInternal:
                     return src_path, dst_path, "collision"
                 if same_size:
                     # Same size: now prove the CONTENT matches before anything is
-                    # removed. _textures_identical is the class's own check (size +
-                    # first/last 64 KB md5) and is what stage_textures_relative
-                    # already uses. Safe off the main thread here: both paths are
-                    # known-existing absolutes, so resolve_path returns on its first
-                    # tier and never reaches cmds.workspace.
+                    # removed. _textures_identical is the class's own check (a
+                    # partial-hash negative, then the whole bytes) and is what
+                    # stage_textures_relative uses. Safe off the main thread here:
+                    # both paths are known-existing absolutes, so resolve_path
+                    # returns on its first tier and never reaches cmds.workspace.
                     if cls._textures_identical(src_path, dst_path):
                         if delete_old:
                             os.remove(src_path)  # proven identical; src redundant
@@ -784,13 +824,13 @@ class _TextureFilesInternal:
         for src_path, dst_path in collisions:
             cmds.warning(
                 f"// '{os.path.basename(dst_path)}' already exists at the destination "
-                f"with a different size; skipped to avoid a wrong-file rebind: {dst_path}"
+                f"with different content; skipped to avoid a wrong-file rebind: {dst_path}"
             )
 
         print(
             f"// Result: {len(copied)} texture(s) ok "
             f"({skipped} already up-to-date, "
-            f"{len(collisions)} skipped on a different-size collision, "
+            f"{len(collisions)} skipped on a different-file collision, "
             f"{len(errors)} errors, "
             f"{len(timed_out)} timed out"
             f"{', cancelled' if cancelled and not timed_out else ''})."
@@ -842,22 +882,19 @@ class _TextureFilesInternal:
 
             # Same-basename collision — against a file already in sourceimages
             # OR against another external already queued for the same basename
-            # (the copy is flat, so both would land on one destination). Size
-            # is a cheap proxy for "same file" (matches the texture-path
-            # editor's policy): same size → the relative path resolves to the
-            # single copy, nothing more to do; different size → refuse to
-            # clobber / rebind to the wrong texture.
+            # (the copy is flat, so both would land on one destination).
+            # Identical CONTENT → the relative path resolves to the single
+            # copy, nothing more to do; anything else → refuse to clobber /
+            # rebind to the wrong texture. Size was the proxy, and two maps of
+            # one resolution share it: the relative remap after this bound the
+            # node to the other image.
             rival = dst if os.path.exists(dst) else claimed.get(base_key)
             if rival:
-                try:
-                    same = os.path.getsize(norm) == os.path.getsize(rival)
-                except OSError:
-                    same = False
-                if not same:
+                if not cls._textures_identical(norm, rival):
                     cmds.warning(
                         f"'{base}' resolves to more than one texture of differing "
-                        f"size; keeping the first and skipping '{norm}' to avoid a "
-                        f"wrong-file rebind."
+                        f"content; keeping the first and skipping '{norm}' to avoid "
+                        f"a wrong-file rebind."
                     )
                 continue
 

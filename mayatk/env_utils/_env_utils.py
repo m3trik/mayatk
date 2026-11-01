@@ -29,6 +29,10 @@ class EnvUtils(ptk.HelpMixin):
         "mile": "mi",
     }
 
+    #: The host application's display name, for UI text naming the app a panel
+    #: drives ("Maya Preferences"). Twin of blendertk's ``EnvUtils.APP_NAME``.
+    APP_NAME: ClassVar[str] = "Maya"
+
     #: Glob patterns that make a workspace "non-empty" for :meth:`find_workspaces`
     #: (also the default scan set for :meth:`get_workspace_scenes`). A consumer
     #: referencing more formats overrides it — the Reference Manager adds FBX and USD.
@@ -51,7 +55,7 @@ class EnvUtils(ptk.HelpMixin):
                 ``None`` returns every key as a dict -- the form a hand-off or
                 a bug report wants, where the point is to capture the host as
                 it stands rather than to ask it one question. It mirrors
-                ``btk.CoreUtils.get_env_info()``, whose no-key call has always
+                ``btk.EnvUtils.get_env_info()``, whose no-key call has always
                 returned the whole dict; asking Maya for ~30 facts one call at
                 a time was the only way to get the same answer here.
         Returns:
@@ -182,6 +186,73 @@ class EnvUtils(ptk.HelpMixin):
         """
         scene_path = cmds.file(query=True, sceneName=True) or ""
         return scene_path if os.path.splitext(scene_path)[1] else ""
+
+    @staticmethod
+    def get_linear_unit() -> str:
+        """The working linear unit's full name (``"centimeter"``), a key of
+        :attr:`SCENE_UNIT_VALUES`. Twin of blendertk's ``EnvUtils.get_linear_unit``."""
+        return cmds.currentUnit(query=True, fullName=True, linear=True)
+
+    @staticmethod
+    def set_linear_unit(unit: str) -> str:
+        """Set the working linear unit: *unit* a key of :attr:`SCENE_UNIT_VALUES`,
+        in any case. Twin of blendertk's ``EnvUtils.set_linear_unit``.
+
+        Returns:
+            (str): The unit set.
+
+        Raises:
+            ValueError: *unit* is no key of :attr:`SCENE_UNIT_VALUES`.
+        """
+        unit = str(unit).lower()
+        if unit not in EnvUtils.SCENE_UNIT_VALUES:
+            raise ValueError(
+                f"Unknown linear unit {unit!r}; use one of "
+                f"{list(EnvUtils.SCENE_UNIT_VALUES)}."
+            )
+        cmds.currentUnit(linear=unit)
+        return unit
+
+    @staticmethod
+    def frame_rates() -> Dict[str, float]:
+        """``{time unit: fps}`` for the rates the working time unit takes: Maya's
+        named units (``ptk.VidUtils.FRAME_RATES``), each set from its fps by
+        :meth:`apply_scene_settings`. Twin of blendertk's ``EnvUtils.frame_rates``.
+        """
+        return dict(ptk.VidUtils.FRAME_RATES)
+
+    @staticmethod
+    def autosave_settings() -> Dict[str, float]:
+        """Maya's autosave as ``{"max_backups": int, "interval": minutes}``;
+        ``max_backups`` is 0 while autosave is off. Twin of blendertk's
+        ``EnvUtils.autosave_settings``."""
+        enabled = cmds.autoSave(query=True, enable=True)
+        return {
+            "max_backups": cmds.autoSave(query=True, maxBackups=True) if enabled else 0,
+            "interval": cmds.autoSave(query=True, int=True) / 60.0,
+        }
+
+    @staticmethod
+    def set_autosave_settings(
+        max_backups: Optional[int] = None, interval: Optional[float] = None
+    ) -> None:
+        """Set Maya's autosave; ``None`` leaves a setting as it is. Twin of
+        blendertk's ``EnvUtils.set_autosave_settings``.
+
+        Parameters:
+            max_backups (int): The autosave files kept (``limitBackups``); 0 turns
+                autosave off.
+            interval (float): Minutes between autosaves.
+        """
+        if max_backups is not None:
+            if max_backups <= 0:
+                cmds.autoSave(enable=False)
+            else:
+                cmds.autoSave(
+                    enable=True, maxBackups=int(max_backups), limitBackups=True
+                )
+        if interval is not None:
+            cmds.autoSave(int=int(interval * 60))
 
     @classmethod
     def default_artifact_dir(cls) -> str:
@@ -322,6 +393,17 @@ class EnvUtils(ptk.HelpMixin):
                         cmds.unloadPlugin(plugin)
         except Exception as error:
             print(error)
+
+    @staticmethod
+    def python_executable() -> Optional[str]:
+        """This Maya's own interpreter (``bin/mayapy``): the one pip must drive to
+        install into Maya's environment. Twin of blendertk's
+        ``EnvUtils.python_executable`` (Blender's bundled Python).
+
+        Returns:
+            (str/None): The path; None without ``MAYA_LOCATION``.
+        """
+        return EnvUtils.get_env_info("mayapy")
 
     @staticmethod
     def get_recent_files(index=None):
@@ -654,6 +736,51 @@ class EnvUtils(ptk.HelpMixin):
         return any(t not in startup for t in cmds.ls(type="transform", long=True) or [])
 
     @staticmethod
+    def scene_status() -> Dict[str, Any]:
+        """The scene's modelling and session state as plain values: what a
+        status readout (tentacle's HUD) shows and warns on. Twin of blendertk's
+        ``EnvUtils.scene_status``; a fact a host has no answer for is ``None``.
+
+        Returns:
+            dict: ``symmetry`` (the symmetry axis, upper case) and
+            ``xform_constraint`` (the active transform constraint), each None
+            when off; ``workspace`` (the project folder's name, None for the
+            default); ``units`` (the linear working unit's name); ``fps``
+            (float) and ``time_unit`` (Maya's name for it); ``default_fps``
+            (the time unit is the one new scenes get); ``autosave`` (autosave
+            is on); ``autosave_scene`` (the open scene is an autosave);
+            ``saved`` (the scene is a file on disk).
+        """
+        scene = str(cmds.file(query=True, sceneName=True) or "")
+        symmetry = None
+        if cmds.symmetricModelling(query=True, symmetry=True):
+            symmetry = str(cmds.symmetricModelling(query=True, axis=True)).upper()
+        constraint = cmds.xformConstraint(query=True, type=True)
+        workspace = EnvUtils.get_env_info("workspace_dir")
+        time_unit = cmds.currentUnit(query=True, time=True)
+        # The unit new scenes get (Preferences); an unset optionVar reads 0,
+        # which is Maya's factory film.
+        default_unit = cmds.optionVar(query="workingUnitTimeDefault") or "film"
+        try:
+            folders = EnvUtils.find_autosave_directories() if scene else []
+        except Exception:  # a folder probe must not break a status readout
+            folders = []
+        return {
+            "symmetry": symmetry,
+            "xform_constraint": constraint if constraint not in (None, "none") else None,
+            "workspace": workspace if workspace and workspace != "default" else None,
+            "units": cmds.currentUnit(query=True, fullName=True, linear=True),
+            "fps": EnvUtils.scene_settings()["fps"],
+            "time_unit": time_unit,
+            "default_fps": time_unit == default_unit,
+            "autosave": bool(cmds.autoSave(query=True, enable=True)),
+            # is_under: case folds only where the filesystem does, on a folder
+            # boundary (a startswith put /proj/autosave2 inside /proj/autosave).
+            "autosave_scene": any(ptk.FileUtils.is_under(scene, f) for f in folders),
+            "saved": bool(scene) and os.path.isfile(scene),
+        }
+
+    @staticmethod
     def scene_settings() -> Dict[str, float]:
         """The live scene's time setup as the bridges' ``scene`` record (see
         :attr:`SCENE_SETTINGS_KEYS`). The fps comes from the API, so a custom rate
@@ -744,6 +871,15 @@ class EnvUtils(ptk.HelpMixin):
         ws = ptk.Workspace.find_containing(scene_path)
         return ws.root if ws is not None else None
 
+    @staticmethod
+    def is_workspace(path: str) -> bool:
+        """True if *path* is a Maya workspace root: a folder holding a
+        ``workspace.mel``, what :meth:`set_current_workspace` opens as it is. Twin
+        of blendertk's ``EnvUtils.is_workspace`` (which also takes a folder of
+        .blend files).
+        """
+        return bool(path) and os.path.isfile(os.path.join(str(path), "workspace.mel"))
+
     # ----------------------------------------------------------- shared project workspace
     # Maya owns the ACTIVE project natively (`cmds.workspace`), so these are not a second
     # project system — they are the creation / template / rule-resolution half that
@@ -771,12 +907,29 @@ class EnvUtils(ptk.HelpMixin):
 
     @staticmethod
     def set_current_workspace(root: str) -> str:
-        """Make *root* Maya's active project (``workspace -openWorkspace``). Twin of
-        ``btk.set_current_workspace``. Returns the opened root, or '' when invalid."""
+        """Make *root* Maya's active project the way File > Set Project does:
+        through MEL ``setProject`` (its no-prompt form), so Maya's recent-projects
+        list, the Project Window and the file browsers follow. Twin of
+        ``btk.set_current_workspace``.
+
+        ``workspace -openWorkspace`` opens it instead in batch, which has none of
+        those and where ``setProject``'s GUI tail (``savePrefs``) errors, and for a
+        folder that is no workspace yet (:meth:`is_workspace`), which
+        ``setProject`` would mark with Maya's bare default ``workspace.mel``;
+        callers that want the template's folders build them first
+        (:meth:`create_workspace`).
+
+        Returns:
+            (str): The opened root, or '' when *root* is no folder.
+        """
         if not (root and os.path.isdir(root)):
             return ""
         root = os.path.normpath(root)
-        cmds.workspace(root, openWorkspace=True)
+        if cmds.about(batch=True) or not EnvUtils.is_workspace(root):
+            cmds.workspace(root, openWorkspace=True)
+        else:
+            mel_path = root.replace("\\", "/").replace('"', '\\"')
+            mel.eval(f'setProject "{mel_path}"')
         return root
 
     @staticmethod
@@ -1346,6 +1499,333 @@ class EnvUtils(ptk.HelpMixin):
             **scope,
         )
         return file_path
+
+    @staticmethod
+    def open_scene(path: str) -> bool:
+        """Open *path* in place of the current scene, its unsaved changes discarded
+        (``file -open -force``). Twin of blendertk's ``EnvUtils.open_scene``.
+
+        Returns:
+            (bool): True when it opened; False when *path* is no file or Maya refused
+                it (the reason warned).
+        """
+        if not (path and os.path.isfile(path)):
+            return False
+        try:
+            cmds.file(path, open=True, force=True)
+        except RuntimeError as error:
+            cmds.warning(f"EnvUtils.open_scene: could not open {path}: {error}")
+            return False
+        return True
+
+    @staticmethod
+    def foreign_scene_bridge():
+        """The hand-off bridge CLASS that writes the other DCC's native scene:
+        ``BlenderBridge`` here. Twin of blendertk's (its ``MayaBridge``).
+
+        A class, not an instance: its ``spec.app.name`` ("Blender") and
+        ``save_extensions`` name the target without resolving its executable;
+        build one to ``save_as``.
+        """
+        from mayatk.env_utils.blender_bridge._blender_bridge import BlenderBridge
+
+        return BlenderBridge
+
+    @staticmethod
+    def foreign_scene_import():
+        """The engine CLASS that pulls a file into this scene through the other DCC:
+        ``BlenderSceneImport`` here. Twin of blendertk's (its ``MayaSceneImport``).
+
+        Its ``import_scene(src, via=...)`` converts a .blend in a fresh headless
+        Blender, imports a USD natively and a glTF through Blender (else pythontk's
+        glTF -> FBX); ``SCENE_EXTENSIONS`` are the scene files it converts.
+        """
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        return BlenderSceneImport
+
+    #: Maya's own import / export commands by the name a panel lists them under:
+    #: the MEL each runs, the plug-in it loads first (its failure an error unless
+    #: ``plugin_optional``) and the one platform it exists on. Twin of blendertk's
+    #: ``EnvUtils.FILE_COMMANDS`` (Blender's operators there).
+    FILE_COMMANDS: ClassVar[Dict[str, Dict[str, Dict[str, Any]]]] = {
+        "import": {
+            "Import File": {"mel": "Import"},
+            "Import Options": {"mel": "ImportOptions"},
+            "FBX Import Presets": {
+                "mel": 'FBXUICallBack -1 "editImportPresetInNewWindow" "fbx"',
+                "plugin": "fbxmaya",
+            },
+            "OBJ Import Presets": {
+                "mel": 'FBXUICallBack -1 "editImportPresetInNewWindow" "obj"',
+                "plugin": "fbxmaya",
+            },
+        },
+        "export": {
+            # fbxmaya first so FBX shows in the dialog's type list; the dialog
+            # serves every other type without it.
+            "Export Selection": {
+                "mel": "ExportSelection",
+                "plugin": "fbxmaya",
+                "plugin_optional": True,
+            },
+            "Export All": {"mel": "Export"},
+            "Send to Unreal": {"mel": "SendToUnrealSelection"},
+            "Send to Unity": {"mel": "SendToUnitySelection"},
+            # ZBrush's GoZ bridge and 3ds Max exist only on Windows.
+            "GoZ": {
+                "mel": 'source "C:/Users/Public/Pixologic/GoZApps/Maya/'
+                'GoZBrushFromMaya.mel"; source "C:/Users/Public/Pixologic/GoZApps/'
+                'Maya/GoZScript.mel";',
+                "platform": "win32",
+            },
+            "Send to 3dsMax: As New Scene": {
+                "mel": "SendAsNewScene3dsMax",
+                "platform": "win32",
+            },
+            "Send to 3dsMax: Update Current": {
+                "mel": "UpdateCurrentScene3dsMax",
+                "platform": "win32",
+            },
+            "Send to 3dsMax: Add to Current": {
+                "mel": "AddToCurrentScene3dsMax",
+                "platform": "win32",
+            },
+            "Export to Offline File": {"mel": "ExportOfflineFileOptions"},
+            "Export Options": {"mel": "ExportSelectionOptions"},
+            "FBX Export Presets": {
+                "mel": 'FBXUICallBack -1 "editExportPresetInNewWindow" "fbx"',
+                "plugin": "fbxmaya",
+            },
+            "OBJ Export Presets": {
+                "mel": 'FBXUICallBack -1 "editExportPresetInNewWindow" "obj"',
+                "plugin": "fbxmaya",
+            },
+        },
+    }
+
+    @classmethod
+    def get_file_commands(cls, direction: str = "import") -> List[str]:
+        """The names of Maya's own import (*direction* ``"import"``) or export
+        (``"export"``) commands this session can run, in menu order: what
+        :meth:`run_file_command` takes. Twin of blendertk's.
+
+        Raises:
+            ValueError: *direction* is neither.
+        """
+        commands = cls.FILE_COMMANDS.get(direction)
+        if commands is None:
+            raise ValueError(
+                f"Unknown direction {direction!r}: expected 'import' or 'export'."
+            )
+        return [
+            name
+            for name, command in commands.items()
+            if command.get("platform", sys.platform) == sys.platform
+        ]
+
+    @classmethod
+    def run_file_command(cls, name: str) -> None:
+        """Run Maya's own import / export command *name* (:meth:`get_file_commands`):
+        its dialog opens, or its send runs. Twin of blendertk's.
+
+        Raises:
+            ValueError: No command of that name.
+            RuntimeError: The plug-in it needs will not load, or Maya refused it.
+        """
+        command = next(
+            (group[name] for group in cls.FILE_COMMANDS.values() if name in group),
+            None,
+        )
+        if command is None:
+            raise ValueError(f"No file command named {name!r}.")
+        plugin = command.get("plugin")
+        if plugin:
+            try:
+                Plugins.load(plugin)
+            except Exception as error:  # noqa: BLE001 - whatever stops the load
+                if not command.get("plugin_optional"):
+                    raise RuntimeError(
+                        f"Could not load the {plugin} plug-in: {error}"
+                    ) from error
+        try:
+            mel.eval(command["mel"])
+        except RuntimeError as error:
+            raise RuntimeError(f"{name} failed: {error}") from error
+
+    @staticmethod
+    def scene_triangle_count(selection_only: bool = False) -> int:
+        """Triangles in the scene's meshes -- or, *selection_only*, in the selected
+        objects' and those below them -- intermediate shapes left out: the cost a
+        dense-export warning weighs. Twin of blendertk's."""
+        meshes = (
+            cmds.ls(selection=True, dag=True, type="mesh", noIntermediate=True)
+            if selection_only
+            else cmds.ls(type="mesh", noIntermediate=True)
+        ) or []
+        if not meshes:
+            return 0
+        tris = cmds.polyEvaluate(meshes, triangle=True)
+        # polyEvaluate answers a sentence, not a count, when nothing counts.
+        return tris if isinstance(tris, int) else 0
+
+    #: Export Scene's writers: format -> the method writing the scene (or the
+    #: selection) in it (:meth:`export_scene`). Twin of blendertk's.
+    SCENE_WRITERS: ClassVar[Dict[str, str]] = {
+        "fbx": "_write_scene_fbx",
+        "obj": "_write_scene_obj",
+        "glb": "_write_scene_glb",
+        "usd": "_write_scene_usd",
+    }
+
+    @classmethod
+    def export_scene(
+        cls,
+        file_path: str,
+        file_format: str = "fbx",
+        *,
+        selection_only: bool = False,
+        include_cameras: bool = False,
+        include_lights: bool = False,
+        include_skins: bool = False,
+        include_tangents: bool = True,
+        embed_textures: bool = True,
+        progress=None,
+    ) -> str:
+        """Write the scene, or the selection, to *file_path* in *file_format*: the
+        writer behind the Scene panel's Export Scene and its Export-list one-shots.
+        Twin of blendertk's ``EnvUtils.export_scene`` (the same options, each host's
+        route).
+
+        Maya has no glTF writer, so a GLB is an FBX converted by FBX2glTF
+        (:meth:`_write_scene_glb`); a USD is the interchange export
+        (``SceneExporter.USD_EXPORT_OPTIONS``), sampled only where it moves.
+
+        Parameters:
+            file_path (str): The file to write.
+            file_format (str): ``"fbx"``, ``"obj"``, ``"glb"`` or ``"usd"``
+                (:attr:`SCENE_WRITERS`).
+            selection_only (bool): Write the selection, not the whole scene.
+            include_cameras (bool): Cameras ride the FBX (a GLB through it).
+            include_lights (bool): Lights ride the FBX (a GLB through it).
+            include_skins (bool): Skinning rides the FBX; a USD's skeletons.
+            include_tangents (bool): Per-vertex tangents and binormals (FBX).
+            embed_textures (bool): Embed the maps in an FBX; an OBJ writes its
+                ``.mtl``.
+            progress (callable): ``progress(text=...)`` paints a status before a
+                slow leg (the GLB conversion).
+
+        Returns:
+            (str): *file_path*.
+
+        Raises:
+            ValueError: An unknown *file_format*; the writer's own errors otherwise.
+        """
+        writer = cls.SCENE_WRITERS.get(file_format)
+        if writer is None:
+            raise ValueError(
+                f"Unknown export format {file_format!r}: expected one of "
+                f"{sorted(cls.SCENE_WRITERS)}."
+            )
+        options = {
+            "selection_only": selection_only,
+            "include_cameras": include_cameras,
+            "include_lights": include_lights,
+            "include_skins": include_skins,
+            "include_tangents": include_tangents,
+            "embed_textures": embed_textures,
+        }
+        getattr(cls, writer)(
+            file_path, options, progress or (lambda *args, **kwargs: None)
+        )
+        return file_path
+
+    @classmethod
+    def _write_scene_fbx(cls, file_path, options, progress):
+        """Export Scene's FBX: :meth:`export_scene_as_fbx` with its options."""
+        cls.export_scene_as_fbx(
+            file_path=file_path,
+            selection_only=options["selection_only"],
+            FBXExportCameras=options["include_cameras"],
+            FBXExportLights=options["include_lights"],
+            FBXExportSkins=options["include_skins"],
+            FBXExportTangents=options["include_tangents"],
+            FBXExportEmbeddedTextures=options["embed_textures"],
+        )
+
+    @classmethod
+    def _write_scene_obj(cls, file_path, options, progress):
+        """Export Scene's OBJ: :meth:`export_scene_as_obj`, its ``.mtl`` with the maps."""
+        cls.export_scene_as_obj(
+            file_path=file_path,
+            selection_only=options["selection_only"],
+            materials=options["embed_textures"],
+        )
+
+    @classmethod
+    def _write_scene_usd(cls, file_path, options, progress):
+        """Export Scene's USD: the interchange set of the Scene Exporter's USD format.
+        The skin toggle maps to the skeleton flags; the rest have no USD equivalent
+        (a layer references its textures; cameras and lights are prims like any)."""
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+        from mayatk.env_utils.usd import UsdUtils
+
+        usd_options = dict(SceneExporter.USD_EXPORT_OPTIONS)
+        if not options["include_skins"]:
+            usd_options.update(exportSkels="none", exportSkin="none")
+        frame_range = UsdUtils.sampling_frame_range(
+            cmds.ls(selection=True, long=True) if options["selection_only"] else None
+        )
+        if frame_range:
+            usd_options["frameRange"] = frame_range
+        UsdUtils.export(
+            file_path=file_path,
+            options=usd_options,
+            selection_only=options["selection_only"],
+        )
+
+    @classmethod
+    def _write_scene_glb(cls, file_path, options, progress):
+        """Export Scene's GLB: an FBX converted by FBX2glTF.
+
+        The intermediate goes to a TEMP dir, never beside the deliverable (that would
+        overwrite whatever .fbx the user keeps there); the dir is scoped -- removed
+        once the GLB is delivered, kept for a look on a failure, swept by age if the
+        process dies mid-convert -- the rule ``SceneExporter`` follows for its own
+        GLB. The deliverable is touched only on success. The intermediate states its
+        materials and handoff as every deliverable FBX does, and a selection carries
+        the export carriers for the write only: the user's selection comes back.
+        """
+        import shutil
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        with ptk.TempArtifacts.scoped("scene_export_glb") as tmp:
+            write_path = os.path.join(
+                tmp.dir_path(),
+                os.path.splitext(os.path.basename(file_path))[0] + ".fbx",
+            )
+            with FbxUtils.export_prepared(only=[ptk.SceneRecords.MATERIALS]):
+                prior = cmds.ls(selection=True, long=True) or []
+                try:
+                    if options["selection_only"]:
+                        carriers = DataNodes.get_export_nodes()
+                        if carriers:
+                            cmds.select(carriers, add=True)
+                    cls._write_scene_fbx(write_path, options, progress)
+                finally:
+                    if prior:  # noExpand: a selected set stays the set
+                        cmds.select(prior, replace=True, noExpand=True)
+                    else:
+                        cmds.select(clear=True)
+            progress(text="Converting to GLB…")
+            glb_path = ptk.MeshConvert.fbx_to_glb(
+                write_path, overwrite=True, auto_install=True, prompt=False
+            )
+            if not (glb_path and os.path.isfile(glb_path)):
+                raise RuntimeError("FBX to GLB conversion produced no file.")
+            shutil.move(glb_path, file_path)
 
     @staticmethod
     def sanitize_namespace(namespace: str) -> str:

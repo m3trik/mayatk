@@ -24,13 +24,14 @@ Responsibilities are deliberately split so each stays reusable on its own
   are separate steps (:meth:`CurtainRig._add_wire` /
   :meth:`CurtainRig._add_clusters`).
 
-The panel, :class:`CurtainSlots` (``curtain_slots.py``), drives this engine
-through the hermetic :class:`~mayatk.core_utils.preview.Preview` and a
-built-in preset combo (``presets/``).
+:class:`Curtain` is the tool's API over the three, in object names: what
+tentacle's Curtain panel calls (through the host's ``Preview``), with the
+shipped presets (``presets/``) as its built-in tier.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 try:
@@ -44,7 +45,6 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.edit_utils._edit_utils import EditUtils
-from mayatk.edit_utils.curtain._curtain_drape import CurtainDrape
 from mayatk.edit_utils.naming._naming import Naming
 
 
@@ -52,10 +52,9 @@ from mayatk.edit_utils.naming._naming import Naming
 # Math + drape engine. The reusable primitives live in ``ptk.MathUtils``, the
 # generic polyline geometry in ``ptk.Polyline`` (``ptk.geo_utils.polyline``), and
 # the rail→grid machinery in ``ptk.RailSurface`` (``ptk.geo_utils.rail_surface``).
-# The curtain-specific drape is the vendored ``_curtain_drape.CurtainDrape``
-# (code-identical with blendertk's copy — drift fails extapps'
-# test_vendor_sync.py). This module keeps only the Maya halves: resolving a
-# rail from a selection, building the mesh, and the wire rig.
+# The curtain-specific drape is ``ptk.CurtainDrape`` (``ptk.geo_utils.curtain_drape``,
+# the one blendertk builds from too). This module keeps only the Maya halves:
+# resolving a rail from a selection, building the mesh, and the wire rig.
 # ----------------------------------------------------------------------------
 
 Vec = Tuple[float, float, float]
@@ -151,15 +150,15 @@ class Rail(ptk.Polyline):
 
 
 # ----------------------------------------------------------------------------
-# Curtain generator — the vendored CurtainDrape engine (_curtain_drape) + the Maya mesh build
+# Curtain generator — the ptk.CurtainDrape engine + the Maya mesh build
 # ----------------------------------------------------------------------------
 
 
-class CurtainMesh(CurtainDrape):
+class CurtainMesh(ptk.CurtainDrape):
     """Generate a pleated, gravity-draped curtain mesh from a rail polyline.
 
-    The drape math lives in :class:`CurtainDrape` (the vendored
-    ``_curtain_drape`` twin — code-identical with blendertk's copy);
+    The drape math lives in :class:`ptk.CurtainDrape` (the one blendertk's
+    ``CurtainMesh`` builds from too);
     this subclass adds the Maya *mesh build* (``polyPlane`` + ``MFnMesh`` +
     the shell/decimate/normal post-ops). It consumes plain rail points (see
     :class:`Rail`) and emits a mesh — it does not resolve the rail from a
@@ -232,71 +231,9 @@ class CurtainMesh(CurtainDrape):
         soften: Soften mesh normals on build.
         closed: Treat the rail as a closed loop.
         name: Base name for the created transform.
-    """
 
-    def __init__(
-        self,
-        rail: Sequence[Vec],
-        height: float = 3.0,
-        hanging_points: int = 8,
-        hang_jitter: float = 0.0,
-        hang_seed: int = 0,
-        gravity: float = 0.3,
-        tension: float = 1.5,
-        round_points: float = 0.0,
-        round_gather: float = 0.0,
-        fullness: float = 2.5,
-        taper: float = 0.5,
-        mid_folds: float = 0.0,
-        mid_fold_seed: int = 0,
-        creases: float = 0.0,
-        crease_seed: int = 0,
-        sway: float = 0.0,
-        sway_seed: int = 0,
-        end_bend_left: float = 0.0,
-        end_bend_right: float = 0.0,
-        end_bend_falloff: float = 0.25,
-        irregularity: float = 0.15,
-        density: float = 8.0,
-        reduce: float = 0.0,
-        thickness: float = 0.0,
-        invert: bool = False,
-        soften: bool = True,
-        closed: bool = False,
-        name: str = "curtain",
-    ):
-        if cmds is None:
-            raise RuntimeError("CurtainMesh requires maya.cmds.")
-        super().__init__(
-            rail,
-            height=height,
-            hanging_points=hanging_points,
-            hang_jitter=hang_jitter,
-            hang_seed=hang_seed,
-            gravity=gravity,
-            tension=tension,
-            round_points=round_points,
-            round_gather=round_gather,
-            fullness=fullness,
-            taper=taper,
-            mid_folds=mid_folds,
-            mid_fold_seed=mid_fold_seed,
-            creases=creases,
-            crease_seed=crease_seed,
-            sway=sway,
-            sway_seed=sway_seed,
-            end_bend_left=end_bend_left,
-            end_bend_right=end_bend_right,
-            end_bend_falloff=end_bend_falloff,
-            irregularity=irregularity,
-            density=density,
-            reduce=reduce,
-            thickness=thickness,
-            invert=invert,
-            soften=soften,
-            closed=closed,
-            name=name,
-        )
+    The constructor (and its defaults) is :class:`ptk.CurtainDrape`'s.
+    """
 
     # Alias so callers can `CurtainMesh.create(rail, **opts)` in one line.
     @classmethod
@@ -305,6 +242,8 @@ class CurtainMesh(CurtainDrape):
 
     def build(self) -> str:
         """Create the curtain mesh and return its transform name."""
+        if cmds is None:
+            raise RuntimeError("CurtainMesh requires maya.cmds.")
         # Total length / resolution / rail frames / seeded feature sets — the
         # whole pure precompute lives in CurtainDrape.prepare().
         u_segs, v_segs, frames = self.prepare()
@@ -426,3 +365,98 @@ class CurtainRig:
         for i, cv in enumerate(cmds.ls(f"{curve}.cv[*]", flatten=True) or []):
             handles.append(cmds.cluster(cv, name=f"{curve}_ctrl_{i}_cluster")[1])
         return handles
+
+
+# ----------------------------------------------------------------------------
+# Tool API -- what the Curtain panel (tentacle) calls
+# ----------------------------------------------------------------------------
+
+
+class Curtain:
+    """The Curtain tool's API: drape a curtain from a rail, and keep the
+    auto-rail curve a panel shows while nothing usable is selected.
+
+    The tool's one entry point over :class:`Rail` (where the cloth hangs),
+    :class:`CurtainMesh` (the drape) and :class:`CurtainRig` (the rig). Every
+    result is an object NAME, which a panel can hold across preview refreshes.
+    blendertk's ``Curtain`` is its twin (names and behavior).
+    """
+
+    #: The user tier of the tool's presets (a ``PresetManager`` ``preset_dir``).
+    PRESET_DIR = "mayatk/curtain"
+    #: The shipped presets: snapshots of the panel's fields, identical in both
+    #: hosts (one vendored drape engine, so a preset drapes the same).
+    BUILTIN_PRESET_DIR = str(Path(__file__).resolve().parent / "presets")
+    #: The name a new rail curve takes.
+    RAIL_CURVE_NAME = "curtain_rail"
+
+    @staticmethod
+    def rail_from_selection(objects) -> Optional[Tuple[List[Vec], bool]]:
+        """The rail ``(points, closed)`` *objects* describe, or None: polygon
+        edges, a NURBS curve, or two or more transforms
+        (:meth:`Rail.from_selection`)."""
+        return Rail.from_selection(objects)
+
+    @staticmethod
+    def create(rail: Sequence[Vec], **opts) -> str:
+        """Drape a curtain from the *rail* points.
+
+        Parameters:
+            rail: Ordered world-space points the cloth hangs from.
+            **opts: :class:`CurtainMesh`'s keywords.
+
+        Returns:
+            str: The curtain's transform.
+        """
+        return CurtainMesh(rail, **opts).build()
+
+    @staticmethod
+    def rail_curve(
+        points: Sequence[Vec],
+        closed: bool = False,
+        curve: Optional[str] = None,
+        select: bool = False,
+    ) -> str:
+        """A curve with its CVs on *points*: a visible stand-in for a rail.
+
+        *curve* is reshaped in place when it exists, so a preview's refreshes
+        keep one node (Maya's Preview rolls back only the nodes an operation
+        creates, so an in-place reshape survives it); otherwise a new curve
+        named :attr:`RAIL_CURVE_NAME` is built.
+
+        Parameters:
+            points: The CV positions, in world space (the curve's own transform
+                stays at identity).
+            closed: Close the curve into a loop.
+            curve: An existing rail curve to reshape.
+            select: Make the curve the selection (what a Preview reads).
+
+        Returns:
+            str: The curve's transform.
+        """
+        points = [tuple(p) for p in points]
+        degree = min(3, max(1, len(points) - 1))
+        if curve and cmds.objExists(curve):
+            cmds.curve(curve, replace=True, point=points, degree=degree)
+        else:
+            curve = cmds.rename(
+                cmds.curve(point=points, degree=degree), Curtain.RAIL_CURVE_NAME
+            )
+        if closed:
+            cmds.closeCurve(curve, constructionHistory=False, replaceOriginal=True)
+        if select:
+            cmds.select(curve, replace=True)
+        return curve
+
+    @staticmethod
+    def delete_rail_curve(curve: Optional[str]) -> None:
+        """Delete a :meth:`rail_curve` curve; a no-op when it is gone."""
+        if curve and cmds.objExists(curve):
+            cmds.delete(curve)
+
+    @staticmethod
+    def triangle_count(curtain: Optional[str]) -> Optional[int]:
+        """The *curtain* mesh's triangle count, or None when it is gone."""
+        if not curtain or not cmds.objExists(curtain):
+            return None
+        return int(cmds.polyEvaluate(curtain, triangle=True) or 0)

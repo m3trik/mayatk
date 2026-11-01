@@ -2,7 +2,6 @@ import unittest
 import sys
 import os
 import random
-import math
 from collections import defaultdict
 
 # Add test directory to path to import base_test
@@ -73,7 +72,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         cmds.parent(c1, g1)
 
         # Duplicate to create Group2 -> Cube2
-        g2 = cmds.duplicate(g1, name="Group2")[0]
+        cmds.duplicate(g1, name="Group2")
 
         # Clear selection to force AutoInstancer to check all nodes
         cmds.select(clear=True)
@@ -120,7 +119,7 @@ class TestAutoInstancerHierarchy(MayaTkTestCase):
         cmds.parent(s1, g1)
 
         # Duplicate
-        g2 = cmds.duplicate(g1, name="Root2")[0]
+        cmds.duplicate(g1, name="Root2")
 
         # Clear selection
         cmds.select(clear=True)
@@ -1093,7 +1092,7 @@ class TestAutoInstancerAssembly(MayaTkTestCase):
             is_static=False,
             search_radius_mult=2.0,
         )
-        instances = instancer.run([combined])
+        instancer.run([combined])
 
         # Verification
         # We expect:
@@ -1664,7 +1663,6 @@ class TestRealWorldPhotoScenario(MayaTkTestCase):
         # 2. Combine everything into one mesh to simulate raw import
         # Flatten hierarchy first
         all_grps = [base1, base2, c1, c2, c3, c4, c5, case]
-        all_shapes = []
         for grp in all_grps:
             cmds.parent((cmds.listRelatives(str(grp), children=True) or []), world=True)
             cmds.delete(grp)
@@ -2354,6 +2352,25 @@ class TestAutoInstancerProductionSafety(MayaTkTestCase):
             "Second pass must not touch nodes outside the input scope",
         )
         self.assertEqual(self._shape_parent_count("Outside2"), 1)
+
+
+class TestRunOnceSelect(MayaTkTestCase):
+    """``run_once(select=True)``: what the Duplicate menu's Auto Instance calls."""
+
+    def test_selects_and_returns_what_survives(self):
+        a = cmds.polyCube(name="ros_a")[0]
+        b = cmds.polyCube(name="ros_b")[0]
+        cmds.move(5, 0, 0, b)
+        cmds.select(clear=True)
+        made = AutoInstancer.run_once(  # dynamic: instanced however simple
+            [a, b], is_static=False, combine_non_instanced=False, select=True
+        )
+        self.assertTrue(made)
+        self.assertTrue(all(cmds.objExists(n) for n in made))
+        self.assertEqual(
+            {n.split("|")[-1] for n in cmds.ls(selection=True, long=True)},
+            {n.split("|")[-1] for n in made},
+        )
 
 
 if __name__ == "__main__":

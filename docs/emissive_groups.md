@@ -5,11 +5,14 @@ runtime with `emission * dot(mask, weights)`. This doc is the cross-package
 SSoT for the feature: concept, encodings, scene-data contract, wire schema,
 and what each package owns.
 
-Authoring lives in the **Emissive Groups** panel
-([`mayatk/mat_utils/emissive_groups.py`](../mayatk/mat_utils/emissive_groups.py),
-mirrored 1:1 in `blendertk/mat_utils/emissive_groups.py`); the shared model is
-pythontk's region-mask engine
-(`pythontk/core_utils/engines/textures/region_masks.py`); the Unity side is the
+The API is each library's `EmissiveGroups` (mayatk / blendertk
+`mat_utils/emissive_groups.py`): pythontk's host-free `EmissiveGroupsModel`
+(`pythontk/core_utils/engines/textures/emissive_groups.py`, over the region-mask
+engine in `region_masks.py`) driven through the host's half (`MayaEmissiveGroups`,
+`BlenderEmissiveGroups`); its records are rows in each library's FBX and
+record-store tables. The panel is tentacle's (`ui/tools/emissive_groups.ui` +
+`slots/tools/emissive_groups.py`, one Slots class for both hosts, reaching the API
+through `self.tk`). The Unity side is the
 `EmissiveGroupController.cs` / `EmissiveGroups.hlsl` / `EmissiveGroupsLit.shader`
 templates in `unitytk/templates/`.
 
@@ -49,7 +52,7 @@ binding-breaking reclaim.
   Blender: per-group boolean FACE attributes (same name), so overlap stays
   expressible like Maya sets.
 - **Registry** (slots / defaults / encoding / last-bake info) — one JSON channel
-  `emissive_registry` on `data_internal` (see [Scene data nodes](data_nodes.md)).
+  `emissive_registry` on `data_internal` (see [Scene data nodes](https://github.com/m3trik/mayatk/blob/main/docs/data_nodes.md)).
   Cleared when the last group and retired slot are gone. The bookkeeping model
   is `ptk.RegionGroupRegistry`; both DCCs only bind it to their carrier.
 - **Export manifest** — regenerated onto `data_export.emissive_groups` before
@@ -114,7 +117,8 @@ Transport per DCC:
   camera channels bake), so the Scene Exporter ships the curves on a channel
   it DOES bake: at export time, `export_data_node` stages one **transient
   curve proxy** per keyed group
-  (`EmissiveGroups.create_export_curve_proxies`) — an Empty under
+  (`EmissiveGroups.create_export_curve_proxies`, blendertk's
+  `emissive_groups` export stager) — an Empty under
   `data_export`, named exactly the group's `attr`, whose `scale.x` carries
   the weight curve (scale because it is unitless; translation would pick up
   unit conversion). The proxy rides the FBX write and is deleted right after
@@ -170,13 +174,15 @@ Transport per DCC:
 
 ## Verified / owed
 
-Verified: pythontk engine tests (37); mayatk engine suite (37, fresh mayapy);
-Maya→FBX→Maya round-trips (color-set values + user property + **keyed weight
-curves**); panel wiring (`test_emissive_groups_panel.py`, 20, GUI-Maya pass —
-the uitk `TableWidget` hard-crashes mayapy in batch, so it is registered in
-the runner's `GUI_REQUIRED`); blendertk suite (53 checks, fresh Blender 5.1,
-including the curve-proxy FBX round-trip whose imported `scale.x` evaluates
-1.0→0.0); the full Scene Exporter pipeline (`test_scene_exporter.py`:
+Verified: pythontk engine tests (37) and the model's (`test_emissive_groups.py`
+there, 19, plain Python over an in-memory host); mayatk's
+(`test_emissive_groups.py`, 40, fresh mayapy: Maya→FBX→Maya round-trips of the
+color-set values, the user property and the **keyed weight curves**);
+blendertk's (`test_emissive_groups.py`, 65 checks, headless, the curve-proxy
+FBX round trip included); panel wiring (tentacle's `test_emissive_groups_panel.py`, 21, in a
+fresh GUI Maya — the uitk `TableWidget` hard-crashes mayapy in batch); the
+panel loads and shows in a fresh GUI Blender (tentacle's
+`test/blender/menus_load_check.py`); the full Scene Exporter pipeline (`test_scene_exporter.py`:
 `perform_export` ships the animated proxy + manifest join key, leaves the
 scene proxy-free, keeps weights keyed *past* `scene.frame_end` un-flattened,
 and pins the single scene-range take that keeps them time-aligned with the
@@ -185,10 +191,9 @@ model's animation); full suites green after the fix — blendertk 2517 checks /
 (2022.3.40f1, and 6000.3.10f1 for the keyable-weights revisions); panel
 parity sweep 0 deltas.
 
-**Owed live**: the Blender panel pass — headless Blender ships no Qt binding,
-so panel wiring can't be exercised there at all; the Maya panel test plus the
-parity sweep (the two Slots classes are character-identical) are the standing
-proxy. Unity in-editor import + shader compile is blocked by a license wall
+**Owed live**: the Blender panel's button flows — headless Blender ships no Qt
+binding, so they are exercised only through the one Slots class both hosts
+share (its Maya test drives every button). Unity in-editor import + shader compile is blocked by a license wall
 on this machine (every batch launch, both 2022.3 and 6000, exits 198 /
 "Machine bindings don't match" — needs a Hub sign-in), as is the real-project
 bloom check and the in-editor half of the keyable-weights path (the curve

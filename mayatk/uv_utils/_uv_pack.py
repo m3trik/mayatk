@@ -86,6 +86,12 @@ class PackUvsResult:
     def __bool__(self) -> bool:
         return bool(self.succeeded)
 
+    @property
+    def objects(self) -> List[str]:
+        """The objects that packed, once each: a component-scoped pack reports
+        several face ranges per object."""
+        return list(dict.fromkeys(str(s).split(".", 1)[0] for s in self.succeeded))
+
 
 class _UvPackInternal:
     """Round-trip mechanics for :meth:`mayatk.UvUtils.pack_uvs`."""

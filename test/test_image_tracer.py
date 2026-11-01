@@ -186,6 +186,16 @@ class TestImageTracer(unittest.TestCase):
             )
             self.assertTrue(len(curves) > 0, "Should return curves")
 
+    def test_open_blue_pencil_opens_the_maya_tool(self):
+        """The panel's Open Blue Pencil is the library's: Maya's Blue Pencil tool."""
+        if ImageTracer is None:
+            self.skipTest("ImageTracer module not found")
+        from unittest.mock import patch
+
+        with patch(f"{ImageTracer.__module__}.mel") as mel:
+            ImageTracer.open_blue_pencil()
+        mel.eval.assert_called_once_with("OpenBluePencil")
+
 
 if __name__ == "__main__":
     cmds.file(new=True, force=True)

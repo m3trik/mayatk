@@ -95,6 +95,40 @@ class TestSessionHook(MayaTkTestCase):
         _export_selected_ascii([cube])
         self.assertEqual(ran, ["prepare", "finish"], "exactly once each, in order")
 
+    def test_an_export_selection_ships_the_stored_records_narrowed_to_it(self):
+        """A raw Export Selection (File > Export Selection, ``FbxUtils.export``)
+        reaches only this hook, which published unscoped: the file shipped
+        both cubes' lightmaps and the other cube's shadow plane (measured
+        2026-10-31, ``_scope_probe.py`` path D). A selected write is scoped
+        to the selection (``MFileIO.exportType``); the scene keeps its whole
+        copy, and an Export All ships it whole. Added: 2026-10-31"""
+        keep = cmds.polyCube(name="KEEP_cube")[0]
+        cmds.polyCube(name="DROP_cube")
+        SR.LIGHTMAPS.save(
+            DataNodes,
+            {"objects": [{"name": "KEEP_cube", "map": "K.exr"}, {"name": "DROP_cube", "map": "D.exr"}]},
+        )
+        SR.SHADOWS.save(
+            DataNodes, {"unit_scale": 0.01, "planes": [{"name": "DROP_cube_shadow"}]}
+        )
+        FbxUtils.enable_auto_takes()  # the hook, as any opted-in tool installs it
+        out = os.path.join(tempfile.gettempdir(), "mtk_raw_selection.fbx")
+        self.addCleanup(lambda: os.path.exists(out) and os.remove(out))
+        keys = [SR.LIGHTMAPS.key, SR.SHADOWS.key]
+
+        FbxUtils.export(out, objects=[keep, DataNodes.EXPORT], selection_only=True)
+        shipped = ptk.FbxMedia.records(out, keys)
+        self.assertEqual(
+            [o["name"] for o in shipped[SR.LIGHTMAPS.key]["objects"]], ["KEEP_cube"]
+        )
+        self.assertNotIn(SR.SHADOWS.key, shipped, "no plane of the selection")
+        self.assertEqual(len(SR.LIGHTMAPS.load(DataNodes)["objects"]), 2)
+        self.assertTrue(SR.SHADOWS.load(DataNodes)["planes"], "the scene keeps its copy")
+
+        FbxUtils.export(out, selection_only=False)
+        whole = ptk.FbxMedia.records(out, keys)
+        self.assertEqual(len(whole[SR.LIGHTMAPS.key]["objects"]), 2, "Export All: whole")
+
     def test_scratch_export_stands_the_hook_down(self):
         """A throwaway write (a UV round-trip's duplicates) inside
         ``scratch_export`` stages nothing and leaves the depth counter
@@ -404,6 +438,62 @@ class TestProducerContract(MayaTkTestCase):
         self.assertEqual(SR.LIGHTMAPS.load(DataNodes)["objects"], [{"name": "kept"}])
         FbxUtils.publish(FbxUtils.export_context())  # a pipeline IS the authority
         self.assertIsNone(SR.LIGHTMAPS.load(DataNodes))
+
+    def test_a_scoped_context_names_every_node_the_write_ships(self):
+        """The host names the shipped nodes once (``ExportContext.nodes``):
+        each root and all under it, shapes included, as the file names them.
+        Added: 2026-10-31"""
+        keep = cmds.group(cmds.polyCube(name="KEEP_cube")[0], name="KEEP_grp")
+        cmds.polyCube(name="DROP_cube")
+        ctx = FbxUtils.export_context(scope=tuple(cmds.ls(keep, long=True)))
+        self.assertEqual(ctx.nodes, frozenset({"KEEP_grp", "KEEP_cube", "KEEP_cubeShape"}))
+        self.assertTrue(ctx.ships("|KEEP_grp|KEEP_cube"))
+        self.assertFalse(ctx.ships("DROP_cube"))
+        self.assertIsNone(FbxUtils.export_context().nodes, "no scope: the whole scene")
+
+    def test_a_scoped_handoff_ships_the_stored_bake_narrowed_and_keeps_it_whole(self):
+        """A hand-off refreshes only the derived records, so the authored ones
+        shipped as stored -- both cubes' lightmaps and the other cube's shadow
+        plane, and the Unity bridge embedded their maps (measured 2026-10-31,
+        ``_scope_probe.py``). The write ships the copy narrowed to what it
+        sends; the scene keeps its whole copy. Added: 2026-10-31"""
+        keep = cmds.polyCube(name="KEEP_cube")[0]
+        cmds.polyCube(name="DROP_cube")
+        SR.LIGHTMAPS.save(
+            DataNodes,
+            {"objects": [{"name": "KEEP_cube", "map": "K.exr"}, {"name": "DROP_cube", "map": "D.exr"}]},
+        )
+        SR.SHADOWS.save(
+            DataNodes, {"unit_scale": 0.01, "planes": [{"name": "DROP_cube_shadow"}]}
+        )
+        ctx = FbxUtils.export_context(
+            mode=ptk.ExportContext.HANDOFF, scope=tuple(cmds.ls(keep, long=True))
+        )
+        with FbxUtils.export_prepared(ctx):
+            shipped = SR.LIGHTMAPS.load(DataNodes)
+            self.assertEqual([o["name"] for o in shipped["objects"]], ["KEEP_cube"])
+            self.assertIsNone(SR.SHADOWS.load(DataNodes), "no plane of the send")
+        self.assertEqual(len(SR.LIGHTMAPS.load(DataNodes)["objects"]), 2)
+        self.assertEqual(
+            SR.SHADOWS.load(DataNodes)["planes"][0]["name"], "DROP_cube_shadow"
+        )
+
+    def test_every_record_is_labelled_with_the_writers_unit(self):
+        """The writer states its unit once (``ExportContext.unit_scale``); a
+        producer labels its record with it and converts nothing -- the scene's
+        unit only when no writer stated one. Added: 2026-10-31"""
+        from mayatk.core_utils.units import Units
+        from mayatk.rig_utils.shadow_rig._shadow_rig import ShadowRig
+
+        cube = cmds.polyCube(name="unit_cube")[0]
+        ShadowRig.create([cube], light_pos=(5, 10, 5), texture_res=16)
+        scene = Units.metres_per("working")
+        self.assertEqual(FbxUtils.export_context().unit_scale, scene)
+        self.assertEqual(FbxUtils.export_context(writer="usd").unit_scale, scene)
+        stated = ShadowRig.export_record(FbxUtils.export_context(unit_scale=1.0))
+        self.assertEqual(stated.payload["unit_scale"], 1.0, "the writer's label")
+        bare = ShadowRig.export_record(ptk.ExportContext())
+        self.assertEqual(bare.payload["unit_scale"], scene, "no writer: the scene's")
 
     def test_a_session_stager_stages_before_the_producers_read(self):
         """Producers see the staged scene even outside a bracket: a preview

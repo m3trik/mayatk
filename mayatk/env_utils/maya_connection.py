@@ -13,18 +13,9 @@ import sys
 import base64
 from typing import Optional, Literal, List, Union, Callable
 
-# Initialize QApplication for standalone mode
-try:
-    from qtpy import QtWidgets
 
-    if not QtWidgets.QApplication.instance():
-        _app = QtWidgets.QApplication([])
-except ImportError:
-    pass
-except Exception as e:
-    print(f"Warning: Failed to initialize QApplication: {e}")
-
-
+# No QApplication at import (imports have no side effects): standalone mode
+# builds its own (``_init_standalone``) and the connect dialog builds one lazily.
 class MayaConnection:
     """Manages connection to Maya for testing purposes."""
 
@@ -473,13 +464,16 @@ class MayaConnection:
             app_path: Optional path to the Maya executable to use when launching.
             force_new_instance: If True (default), finds an available port and launches a new Maya
                 instance regardless of existing ones.  This prevents accidentally modifying
-                a user's open scene.
+                a user's open scene.  A session reached with False is never closed by
+                :meth:`shutdown` (nor the ``with`` block or ``auto_cleanup``): only a Maya
+                this connection launched is.
             launch_args: Optional list of additional arguments to pass to Maya when launching (e.g. ['-noAutoloadPlugins']).
             confirm_existing: If True (default), shows a confirmation dialog when
                 connecting to an existing Maya session (only applies when
                 ``force_new_instance=False``).  Set to False to skip the dialog.
             auto_cleanup: If True, register an ``atexit`` handler that calls
-                :meth:`shutdown` (with ``force=True``) on interpreter exit —
+                :meth:`shutdown` (with ``force=True``: the launched Maya closes,
+                an attached one is left running) on interpreter exit —
                 including unhandled exceptions and ``KeyboardInterrupt``. Use
                 when the caller can't wrap connection use in a ``with`` block.
                 The handler is idempotent across repeated ``connect()`` calls
@@ -721,8 +715,11 @@ class MayaConnection:
                adopting a mel-source port would break python execution.
             2. If no window info is available (mocked runs / probe edge
                cases): accept a scan-window port owned by the launched PID.
-            3. If netstat itself is unavailable: legacy connect probe on the
-               requested port only.
+            3. If neither is available (no window titles, and the listening
+               sockets cannot be enumerated): fail closed. A port that
+               answers a connect may be anyone's -- the user's own Maya --
+               so an owner that cannot be verified is never adopted; the
+               wait runs on to its timeout.
             """
             titles = []
             try:
@@ -744,19 +741,18 @@ class MayaConnection:
                 # reloads this module, and a hard MayaConnection reference
                 # would resolve to the reloaded class, escaping test patches.
                 rows = self._iter_listening_tcp()
-            except Exception:
-                # netstat unavailable — legacy connect probe. Identity can't
-                # be verified, so only the requested port is accepted.
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(0.5)
-                    ok = sock.connect_ex(("localhost", port)) == 0
-                    sock.close()
-                except Exception:
-                    return False
-                if ok:
-                    discovered["port"] = port
-                return ok
+            except Exception as e:
+                # Identity can't be verified: never adopt (fail closed). Said
+                # once, so a timeout that follows names its cause.
+                if not discovered.get("unverifiable"):
+                    discovered["unverifiable"] = True
+                    print(
+                        "[MayaConnection] Cannot verify which process owns a "
+                        f"port in {port}-{scan_end - 1} (no window title, "
+                        f"listening sockets unavailable: {e}); no port is "
+                        "adopted unverified."
+                    )
+                return False
 
             # The launched PID's tree: on Linux bin/maya is a script that may
             # fork maya.bin, which then holds the port.
@@ -887,7 +883,12 @@ class MayaConnection:
         """
         Close a Maya instance identified by Port or PID.
 
-        Args:
+        An explicit call only: it closes whichever process holds *port* (or
+        *pid*), which may be the user's own Maya. :meth:`shutdown` never
+        calls it; the session-safe close of a launched Maya is
+        :meth:`close_launched`.
+
+        Parameters:
             port: The command port number.
             pid: The process ID.
             force: If True, force closes the application without prompting to save.
@@ -1496,8 +1497,11 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Exit the managed session.
 
-        * **port** mode — shuts down the Maya process that was launched
-          (via :meth:`close_instance`) and resets connection state.
+        Calls :meth:`shutdown` with ``force=True``:
+
+        * **port** mode — closes the Maya THIS connection launched (by its
+          PID, :meth:`close_launched`); a Maya it only attached to is left
+          running. Either way the connection state resets.
         * **standalone** mode — calls ``maya.standalone.uninitialize()``.
         * **interactive** mode — resets state only (never kills the
           user's Maya).
@@ -1510,26 +1514,30 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
     def shutdown(self, force: bool = False) -> None:
         """Shut down the connected Maya session and reset state.
 
-        For *port* mode this kills the Maya process.  For *standalone*
-        mode it uninitialises the embedded interpreter.  *Interactive*
-        mode only resets the connection flag.
+        For *port* mode this closes the Maya THIS connection launched, by its
+        PID (:meth:`close_launched`); a Maya it only attached to
+        (``force_new_instance=False``) is never closed -- only the connection
+        state resets, as in *interactive* mode. Closing a session you did not
+        launch is the explicit :meth:`close_instance`. For *standalone* mode
+        it uninitialises the embedded interpreter.
 
-        Args:
-            force: If True, force closes the application without prompting to save.
+        The same rule holds for the ``with`` block (:meth:`__exit__`) and the
+        ``auto_cleanup`` atexit hook, which both call this.
+
+        Parameters:
+            force: Close the launched Maya without prompting to save.
         """
         if not self.is_connected:
             return
 
         mode = self.mode
+        attached = mode == "port" and not self._launched_pid
 
-        if mode == "port":
+        if mode == "port" and self._launched_pid:
             try:
-                if self._launched_pid:
-                    # Ours: by the PID we launched, never by the port -- once
-                    # ours is gone the port can be another Maya's.
-                    self.close_launched(force=force)
-                else:
-                    self.close_instance(port=self.port, force=force)
+                # Ours: by the PID we launched, never by the port -- once
+                # ours is gone the port can be another Maya's.
+                self.close_launched(force=force)
             except Exception as e:
                 print(f"[MayaConnection] Error closing Maya instance: {e}")
             # The instance is gone (or unfindable) — drop the PID so a later
@@ -1544,11 +1552,17 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
             except Exception:
                 pass
 
-        # Interactive mode: never kill the user's Maya
+        # Interactive mode, and port mode with no launched PID (an attached
+        # Maya -- the user's): never close it. The old port fallback
+        # force-closed it, no save prompt, from every `with` block and atexit
+        # hook.
 
         self.is_connected = False
         self.mode = None
-        print("[OK] Maya session closed")
+        if attached:
+            print(f"[OK] Detached from the Maya on port {self.port} (left running)")
+        else:
+            print("[OK] Maya session closed")
 
 
 # The port helpers are the canonical ``MayaConnection.open_command_ports`` /

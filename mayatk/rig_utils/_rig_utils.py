@@ -174,6 +174,31 @@ class RigUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
+    def add_locator(cls, size: float = 1.0, rotate_order: str = "xyz") -> str:
+        """Add a lone locator the way Maya's Create > Locator does: at the
+        origin, selected. Twin of blendertk's ``RigUtils.add_locator`` (an Empty
+        typed a Maya locator, at the 3D cursor). One undo step.
+
+        Parameters:
+            size (float): The locator's display size: its shape's
+                ``localScale``. A transform scale would carry into anything
+                parented under it.
+            rotate_order (str): Its rotate order ("xyz", "zyx", ...).
+
+        Returns:
+            str: The new locator's transform.
+
+        Raises:
+            ValueError: *rotate_order* is not a rotate order.
+        """
+        index = XformUtils._rotate_order_index(rotate_order)
+        loc = cls.create_locator(size=size)
+        cmds.setAttr(f"{loc}.rotateOrder", index)
+        cmds.select(loc, replace=True)
+        return loc
+
+    @classmethod
+    @CoreUtils.undoable
     def create_locator_at_object(
         cls,
         objects: Union[str, List[str]],
@@ -194,6 +219,7 @@ class RigUtils(ptk.HelpMixin):
         strip_trailing_underscores: bool = True,
         strip_suffix: bool = True,
         rotate_order: str = "xyz",
+        group_display: Optional[str] = None,
     ) -> List[str]:
         """Rig object under a zeroed locator aligned to its manip pivot.
 
@@ -249,6 +275,9 @@ class RigUtils(ptk.HelpMixin):
                 pose: "xyz" (Maya's default) keeps an X spin clean, "zyx" a Z
                 spin. See :meth:`mayatk.XformUtils.set_rotate_order` to change
                 it on a rig that is already animated.
+            group_display (str): How blendertk's group Empty draws ("none" /
+                "ring"). A Maya group draws nothing, so it is accepted for the
+                panel both hosts share and ignored.
 
         Returns:
             list: The locators built (long names), in input order -- left
@@ -347,18 +376,6 @@ class RigUtils(ptk.HelpMixin):
             # Strip suffixes from the original name once
             base_name_stripped = strip_to_base(orig_name)
 
-            mesh_shapes = NodeUtils.get_shapes(obj, no_intermediate=True)
-            mesh_shape = mesh_shapes[0] if mesh_shapes else None
-            vertex_count = (
-                cmds.polyEvaluate(mesh_shape, vertex=True)
-                if mesh_shape and cmds.objectType(mesh_shape) == "mesh"
-                else 0
-            )
-            vertices = (
-                f"{mesh_shape}.vtx[0:{vertex_count - 1}]"
-                if mesh_shape and vertex_count
-                else None
-            )
             orig_parent = cmds.listRelatives(obj, parent=True, path=True)
             is_group = NodeUtils.is_group(obj)
 
@@ -473,12 +490,16 @@ class RigUtils(ptk.HelpMixin):
                     obj = cmds.parent(obj, loc)[0]
 
                 if freeze_locator:
-                    # store=False: rig construction. The LOC is already at
-                    # identity here (the GRP was parent-constrained to it
-                    # before the reparent), so this is a guard, not a move.
-                    # Its subtree flattens with it: a group's channels and its
-                    # contents' zero. A driven object has not joined yet.
-                    XformUtils.freeze_transforms(loc, normal=True, store=False)
+                    # store=False: rig construction. The LOC's own channels
+                    # are at identity here (the GRP was parent-constrained to
+                    # it before the reparent), but the freeze still bakes its
+                    # subtree: a group's channels and its contents' zero, and
+                    # the object's transform flattens into its points. Normals
+                    # are kept as Maya's own Freeze keeps them (no -normal 1:
+                    # that locked every normal, and unlocking them after threw
+                    # away an import's locked or custom normals). A driven
+                    # object has not joined yet.
+                    XformUtils.freeze_transforms(loc, store=False)
 
                 if orig_parent:
                     grp = cmds.parent(grp, orig_parent)[0]
@@ -490,22 +511,10 @@ class RigUtils(ptk.HelpMixin):
                     XformUtils.freeze_transforms(grp, scale=True, store=False)
                     obj = cls._parent_keeping_channels(obj, loc)
 
-            if vertices and mesh_shape and vertex_count:
-                # Re-derive vertices from the shape's CURRENT path — earlier
-                # parent ops may have invalidated the long path captured at
-                # line 240.
-                current_shapes = NodeUtils.get_shapes(obj, no_intermediate=True)
-                if current_shapes:
-                    vertices = f"{current_shapes[0]}.vtx[0:{vertex_count - 1}]"
-                    try:
-                        cmds.polyNormalPerVertex(vertices, unFreezeNormal=True)
-                    except Exception:
-                        pass
-
             # Freeze object after hierarchy is set up (but not groups)
             if freeze_object and not is_group and not driven:
                 # store=False: rig construction, as above.
-                XformUtils.freeze_transforms(obj, normal=True, store=False)
+                XformUtils.freeze_transforms(obj, store=False)
 
             # Rename group, locator, and object using the clean base name.
             # Capture UUIDs first — while every path is still valid — then
@@ -545,14 +554,29 @@ class RigUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def remove_locator(cls, objects):
-        """Remove a parented locator from the child object.
+    def remove_locator(cls, objects=None):
+        """Dissolve locator rigs: the inverse of :meth:`create_locator_at_object`.
+
+        Each locator's children move out to its own parent, world transforms
+        kept, then the locator is deleted, and its group when that is left
+        childless. Anything that is not a locator is skipped with a warning.
+        Twin of blendertk's ``RigUtils.remove_locator``.
 
         Parameters:
-            obj (str/obj/list): The child object or the locator itself.
+            objects (str/obj/list): The locators; ``None``: the selection.
+
+        Returns:
+            (list): The long names of the locators removed: ``[]`` when none
+            was given (the caller's cue to say so).
         """
+        names = (
+            CoreUtils.selected_objects()
+            if objects is None
+            else CoreUtils.as_strings(objects)
+        )
+        removed = []
         for obj in (
-            cmds.ls(CoreUtils.as_strings(objects), long=True, objectsOnly=True) or []
+            (cmds.ls(names, long=True, objectsOnly=True) or []) if names else []
         ):
             if not cmds.objExists(obj):
                 continue
@@ -595,6 +619,7 @@ class RigUtils(ptk.HelpMixin):
                         cmds.parent(*children, world=True)
 
                 cmds.delete(obj)
+                removed.append(obj)
 
                 # Check if the parent is a group and delete it if it has no other children
                 if parent and NodeUtils.is_group(parent):
@@ -605,7 +630,7 @@ class RigUtils(ptk.HelpMixin):
             else:
                 cmds.warning(f"Object '{obj}' is not a locator.")
 
-        return objects
+        return removed
 
     @staticmethod
     def _parent_keeping_channels(node: str, parent: Optional[str]) -> str:
@@ -751,6 +776,32 @@ class RigUtils(ptk.HelpMixin):
         )
         for axis in ("", "X", "Y", "Z")
     )
+
+    @classmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def freeze_and_reanchor(
+        cls, objects=None, reanchor: bool = True, **freeze_options
+    ) -> list:
+        """Freeze Transforms, then -- *reanchor* -- restore the world anchor of each
+        GRP > LOC > GEO rig the freeze collapsed (:meth:`restore_rig_anchors`):
+        the Freeze Transforms panel's one call. ``XformUtils`` cannot make the
+        second step itself (rigs are the part above it). Twin of blendertk's
+        ``RigUtils.freeze_and_reanchor``. One undo step.
+
+        Parameters:
+            objects (str/list/None): The transforms; None takes the selection.
+            reanchor (bool): Restore the rig anchors after the freeze.
+            **freeze_options: :meth:`XformUtils.freeze_transforms` keywords.
+
+        Returns:
+            (list): The freeze's result; ``[]`` (nothing runs) with nothing
+                selected.
+        """
+        frozen = XformUtils.freeze_transforms(objects, **freeze_options)
+        if reanchor:
+            cls.restore_rig_anchors(objects, traverse=True)
+        return frozen
 
     @classmethod
     @CoreUtils.undoable
@@ -1671,6 +1722,188 @@ class RigUtils(ptk.HelpMixin):
         # its parent, so the decorator would drop the chain's last joint.
         DisplayUtils.add_to_isolation_set(new_joints)
         return new_joints
+
+    # ------------------------------------------------------------------
+    # The Rigging menu's host vocabularies: utility nodes, auto-riggers and
+    # lock scopes. Each is the host's own list; a panel shared by both hosts
+    # builds its pickers from them (blendertk's name the same ops).
+    # ------------------------------------------------------------------
+    #: ``{name: maker}`` behind :meth:`create_utility_node`.
+    _UTILITY_NODE_MAKERS = {
+        "Cluster": "_create_cluster",
+        "IK Handle": "_arm_ik_handle_tool",
+        "Joints": "_arm_joint_tool",
+        "Lattice": "_create_lattice",
+    }
+    #: The rigging utility nodes :meth:`create_utility_node` makes, sorted as
+    #: the Rigging menu lists them. Twin of blendertk's (an Armature, an Empty).
+    UTILITY_NODES = tuple(sorted(_UTILITY_NODE_MAKERS))
+
+    @classmethod
+    @CoreUtils.undoable
+    def create_utility_node(cls, node_type: str):
+        """Create a rigging utility node Maya's way: "Joints" and "IK Handle"
+        arm Maya's Joint and IK Handle tools (the nodes come from the clicks
+        that follow), "Lattice" puts a 2x5x2 lattice around the selection,
+        "Cluster" clusters the selected points. Twin of blendertk's
+        ``RigUtils.create_utility_node``. One undo step.
+
+        Parameters:
+            node_type (str): One of :attr:`UTILITY_NODES`.
+
+        Returns:
+            (str/list): The tool armed, or the nodes created.
+
+        Raises:
+            ValueError: *node_type* is not one of :attr:`UTILITY_NODES`.
+            RuntimeError: Maya refused (a lattice with nothing to deform).
+        """
+        maker = cls._UTILITY_NODE_MAKERS.get(node_type)
+        if maker is None:
+            raise ValueError(
+                f"Unknown utility node {node_type!r}; expected one of {cls.UTILITY_NODES}."
+            )
+        return getattr(cls, maker)()
+
+    @staticmethod
+    def _arm_joint_tool() -> str:
+        cmds.setToolTo("jointContext")
+        return "jointContext"
+
+    @staticmethod
+    def _arm_ik_handle_tool() -> str:
+        cmds.setToolTo("ikHandleContext")
+        return "ikHandleContext"
+
+    @staticmethod
+    def _create_lattice() -> List[str]:
+        # The lattice + base lattice land at the scene root; the ffd node in the
+        # same return is a DG node and filters itself out of the isolation set.
+        nodes = cmds.lattice(divisions=[2, 5, 2], objectCentered=1, ldv=[2, 2, 2])
+        DisplayUtils.add_to_isolation_set(nodes)
+        return nodes
+
+    @staticmethod
+    def _create_cluster() -> List[str]:
+        import maya.mel as mel
+
+        mel.eval("CreateCluster")
+        return cmds.ls(selection=True) or []
+
+    #: ``{name: opener}`` behind :meth:`auto_rig`.
+    _AUTO_RIGGERS = {"Quick Rig": "_open_quick_rig", "HumanIK": "_open_human_ik"}
+    #: Maya's character auto-riggers, as :meth:`auto_rig` names them. Twin of
+    #: blendertk's (Rigify's meta-rigs and Generate Rig).
+    AUTO_RIGS = tuple(_AUTO_RIGGERS)
+
+    @classmethod
+    def auto_rig(cls, rig_type: str) -> str:
+        """Open one of Maya's character auto-riggers: "Quick Rig" (the one-click
+        / step-by-step biped rigger) or "HumanIK" (Character Controls). Twin of
+        blendertk's ``RigUtils.auto_rig`` (Rigify).
+
+        Parameters:
+            rig_type (str): One of :attr:`AUTO_RIGS`.
+
+        Returns:
+            str: *rig_type*, once its window is open.
+
+        Raises:
+            ValueError: *rig_type* is not one of :attr:`AUTO_RIGS`.
+            RuntimeError: Maya could not open it.
+        """
+        opener = cls._AUTO_RIGGERS.get(rig_type)
+        if opener is None:
+            raise ValueError(
+                f"Unknown auto-rigger {rig_type!r}; expected one of {cls.AUTO_RIGS}."
+            )
+        getattr(cls, opener)()
+        return rig_type
+
+    @staticmethod
+    def _open_quick_rig() -> None:
+        # Its Python entry point, the call Maya's own ``QuickRigEditor`` runtime
+        # command makes (maya/app/quickRig/quickRigUI.py): no dependency on the
+        # GUI-registered runtime command name.
+        try:
+            import maya.app.quickRig.quickRigUI as quick_rig
+
+            quick_rig.OpenQuickRigUI()
+        except Exception as error:  # noqa: BLE001 - Maya's own failure, reported as one
+            raise RuntimeError(f"Could not open the Quick Rig tool: {error}") from error
+
+    @staticmethod
+    def _open_human_ik() -> None:
+        import maya.mel as mel
+
+        try:
+            mel.eval("HIKCharacterControlsTool")
+        except RuntimeError as error:
+            raise RuntimeError(f"Could not open HumanIK: {error}") from error
+
+    #: The transform attributes each :meth:`lock_transforms` scope names.
+    _LOCK_SCOPE_ATTRS = {
+        "all": ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"),
+        "translate": ("tx", "ty", "tz"),
+        "rotate": ("rx", "ry", "rz"),
+        "scale": ("sx", "sy", "sz"),
+    }
+    #: What :meth:`lock_transforms` can lock, in the order a picker lists them:
+    #: "auto" (the channel-box selection, else every transform attribute),
+    #: "channel_box" (only it), then the transform groups. Twin of
+    #: blendertk's (no channel box there).
+    LOCK_SCOPES = ("auto", "channel_box", "all", "translate", "rotate", "scale")
+
+    @classmethod
+    @CoreUtils.undoable
+    def lock_transforms(
+        cls, objects=None, lock: bool = True, scope: str = "all"
+    ) -> Tuple[List[str], List[str]]:
+        """Lock or unlock transforms' attributes. Twin of blendertk's
+        ``RigUtils.lock_transforms`` (the ``lock_location`` / ``lock_rotation``
+        / ``lock_scale`` flags there). One undo step.
+
+        Parameters:
+            objects (str/obj/list): Transforms; ``None``: the selected ones.
+            lock (bool): Lock (True) or unlock (False).
+            scope (str): One of :attr:`LOCK_SCOPES`. "auto" and "channel_box"
+                read the channel box (or a panel standing in for it:
+                ``Attributes.get_selected_channels``).
+
+        Returns:
+            (tuple): ``(transforms, attributes)``: the long names and the
+            attributes set; ``([], [])`` with no transform given or selected.
+
+        Raises:
+            ValueError: An unknown *scope*, or "channel_box" with nothing
+                selected in the channel box.
+        """
+        if scope not in cls.LOCK_SCOPES:
+            raise ValueError(
+                f"Unknown lock scope {scope!r}; expected one of {cls.LOCK_SCOPES}."
+            )
+        names = (
+            CoreUtils.selected_objects()
+            if objects is None
+            else CoreUtils.as_strings(objects)
+        )
+        nodes = (cmds.ls(names, type="transform", long=True) or []) if names else []
+        if not nodes:
+            return [], []
+        if scope in ("auto", "channel_box"):
+            attrs = Attributes.get_selected_channels()
+            if not attrs and scope == "channel_box":
+                raise ValueError("No attributes selected in the channel box.")
+            attrs = attrs or cls._LOCK_SCOPE_ATTRS["all"]
+        else:
+            attrs = cls._LOCK_SCOPE_ATTRS[scope]
+        for node in nodes:
+            for attr in attrs:
+                try:
+                    cmds.setAttr(f"{node}.{attr}", lock=lock)
+                except RuntimeError:  # an attribute this node lacks, a locked edit
+                    continue
+        return nodes, list(attrs)
 
     @classmethod
     @CoreUtils.undoable

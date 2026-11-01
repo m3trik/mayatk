@@ -38,7 +38,8 @@ ever added a mode to choose wrongly from.
 Quality tiers come from :meth:`from_preset` (pythontk ``PresetStore``). HDR EXR
 throughout; 8-bit/encoded targets are a later (mostly engine-side) stage. For the
 bake primitive alone (no lightmap workflow), use :class:`TextureBaker` directly.
-The panel is :class:`~mayatk.light_utils.lightmap_baker.lightmap_baker_slots.LightmapBakerSlots`.
+Its panel is tentacle's Lightmap Baker (``slots/tools/lightmap_baker.py``): one Slots
+class over this engine and blendertk's.
 """
 
 import contextlib
@@ -204,33 +205,6 @@ class _InPlacePlan:
         """Every target written in place."""
         return [obj for objs in self.in_place.values() for obj in objs]
 
-
-@dataclass
-class _AtlasFiles:
-    """The atlases a scene's objects read, each owned by an atlas group --
-    what :meth:`LightmapBaker._atlas_files` reads once for the in-place plan
-    and the split check.
-
-    Attributes:
-        markers: ``{reader: its marker record}``.
-        entries: ``{object: baseline entry}`` of every object still recorded.
-        by_file: ``{normcased path: [readers]}``, readers sorted.
-        spelled: ``{normcased path: the path as read}``.
-        lone: The one-reader maps an atlas bake wrote (a group of one), and
-            those no record speaks for beside an atlas their group owns.
-        group: ``{object: atlas group}`` (:meth:`LightmapBaker._atlas_keys`)
-            for every reader and every object asked about.
-        owned: ``{atlas group: {normcased paths}}`` -- each atlas belongs to
-            the group most of its readers are in.
-    """
-
-    markers: Dict[str, Dict[str, Any]]
-    entries: Dict[str, Dict[str, Any]]
-    by_file: Dict[str, List[str]]
-    spelled: Dict[str, str]
-    lone: set
-    group: Dict[str, str]
-    owned: Dict[str, set]
 
 
 @dataclass
@@ -494,22 +468,14 @@ class LightmapBaker(ptk.LoggingMixin):
         "beside_textures",
         "reflection_probe",
     )
-    #: Retired built-in tier names -> the current one, warning until they go.
-    #: ``"quest"`` (until 2026-09-23) named one headset for a tier that serves
-    #: every mobile / standalone-VR target; a script or the panel's preset
-    #: pointer may still say it. :meth:`from_preset` resolves only a name the
-    #: store lacks, so a user preset saved under a retired name still wins.
-    #: Re-dated from 0.21.0 on 2026-10-24: a saved preset pointer is saved
-    #: data, which gets the longest window (CODE_STANDARD section 0).
-    _resolve_retired_preset = staticmethod(
-        ptk.Deprecation.values(
-            {"quest": "mobile"},
-            what="LightmapBaker preset",
-            remove_in="0.30.0",
-            since="2026-09-23",
-            reason="The tier was renamed; its settings are unchanged.",
-        )
-    )
+    #: The Samples range a panel offers, in this renderer's units: Arnold
+    #: camera (AA) samples, squared, so a few hundred is already extreme.
+    #: blendertk's counts Cycles paths, in the thousands.
+    SAMPLES_RANGE: Tuple[int, int] = (1, 256)
+    #: The processors (:attr:`device` values) that sample adaptively: Arnold's
+    #: GPU only -- a CPU bake ignores :attr:`adaptive`. Cycles adapts on every
+    #: one (blendertk's).
+    ADAPTIVE_DEVICES: Tuple[str, ...] = ("AUTO", "GPU")
 
     @staticmethod
     def preset_store() -> "ptk.PresetStore":
@@ -536,12 +502,11 @@ class LightmapBaker(ptk.LoggingMixin):
 
         Built-ins (resolution / samples; the JSON in ``presets/`` is the
         source): ``preview`` (256/2), ``mobile`` (1024/4, the default tier),
-        ``desktop`` (2048/4) and ``hero`` (4096/6). A retired tier name
-        (``quest``) still resolves, with a notice.
+        ``desktop`` (2048/4) and ``hero`` (4096/6). A name the store lacks
+        raises -- the retired ``quest`` (``mobile`` since 2026-09-23) too,
+        since 0.30.0.
         """
         store = cls.preset_store()
-        if not store.exists(name):
-            name = cls._resolve_retired_preset(name)
         if not store.exists(name):
             raise ValueError(
                 f"Unknown lightmap preset {name!r}. Available: {store.list()}"
@@ -3090,7 +3055,9 @@ class LightmapBaker(ptk.LoggingMixin):
                 plan.repack[os.path.basename(spelled[f])] = why
         return plan
 
-    def _atlas_files(self, objects: List[str] = ()) -> Optional[_AtlasFiles]:
+    def _atlas_files(
+        self, objects: List[str] = ()
+    ) -> Optional["ptk.BakeBaseline.AtlasFiles"]:
         """The atlases the scene's objects read and the atlas group owning
         each, with *objects*' groups read beside theirs; ``None`` when every
         map is its object's own (nothing to write into, nothing split).
@@ -3103,51 +3070,9 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         markers = dict(LightmapRecords._marker_records())
         path_of = {t: p for t, _n, p in LightmapRecords._reads() if p}
-        by_file: Dict[str, List[str]] = {}
-        spelled: Dict[str, str] = {}
-        for reader in sorted(markers):
-            path = path_of.get(reader)
-            if path:
-                key = os.path.normcase(os.path.abspath(path))
-                by_file.setdefault(key, []).append(reader)
-                spelled.setdefault(key, path)
-        atlases = {f for f, readers in by_file.items() if len(readers) > 1}
-        record = LightmapRecords.bake_state()["objects"]
-        entries = {k: e for k, e in record.items() if e["removed_at"] is None}
-        # An atlas bake gives a group of one its own map. Alone it is no atlas
-        # to write into, but a group reading it beside another map is split
-        # all the same: one material in two shading groups, or a duplicate.
-        lone = {
-            f
-            for f, readers in by_file.items()
-            if len(readers) == 1
-            and (entries.get(readers[0]) or {}).get("packing") == "atlas"
-        }
-        if not atlases and len(lone) < 2:
-            return None
-        # A one-reader map whose packing no record speaks for (baked before
-        # change tracking, then tracked as it stood) is a split-off only
-        # beside an atlas its group owns: a group that owns none was baked per
-        # object, and stays so.
-        unknown = {
-            f
-            for f, readers in by_file.items()
-            if len(readers) == 1 and not (entries.get(readers[0]) or {}).get("packing")
-        }
-        readers = [r for f in sorted(atlases | lone | unknown) for r in by_file[f]]
-        group = self._atlas_keys(list(dict.fromkeys(readers + list(objects))))
-        owned: Dict[str, set] = {}
-        for f in atlases:
-            votes: Dict[str, int] = {}
-            for reader in by_file[f]:
-                votes[group[reader]] = votes.get(group[reader], 0) + 1
-            owned.setdefault(min(votes, key=lambda g: (-votes[g], g)), set()).add(f)
-        for f in sorted(unknown):
-            if group[by_file[f][0]] in owned:
-                lone.add(f)
-        for f in lone:
-            owned.setdefault(group[by_file[f][0]], set()).add(f)
-        return _AtlasFiles(markers, entries, by_file, spelled, lone, group, owned)
+        return ptk.BakeBaseline.atlas_files(
+            markers, path_of, LightmapRecords.bake_state(), self._atlas_keys, objects
+        )
 
     def _splits(self) -> Dict[str, Tuple[List[str], List[str]]]:
         """``{atlas group: (map paths, objects)}`` -- each group that reads
@@ -3157,18 +3082,7 @@ class LightmapBaker(ptk.LoggingMixin):
         :meth:`combine` packs into one atlas, and what the Manage table names
         *split*. Read-only."""
         found = self._atlas_files()
-        if found is None:
-            return {}
-        out: Dict[str, Tuple[List[str], List[str]]] = {}
-        for key, files in found.owned.items():
-            if len(files) < 2:
-                continue
-            files = sorted(files, key=lambda f: (-len(found.by_file[f]), f))
-            readers = sorted(
-                r for f in files for r in found.by_file[f] if found.group[r] == key
-            )
-            out[key] = ([found.spelled[f] for f in files], readers)
-        return out
+        return {} if found is None else found.splits()
 
     def _split_fields(self) -> Dict[str, Dict[str, Tuple[str, ...]]]:
         """``ptk.StaleReport``'s ``split`` and ``split_materials`` from
@@ -5272,6 +5186,96 @@ class LightmapBaker(ptk.LoggingMixin):
             return float(cmds.getAttr(f"{light}.intensity")) != 0.0
         except (RuntimeError, ValueError, TypeError):
             return False
+
+    @staticmethod
+    def scope_meshes(scope: str = "selected") -> List[str]:
+        """The meshes a Scope word names, before the Exclude set: what the
+        Lightmap Baker panel's Bake hands :meth:`bake` (its lights ride beside
+        them, :meth:`scope_lights`).
+
+        The words are :class:`pythontk.HandoffScope`'s -- ``selected``,
+        ``visible``, ``scene`` (its synonym for ``all``); anything unknown
+        reads the selection. ``visible`` and ``scene`` gather across the scene
+        so a bake needn't be preceded by a manual select-all; ``selected``
+        takes the selection, a group standing for the meshes under it (a bake
+        set's members are often groups). Every word resolves through
+        :meth:`TextureBaker.resolve_meshes` -- the one definition of
+        "bakeable" -- so a selection that also holds the room's lights bakes
+        the geometry instead of asking Arnold to render a light, and a
+        lights-only selection reads as nothing to bake. Mirror of blendertk's
+        (mesh objects there).
+        """
+        if cmds is None:
+            return []
+
+        def scene_meshes():
+            # Every DAG PATH of every mesh: an instanced shape is ONE node
+            # under several transforms, and a listing of nodes names it once
+            # -- the production room's Scene scope reached 21 of its 61
+            # visible meshes, its 40 instanced walls and props missed (a
+            # group instance hides from a transform listing the same way).
+            # ``or []``: an empty scene is an answer, not "can't enumerate".
+            return (
+                cmds.ls(
+                    type="mesh", dag=True, allPaths=True, noIntermediate=True, long=True
+                )
+                or []
+            )
+
+        def visible_meshes():
+            return [path for path in scene_meshes() if DisplayUtils.is_visible(path)]
+
+        pool = ptk.HandoffScope.resolve(
+            scope,
+            selected=lambda: cmds.ls(selection=True, long=True),
+            all=scene_meshes,
+            visible=visible_meshes,
+        )
+        return TextureBaker.resolve_meshes(pool or [], descendants=True)
+
+    @classmethod
+    def scope_lights(cls, scope: str = "selected") -> List[str]:
+        """The light shapes a Scope word holds: what lights a bake of
+        :meth:`scope_meshes` with :attr:`include_scene_lights` off.
+
+        The same words, read for lights: the lights selected or under the
+        selection (:meth:`_scope_lights`), every visible one, or every one in
+        the scene. Mirror of blendertk's (light objects there).
+        """
+        if cmds is None:
+            return []
+        return list(
+            ptk.HandoffScope.resolve(
+                scope,
+                selected=lambda: cls._scope_lights(None),
+                all=LightUtils.all_lights,
+                visible=lambda: [
+                    light
+                    for light in LightUtils.all_lights()
+                    if DisplayUtils.is_visible(light, consider_templated_visible=True)
+                ],
+            )
+            or []
+        )
+
+    @staticmethod
+    def select(objects) -> List[str]:
+        """Make *objects* the selection -- those that exist, by name or DAG
+        path, hidden ones too -- or clear it when none does: what the Lightmap
+        Baker panel's set rows and map picks select with. Returns the long
+        names selected. Mirror of blendertk's, which leaves out what its view
+        layer cannot select.
+        """
+        if cmds is None:
+            return []
+        names = [str(obj) for obj in objects or () if obj]
+        # ``cmds.ls([])`` would list the whole scene: no names, nothing selected.
+        nodes = (cmds.ls(names, long=True) or []) if names else []
+        if nodes:
+            cmds.select(nodes, replace=True)
+        else:
+            cmds.select(clear=True)
+        return nodes
 
     @staticmethod
     def _scope_lights(objects: Optional[List[str]] = None) -> List[str]:

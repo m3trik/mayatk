@@ -9,8 +9,7 @@ Tests specifically for the logging and error reporting logic in MaterialUpdater.
 import logging
 import os
 import shutil
-import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import maya.cmds as cmds
 import pythontk as ptk
 from base_test import MayaTkTestCase
@@ -205,12 +204,11 @@ class TestMatUpdaterDiagnostics(MayaTkTestCase):
 
     def test_supported_types_are_derived_from_the_connectors(self):
         """The advertised list cannot drift from what can actually be wired."""
-        from mayatk.mat_utils.mat_updater import MatUpdaterSlots
-
         self.assertEqual(tuple(MatUpdater.CONNECTORS), MatUpdater.SUPPORTED_MAT_TYPES)
-        # The panel must not carry its own parallel copy.
+        # Nor can the scope filter the panel's Selected / Browse scopes run
+        # through: no parallel copy there either.
         self.assertEqual(
-            MatUpdaterSlots.SUPPORTED_MAT_TYPES, MatUpdater.SUPPORTED_MAT_TYPES
+            MatUpdater._acceptable_types(), tuple(sorted(MatUpdater.SUPPORTED_MAT_TYPES))
         )
 
     def test_a_slot_the_graph_lacks_is_not_reported_as_connected(self):

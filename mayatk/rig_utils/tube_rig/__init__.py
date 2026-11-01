@@ -3,9 +3,10 @@
 """Tube Rig tool — rig a tube-shaped mesh (hose, cable, piston, tail).
 
 ``_tube_rig.py`` is the engine (:class:`TubeRig`), ``strategies.py`` the build
-strategies and :class:`TubeRigBundle`, ``tube_path.py`` the centerline
-geometry (:class:`TubePath`); ``tube_rig_slots.py`` + ``tube_rig.ui`` are the
-panel. Mirrored by blendertk's ``rig_utils/tube_rig/``.
+strategies, :class:`TubeRigBundle` and the panel's mode table (``RIG_MODES``),
+``tube_path.py`` the centerline geometry (:class:`TubePath`). The panel is
+tentacle's ``slots/tools/tube_rig.py``. Mirrored by blendertk's
+``rig_utils/tube_rig/``.
 """
 
 from pythontk.core_utils.module_resolver import lazy_exports
@@ -20,8 +21,9 @@ lazy_exports(
             "FKChainStrategy",
             "SplineIKStrategy",
             "AnchorStrategy",
+            "RigModeConfig",
+            "RIG_MODES",
         ),
         "tube_path": ("TubePath",),
-        "tube_rig_slots": ("TubeRigSlots", "RigModeConfig", "RIG_MODES"),
     },
 )

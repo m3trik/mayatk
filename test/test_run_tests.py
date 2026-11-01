@@ -535,6 +535,28 @@ class TestTheCommandLine(unittest.TestCase):
         self.assertEqual(built.call_args.kwargs["patterns"], ["a", "b"])
 
 
+class TestAReusedMayaOutlivesTheRun(unittest.TestCase):
+    """``--reuse`` attaches to the user's Maya; the run's ``finally`` must
+    leave it open. Regression: it called ``shutdown(force=True)``, which
+    closed the attached session by its port with no save prompt."""
+
+    def test_the_attached_session_is_never_closed(self):
+        from mayatk.env_utils.maya_connection import MayaConnection
+
+        conn = MayaConnection()
+        conn.is_connected, conn.mode, conn.port = True, "port", 7005  # attached
+        runner = mock.MagicMock(connection=conn)
+        runner.run_tests.return_value = {"dry_run": True}
+        with mock.patch.object(rt.sys, "argv", ["run_tests.py", "--reuse", "core_utils"]), \
+                mock.patch.object(rt, "MayaTestRunner", return_value=runner), \
+                mock.patch.object(MayaConnection, "close_instance") as by_port, \
+                mock.patch("pythontk.AppLauncher.close_process") as by_pid, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(rt.main(), rt.EXIT_OK)
+        by_port.assert_not_called()
+        by_pid.assert_not_called()
+
+
 class TestAnInSessionRunLeavesTheUsersTempAlone(unittest.TestCase):
     """The runner redirects TEMP for the processes it spawns -- not in-session.
 

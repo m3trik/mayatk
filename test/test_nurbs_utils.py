@@ -16,7 +16,7 @@ import mayatk.nurbs_utils._nurbs_utils as nu_mod
 
 importlib.reload(nu_mod)
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, skipIfBatch
 import maya.cmds as cmds
 
 
@@ -85,6 +85,85 @@ class TestNurbsUtilsDuplicateAlongCurve(MayaTkTestCase):
         # Result is a list with the original start plus baked instances.
         self.assertIsInstance(result, list)
         self.assertGreater(len(result), 0)
+
+
+class TestCurveActions(MayaTkTestCase):
+    """NurbsUtils.curve_action runs a Nurbs-list action's Maya runtime command."""
+
+    @skipIfBatch("ReverseCurve's tool script reads no selection under mayapy")
+    def test_reverse_runs_on_the_given_curves(self):
+        curve = cmds.curve(degree=1, point=[(0, 0, 0), (1, 0, 0), (3, 0, 0)])
+        cmds.select(clear=True)
+        mtk.NurbsUtils.curve_action("reverse", curve)
+        start = cmds.pointPosition(f"{curve}.cv[0]", world=True)
+        self.assertAlmostEqual(start[0], 3.0, places=4)
+
+    def test_unknown_action_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            mtk.NurbsUtils.curve_action("no_such_action")
+
+    def test_every_action_names_a_runtime_command(self):
+        for action, command in mtk.NurbsUtils.CURVE_ACTIONS.items():
+            with self.subTest(action=action):
+                self.assertTrue(
+                    cmds.runTimeCommand(command, exists=True)
+                    or cmds.exists(command)
+                    or mel_proc_exists(command),
+                    f"{action}: {command} is no runtime command",
+                )
+
+    def test_an_explicit_empty_list_runs_nothing(self):
+        self.assertEqual(mtk.NurbsUtils.curve_action("reverse", []), [])
+
+
+def mel_proc_exists(name):
+    import maya.mel as mel
+
+    return bool(mel.eval(f'exists "{name}"'))
+
+
+class TestRevolve(MayaTkTestCase):
+    """NurbsUtils.revolve: one surface per profile, about the chosen axis."""
+
+    def _profile(self):
+        return cmds.curve(degree=1, point=[(1, 0, 0), (1, 2, 0)])
+
+    def test_revolve_makes_one_surface_per_curve(self):
+        a, b = self._profile(), self._profile()
+        made = mtk.NurbsUtils.revolve([a, b], polygon=False, sections=6)
+        self.assertEqual(len(made), 2)
+        self.assertEqual(sorted(cmds.ls(selection=True)), sorted(made))
+
+    def test_polygon_output_is_a_mesh(self):
+        made = mtk.NurbsUtils.revolve(self._profile(), polygon=True)
+        self.assertTrue(cmds.listRelatives(made[0], shapes=True, type="mesh"))
+
+    def test_axis_reaches_the_revolve_node(self):
+        made = mtk.NurbsUtils.revolve(self._profile(), axis="z", polygon=False)
+        node = cmds.listConnections(made[0], type="revolve") or cmds.ls(
+            cmds.listHistory(made[0]), type="revolve"
+        )
+        self.assertEqual(tuple(cmds.getAttr(f"{node[0]}.axis")[0]), (0.0, 0.0, 1.0))
+
+    def test_nothing_selected_returns_empty(self):
+        cmds.select(clear=True)
+        self.assertEqual(mtk.NurbsUtils.revolve(None), [])
+
+    def test_a_non_curve_selection_returns_empty(self):
+        cube = cmds.polyCube()[0]
+        self.assertEqual(mtk.NurbsUtils.revolve(cube), [])
+
+    def test_unknown_axis_raises(self):
+        with self.assertRaises(ValueError):
+            mtk.NurbsUtils.revolve(self._profile(), axis="w")
+
+
+class TestLoftNeedsTwoProfiles(MayaTkTestCase):
+    """loft answers [] (no longer an error string) with fewer than two profiles."""
+
+    def test_one_profile_returns_empty(self):
+        cmds.select(cmds.circle()[0])
+        self.assertEqual(mtk.NurbsUtils.loft(polygon=False), [])
 
 
 if __name__ == "__main__":

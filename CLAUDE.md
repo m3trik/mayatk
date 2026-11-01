@@ -37,7 +37,7 @@ Tests need the Maya runtime — not plain `pytest` / the workspace `.venv`. Set 
 
 ```powershell
 $MAYAPY = "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe"
-$env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
+$env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk"
 ```
 
 - **Pre-flight (no Maya)** — `ruff check . --select E9,F82` (syntax + undefined names, tests included) is green — keep it so. Bare `ruff check .` is ~276 legacy errors — fix only what you introduce. **Command-name check (mayapy)** — `& $MAYAPY mayatk/test/check_cmds_syntax.py` validates every `cmds.*` / `mel.eval` name against the live registry (`--report` writes a file; append paths to scope).
@@ -51,14 +51,11 @@ $env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
 
 Runner notes: the console shows non-passing modules + SUMMARY + `SLOWEST MODULES` (`--full-results`: all); the badge only updates on a full `--all`; `--jobs N` runs chunks concurrently — drop to 1 if a run stalls at init (FlexLM reclaim after a killed mayapy).
 
-## Tool panels — moving to tentacle
+## Tool panels — tentacle's
 
-Every panel and its Slots class moves to tentacle with its tool (`ui/panels/<panel>/`, one Slots class both hosts share; [CODE_STANDARD](../m3trik/docs/CODE_STANDARD.md) §3, §14); mayatk keeps the host operations and no UI. New panels start in tentacle once the duplicate_radial pilot opens its panel root. Until a panel moves, it keeps this contract (canonical: `light_utils/hdr_manager.py`; blendertk mirrors it):
+Every tool's panel is tentacle's (`ui/tools/<tool>.ui` + one shared Slots class in `slots/tools/<tool>.py`; [CODE_STANDARD](../m3trik/docs/CODE_STANDARD.md) §3, §14). mayatk holds each tool's API half (its operations and record rows) and no UI: no `.ui`, no `*Slots` class. A scene call the panel makes is a method on the tool's class or its host facade (`SequencerHost`, `ManifestHost`, `BridgeHost`), named as blendertk names it. `MayaUiHandler` registers no UI source of its own; it wraps Maya's native menus and names `sb.tk`.
 
-- `<tool>.ui` + `<Tool>Slots` beside the domain module they act on; the `.ui` is the tracked SSoT, runtime-loaded (no compiled `_ui.py`).
-- `<Tool>Slots` is tentacle-independent: base `ptk.LoggingMixin`, `__init__(self, switchboard, log_level=...)` sets `self.sb`; a thin driver calling the engine directly. Guard the uitk import in the *logic* module so the headless surface stays uitk-free.
-- Discovery: `MayaUiHandler` (`ui_utils/maya_ui_handler.py`, `discover_slots=True, recursive=True`) finds the `.ui` and the slots class; no `DEFAULT_INCLUDE` entry.
-- tentacle only links to it: a `bNNN` slot in `tentacle/slots/maya/<panel>.py` calls `self.sb.handlers.marking_menu.show("<tool>")`.
+**Host bindings**: a mayatk class keeping its own name for a shared pythontk class (`SceneDataSidecar`, `WorkspaceMap`, `CurtainMesh`, `ProbePlacement`) configures it (its host adapter, class attributes) and adds Maya-only methods; it never overrides a shared method (CODE_STANDARD §0; `check_dcc_twins.py` `HOST_BINDINGS`).
 
 ## Style
 

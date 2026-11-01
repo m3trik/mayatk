@@ -9,6 +9,7 @@ except ModuleNotFoundError:
     pass
 
 # from this package:
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -157,6 +158,34 @@ class ColorUtils:
         return colors if colors else None
 
     @staticmethod
+    def get_average_vertex_color(obj: str) -> Optional[Tuple[float, float, float]]:
+        """Average of the object's vertex colors, or None when its mesh has none
+        (twin of blendertk's ``ColorId.get_average_vertex_color``)."""
+        if not cmds.listRelatives(obj, shapes=True, type="mesh"):
+            return None
+        try:
+            colors = cmds.polyColorPerVertex(f"{obj}.vtx[*]", query=True, rgb=True)
+        except RuntimeError:
+            return None
+        # Flat [r, g, b, r, g, b, ...]; grouped into triples.
+        triples = list(zip(colors[0::3], colors[1::3], colors[2::3])) if colors else []
+        if not triples:
+            return None
+        return tuple(sum(c) / len(triples) for c in zip(*triples))
+
+    @staticmethod
+    def get_outliner_color(obj: str) -> Optional[Tuple[float, float, float]]:
+        """The object's outliner color while ``useOutlinerColor`` is on, else None
+        (twin of blendertk's ``ColorId.get_outliner_color``)."""
+        if not (
+            Attributes.has_attr(obj, "useOutlinerColor")
+            and cmds.getAttr(f"{obj}.useOutlinerColor")
+            and Attributes.has_attr(obj, "outlinerColor")
+        ):
+            return None
+        return tuple(cmds.getAttr(f"{obj}.outlinerColor")[0])
+
+    @staticmethod
     def set_vertex_color(objects: List[str], color: Tuple[float, float, float]) -> None:
         """Applies the specified color to the object's vertices."""
         for obj in cmds.ls(objects, long=True) or []:
@@ -265,6 +294,7 @@ class ColorUtils:
 
 class ColorId(ColorUtils):
     @classmethod
+    @CoreUtils.undoable(name="Color ID: Set Color")
     def apply_color(
         cls,
         objects: List[str],
@@ -275,7 +305,7 @@ class ColorId(ColorUtils):
         apply_to_outliner: bool = False,
         set_per_color: bool = False,
     ) -> None:
-        """Applies color based on given criteria to objects.
+        """Applies color based on given criteria to objects, as one undo step.
 
         ``set_per_color`` additionally groups the batch into an ``ID_<HEX>`` objectSet — a
         grouping aid orthogonal to the color channels (mirrors blendertk's ID-collection twin)."""
@@ -324,16 +354,13 @@ class ColorId(ColorUtils):
                     and cls.get_color_difference(wireframe_color, target_color)
                     <= threshold
                 )
-            if (
-                check_outliner_color
-                and not matched
-                and Attributes.has_attr(obj, "useOutlinerColor")
-                and cmds.getAttr(f"{obj}.useOutlinerColor")
-                and Attributes.has_attr(obj, "outlinerColor")
-            ):
-                outliner_color = cmds.getAttr(f"{obj}.outlinerColor")[0]
-                if cls.get_color_difference(outliner_color, target_color) <= threshold:
-                    matched = True
+            if check_outliner_color and not matched:
+                outliner_color = cls.get_outliner_color(obj)
+                matched = (
+                    outliner_color is not None
+                    and cls.get_color_difference(outliner_color, target_color)
+                    <= threshold
+                )
             if check_set and not matched:
                 set_color = cls.get_color_set_color(obj)
                 if (
@@ -342,35 +369,83 @@ class ColorId(ColorUtils):
                 ):
                     matched = True
             if check_vertex_color and not matched:
-                if cmds.listRelatives(obj, shapes=True, type="mesh"):
-                    try:
-                        vtx_colors = cmds.polyColorPerVertex(
-                            f"{obj}.vtx[*]", query=True, rgb=True
-                        )
-                    except RuntimeError:
-                        vtx_colors = None
-                    if vtx_colors:
-                        # vtx_colors is flat [r,g,b,r,g,b,...]; group into triples
-                        triples = list(
-                            zip(vtx_colors[0::3], vtx_colors[1::3], vtx_colors[2::3])
-                        )
-                        if triples:
-                            average_vtx_color = [
-                                sum(c) / len(triples) for c in zip(*triples)
-                            ]
-                            if (
-                                cls.get_color_difference(
-                                    average_vtx_color, target_color
-                                )
-                                <= threshold
-                            ):
-                                matched = True
+                vertex_color = cls.get_average_vertex_color(obj)
+                matched = (
+                    vertex_color is not None
+                    and cls.get_color_difference(vertex_color, target_color)
+                    <= threshold
+                )
             if matched:
                 matching_objects.append(obj)
 
         return matching_objects
 
     @classmethod
+    def select_by_color(
+        cls, target_color: Tuple[float, float, float], threshold: float = 0.1, **checks
+    ) -> List[str]:
+        """Select the objects :meth:`get_objects_by_color` finds, replacing the
+        selection (none found clears it); returns them. ``checks`` are its
+        ``check_*`` channel flags (the Color ID panel's Select By Color)."""
+        found = cmds.ls(
+            cls.get_objects_by_color(target_color, threshold=threshold, **checks),
+            long=True,
+        ) or []
+        if found:
+            cmds.select(found, replace=True)
+        else:
+            cmds.select(clear=True)
+        return found
+
+    @classmethod
+    def get_color(
+        cls,
+        obj: str,
+        check_material_color: bool = False,
+        check_vertex_color: bool = False,
+        check_wireframe_color: bool = False,
+        check_outliner_color: bool = False,
+        check_set: bool = False,
+    ) -> Optional[Tuple[float, float, float]]:
+        """The first color ``obj`` carries on the enabled channels (0-1 RGB), or None.
+
+        The Color ID panel's Get Color. Read in the order Outliner, Set, Wireframe,
+        Material, Vertex: the exact stamps first, the averaged vertex colors last
+        (blendertk's twin reads the same order)."""
+        readers = (
+            (check_outliner_color, cls.get_outliner_color),
+            (check_set, cls.get_color_set_color),
+            (
+                check_wireframe_color,
+                lambda o: cls.get_wireframe_color(o, normalize=True),
+            ),
+            (check_material_color, cls.get_material_color),
+            (check_vertex_color, cls.get_average_vertex_color),
+        )
+        for enabled, read in readers:
+            color = read(obj) if enabled else None
+            if color is not None:
+                return tuple(color[:3])
+        return None
+
+    @staticmethod
+    def lead_object() -> Optional[str]:
+        """The object Get Color reads: the last selected transform (Maya's lead
+        object), or None without one (blendertk's twin: the active object). A
+        component selection names no object, so it reads None too."""
+        selection = cmds.ls(selection=True, long=True, type="transform") or []
+        return selection[-1] if selection else None
+
+    @staticmethod
+    def scene_objects() -> List[str]:
+        """Every object a scene-wide Color ID action covers (the panel's Ctrl+click
+        Reset): the geometry transforms, the walk :meth:`get_objects_by_color` makes.
+        Transforms, not the shapes ``cmds.ls(geometry=True)`` yields: Set Color writes
+        the outliner and wireframe channels on the transform."""
+        return cmds.ls(NodeUtils.list_transforms(geometry=True), long=True) or []
+
+    @classmethod
+    @CoreUtils.undoable(name="Color ID: Reset")
     def reset_colors(
         cls,
         objects: List[str],
@@ -380,7 +455,7 @@ class ColorId(ColorUtils):
         reset_material: bool = True,
         reset_sets: bool = True,
     ) -> None:
-        """Resets colors to default for given objects, with options to specify which color types to reset."""
+        """Resets colors to default for given objects, with options to specify which color types to reset (one undo step)."""
         if reset_sets:
             cls.remove_from_color_sets(objects)
         for obj in cmds.ls(objects, long=True) or []:
@@ -464,269 +539,12 @@ class ColorId(ColorUtils):
         (160, 160, 160),  # muted gray
     ]
 
+    #: The swatch palettes' preset store (uitk ``PresetManager.preset_dir``), which the
+    #: tentacle panel reads. Kept as the legacy "color_manager" (the tool was renamed
+    #: Color Manager -> Color ID): it keys existing saved palettes and the
+    #: PresetManager legacy-migration table, and is never user-visible.
+    SWATCH_PRESET_DIR = "mayatk/color_manager"
 
-class ColorIdSlots(ColorId):
-    # Storage key intentionally kept as the legacy "color_manager" (the tool
-    # was renamed Color Manager -> Color ID): it keys existing saved palettes
-    # and the PresetManager legacy-migration table, and is never user-visible.
-    _PRESET_DIR = "mayatk/color_manager"
-    _DEFAULT_PRESET = "default"
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.color_id
-
-        self.button_grp = self.sb.create_button_groups(self.ui, "chk000-11")
-        buttons = self.button_grp.buttons()
-
-        # Migrate away from a prior bug that wrote "#ffffff" over every
-        # swatch's saved color (uitk colorSwatch.loadColor used to fall
-        # back to white when nothing was stored, then auto-saved it).
-        # Clear those legacy values so _initialColor's pastel takes hold.
-        for button in buttons:
-            key = f"colorSwatch/{button.objectName()}/color"
-            if str(self.ui.settings.value(key, "")).lower() == "#ffffff":
-                self.ui.settings.clear(key)
-
-        for i, button in enumerate(buttons):
-            button._initialColor = self.sb.QtGui.QColor(
-                *ColorId.DEFAULT_SWATCH_COLORS[i % len(ColorId.DEFAULT_SWATCH_COLORS)]
-            )
-            button.keep_square = True  # square swatches that track column width
-            button.settings = self.ui.settings
-        self.ui.chk000.setChecked(True)
-
-    # ── Preset I/O ─────────────────────────────────────────────────────────
-
-    def _export_swatch_colors(self) -> dict:
-        """``PresetManager.metadata_provider`` — capture current swatch colors."""
-        return {"swatches": [btn.color.name() for btn in self.button_grp.buttons()]}
-
-    def _import_swatch_colors(self, meta: dict) -> None:
-        """``PresetManager.on_metadata_loaded`` — apply colors from a preset."""
-        colors = (meta or {}).get("swatches") or []
-        for btn, hex_color in zip(self.button_grp.buttons(), colors):
-            btn.color = self.sb.QtGui.QColor(hex_color)
-
-    @staticmethod
-    def _hex_from_rgb(rgb) -> str:
-        r, g, b = rgb
-        return f"#{int(r):02X}{int(g):02X}{int(b):02X}"
-
-    def _ensure_default_preset(self, presets) -> None:
-        """Write the factory-default preset on first use if it's missing."""
-        if presets.exists(self._DEFAULT_PRESET):
-            return
-        original = presets.metadata_provider
-        presets.metadata_provider = lambda: {
-            "swatches": [
-                self._hex_from_rgb(rgb) for rgb in ColorId.DEFAULT_SWATCH_COLORS
-            ]
-        }
-        try:
-            presets.save(self._DEFAULT_PRESET)
-        finally:
-            presets.metadata_provider = original
-
-    def header_init(self, widget):
-        """Configure header help text and preset combobox."""
-        # Gesture-scoped window: pin button + auto-hide on key_show release.
-        widget.config_buttons("menu", "collapse", "pin")
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Color ID",
-                body="Assign colors to scene objects through any combination "
-                "of four channels: material, outliner tint, wireframe "
-                "override, and vertex colors.",
-                steps=[
-                    "Click a palette swatch to pick the active color (right-"
-                    "click a swatch to change its color).",
-                    "Enable the channels to act on via <b>Material</b>, "
-                    "<b>Outliner</b>, <b>Wireframe</b>, <b>Vertex</b> "
-                    "checkboxes — they scope <i>every</i> action below.",
-                    "Select objects and press <b>Apply</b>.",
-                    "Use <b>Select By Color</b> to find scene objects "
-                    "matching the active color across the enabled channels.",
-                ],
-                sections=[
-                    (
-                        "Other actions",
-                        [
-                            "<b>Reset</b> — clear the <i>enabled</i> channels' "
-                            "assignments on the current selection (or every "
-                            f"geometry node with {self.sb.tooltip.kbd('Ctrl')}-"
-                            "click). Unchecked channels are left untouched, so "
-                            "you can clear e.g. wireframe tints while keeping "
-                            "materials and vertex colors.",
-                            "<b>Get Color</b> — read the selected object's "
-                            "wireframe color into the active swatch.",
-                        ],
-                    ),
-                    (
-                        "Presets",
-                        [
-                            "The header menu's preset combo saves / restores "
-                            "swatch palettes. Use <b>Save</b> to capture the "
-                            "current colors; pick a preset to restore them.",
-                        ],
-                    ),
-                ],
-            )
-        )
-        # Preset combobox — swatches aren't standard widgets, so colors
-        # are carried in metadata rather than per-widget value reads.
-        widget.menu.add_presets = True
-        widget.menu.presets.preset_dir = self._PRESET_DIR
-        widget.menu.presets.metadata_provider = self._export_swatch_colors
-        widget.menu.presets.on_metadata_loaded = self._import_swatch_colors
-        self._ensure_default_preset(widget.menu.presets)
-
-    @property
-    def selected_objects(self) -> List[str]:
-        """Return the currently selected objects, or an empty list if no objects are selected."""
-        objects = cmds.ls(selection=True, long=True) or []
-        if not objects:
-            self.sb.message_box("No objects selected.")
-        return objects
-
-    @property
-    def selected_button(self) -> Optional[object]:
-        """Return the currently selected button in the button group."""
-        for button in self.button_grp.buttons():
-            if button.isChecked():
-                return button
-        return None
-
-    @property
-    def target_color(self) -> Optional[Tuple[float, float, float]]:
-        """Return the color of the selected button, or None if no button is selected."""
-        selected_btn = self.selected_button
-        if selected_btn:
-            color = selected_btn.color
-            if isinstance(color, self.sb.QtGui.QColor):
-                color = (color.redF(), color.greenF(), color.blueF())
-            return color
-        return None
-
-    def _channels(self) -> dict:
-        """Current channel checkbox states — the scope EVERY action honors.
-
-        Same objectName -> same channel as blendertk's twin: ``chk012`` Wireframe ·
-        ``chk013`` Outliner · ``chk014`` Material · ``chk015`` Vertex · ``chk016`` Set Per
-        Color."""
-        return {
-            "wireframe": self.ui.chk012.isChecked(),
-            "outliner": self.ui.chk013.isChecked(),
-            "material": self.ui.chk014.isChecked(),
-            "vertex": self.ui.chk015.isChecked(),
-            "set": self.ui.chk016.isChecked(),
-        }
-
-    def _channels_or_warn(self) -> Optional[dict]:
-        """:meth:`_channels`, or None (with a prompt) when the user has enabled none.
-
-        Every action is channel-scoped, so with nothing checked there is nothing to do —
-        and Select By Color would answer "no matches" by clearing the selection."""
-        channels = self._channels()
-        if not any(channels.values()):
-            self.sb.message_box("No channels enabled.")
-            return None
-        return channels
-
-    def b000(self) -> None:
-        """Reset Colors — clear the ENABLED channels (Ctrl+click resets all geometry).
-
-        Channel-scoped like Set Color / Select By Color: an unchecked channel is never
-        touched. (Reset used to wipe all five regardless, so clearing a wireframe tint also
-        reassigned lambert1 and deleted the object's vertex-color sets.)"""
-        ch = self._channels_or_warn()
-        if ch is None:
-            return
-        if self.sb.app.keyboardModifiers() == self.sb.QtCore.Qt.ControlModifier:
-            # Transforms, not the raw cmds.ls(geometry=True) SHAPES this used to pass: Set
-            # Color writes the outliner and wireframe channels on the transform (what the
-            # user selects), so a shape-only sweep cleared nothing the tool had applied.
-            # Same walk Select By Color uses, so "everything" means the same set in both.
-            objects = NodeUtils.list_transforms(geometry=True, long=True)
-        else:
-            objects = self.selected_objects
-        if not objects:
-            return
-        self.reset_colors(
-            objects,
-            reset_wireframe=ch["wireframe"],
-            reset_outliner=ch["outliner"],
-            reset_material=ch["material"],
-            reset_vertex=ch["vertex"],
-            reset_sets=ch["set"],
-        )
-
-    def b001(self) -> None:
-        """Apply selected color to selected objects (on the enabled channels)."""
-        ch = self._channels_or_warn()
-        if ch is None:
-            return
-        objects = self.selected_objects
-        if not objects or not self.target_color:
-            return
-
-        ColorId.apply_color(
-            objects,
-            color=self.target_color,
-            apply_to_wireframe=ch["wireframe"],
-            apply_to_vertex=ch["vertex"],
-            apply_to_outliner=ch["outliner"],
-            apply_to_material=ch["material"],
-            set_per_color=ch["set"],
-        )
-
-    def b002(self) -> None:
-        """Select objects by the currently selected color (across the enabled channels)."""
-        ch = self._channels_or_warn()
-        if ch is None:
-            return
-        if not self.target_color:
-            print("No color was selected.")
-            return
-
-        found_objects = self.get_objects_by_color(
-            self.target_color,
-            check_wireframe_color=ch["wireframe"],
-            check_vertex_color=ch["vertex"],
-            check_outliner_color=ch["outliner"],
-            check_material_color=ch["material"],
-            check_set=ch["set"],
-        )
-        if found_objects:
-            cmds.select(found_objects)
-        else:
-            cmds.select(clear=True)
-
-    def b003(self) -> None:
-        """Pick up the selected object's wireframe color into the active color button (eyedropper)."""
-        objects = self.selected_objects
-        if not objects:
-            return
-        if len(objects) > 1:
-            self.sb.message_box("Please select exactly one object.")
-            return
-
-        selected_object = objects[0]
-        wireframe_color = self.get_wireframe_color(selected_object)
-        if wireframe_color is None:
-            print("Failed to retrieve wireframe color.")
-            return
-
-        self.selected_button.color = wireframe_color
-
-
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("color_id", reload=True)
-    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

@@ -184,7 +184,7 @@ class TestControlsExtended(MayaTkTestCase):
 
     def test_create_with_axis(self):
         """Test creating controls with different axes."""
-        ctrl_z = mtk.Controls.diamond(name="testAxisZ", axis="z")
+        mtk.Controls.diamond(name="testAxisZ", axis="z")
 
         ctrl_x_nofreeze = mtk.Controls.diamond(name="testAxisX", axis="x", freeze=False)
         rot = cmds.xform(ctrl_x_nofreeze, q=True, ro=True)
@@ -390,6 +390,15 @@ class TestControlsExtended(MayaTkTestCase):
 
         with self.assertRaises(ValueError):
             mtk.Controls.text(name="testEmptyText", text="")
+
+
+class TestCreateSelects(MayaTkTestCase):
+    """``Controls.create(select=True)``: what the shared Edit panel's Create >
+    Control calls."""
+
+    def test_select_leaves_the_control_selected(self):
+        ctrl = mtk.Controls.create("diamond", name="selCtrl", select=True)
+        self.assertEqual(cmds.ls(selection=True), cmds.ls(ctrl))
 
 
 if __name__ == "__main__":

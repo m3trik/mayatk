@@ -1,10 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
 import sys
-import os
 from typing import Optional, TYPE_CHECKING
-from uitk import Switchboard
-from uitk.handlers.ui_handler import UiHandler
+from uitk import Switchboard, UiHandler
 
 try:
     from mayatk.ui_utils import maya_native_menus
@@ -18,8 +16,10 @@ if TYPE_CHECKING:
 class MayaUiHandler(UiHandler):
     """UI Handler for Maya applications.
 
-    Extends the generic UiHandler with Maya-specific menu wrapping
-    and discovery of mayatk UI files.
+    Extends the generic UiHandler with Maya-specific menu wrapping. mayatk
+    ships no panels (every tool's UI is tentacle's), so it registers no UI
+    source of its own; tentacle's launcher registers its tools on the same
+    switchboard.
     """
 
     def __init__(
@@ -33,11 +33,9 @@ class MayaUiHandler(UiHandler):
         ``switchboard`` is optional. When omitted, a fresh ``Switchboard``
         is constructed so the handler can be stood up by a shelf script
         without any prior setup. Production callers (e.g. tentacle's
-        ``tcl_maya``) still pass an explicit instance to share state
+        launcher) still pass an explicit instance to share state
         with the rest of the application.
         """
-        self.root_dir = os.path.dirname(sys.modules["mayatk"].__file__)
-
         if switchboard is None:
             from uitk import Switchboard as _Switchboard
 
@@ -47,20 +45,20 @@ class MayaUiHandler(UiHandler):
 
         super().__init__(
             switchboard=switchboard,
-            ui_root=self.root_dir,
-            slot_root=self.root_dir,
-            discover_slots=True,
-            recursive=True,
             log_level=log_level,
-            source_tags={"mayatk"},
             **kwargs,
         )
+        # A Slots class written for either host reaches its host through the
+        # switchboard's ``tk`` (tentacle's ``Slots.tk``): this package, unless
+        # the caller named one, so a panel this handler stands up alone (a
+        # shelf button's launch code) finds its host too.
+        if getattr(self.sb, "tk", None) is None:
+            self.sb.tk = sys.modules["mayatk"]
 
         # Maya's main window owns application-scoped shortcuts (it is always
         # up); uitk names no host, so the host declares it -- here, not only
-        # in tentacle's launcher, so mayatk's own panels get it too.
-        from uitk import PresetEditor
-        from uitk.managers.shortcut_manager import ShortcutManager
+        # in tentacle's launcher, so a window this handler stands up alone gets it too.
+        from uitk import PresetEditor, ShortcutManager
 
         ShortcutManager.register_host_window("MayaWindow")
         PresetEditor.register_app_label("mayatk", "Maya")
@@ -70,10 +68,10 @@ class MayaUiHandler(UiHandler):
         # here (a runtime init point, not on module import) per the no-import-
         # side-effects rule; idempotent, so repeated handler construction is safe.
         try:
-            from uitk.bridge.slots import BridgeSlotsBase
+            from uitk import ParamPanelSlots
             from mayatk.ui_utils._ui_utils import UiUtils
 
-            BridgeSlotsBase.register_log_link_handler(UiUtils.dispatch_log_link)
+            ParamPanelSlots.register_log_link_handler(UiUtils.dispatch_log_link)
         except Exception:  # never let a wiring hiccup block UI-handler startup
             pass
 
@@ -83,6 +81,8 @@ class MayaUiHandler(UiHandler):
         # And keep the scene records' paths spelled from the scene's own
         # project across a Save As into another one (the re-base hook).
         self._install_record_path_rebase()
+        # And teach uitk how to cancel in this host (see _install_cancel_provider).
+        self._install_cancel_provider()
 
     @staticmethod
     def _install_record_path_rebase() -> bool:
@@ -93,6 +93,34 @@ class MayaUiHandler(UiHandler):
             from mayatk.node_utils.data_nodes import DataNodes
 
             return DataNodes.install_path_rebase()
+        except Exception:  # never let a wiring hiccup block UI-handler startup
+            return False
+
+    @staticmethod
+    def _install_cancel_provider() -> bool:
+        """``MayaCancelProvider`` as uitk's cancel strategy, once per session.
+
+        Maya's Esc peek (``MComputation``) works while a ``cmds`` call blocks the
+        main thread, the one moment a Qt shortcut cannot fire. Installed here,
+        where every panel in Maya passes (tentacle's launcher and a shelf
+        button's alike), not at ``import mayatk``: imports have no side effects.
+        Interactive Maya only, as before: batch has no Esc to peek. Never blocks
+        UI-handler startup.
+
+        Returns:
+            bool: True when this call installed it.
+        """
+        try:
+            import maya.cmds as cmds
+            from uitk import CancelManager
+
+            from mayatk.ui_utils.cancel_provider import MayaCancelProvider
+
+            if cmds.about(batch=True):
+                return False
+            if isinstance(CancelManager.provider(), MayaCancelProvider):
+                return False
+            return MayaCancelProvider.install() is not None
         except Exception:  # never let a wiring hiccup block UI-handler startup
             return False
 
@@ -129,7 +157,7 @@ class MayaUiHandler(UiHandler):
         Overrides :meth:`UiHandler.instance` so a shelf-style call works
         regardless of prior setup state:
 
-        - **Pre-existing handler** (e.g. tentacle's ``tcl_maya`` already
+        - **Pre-existing handler** (e.g. tentacle's launcher already
           ran ``MayaUiHandler.instance(switchboard=tentacle_sb)``): the
           existing instance is returned, even when this call is made
           without a switchboard argument. The base implementation keys
@@ -193,21 +221,6 @@ class MayaUiHandler(UiHandler):
             return self._load_maya_ui(menu_key=name, **kwargs)
 
         return super().get(name, reload=reload, **kwargs)
-
-    def default_persistence(self, ui) -> str:
-        """mayatk-sourced UIs stay open by default (hide button, not pin).
-
-        A tool panel popped from a marking-menu button is doing work the user
-        came for, so it shouldn't vanish when they leave the menu. This is a
-        *default*, not a hardcode: the UI Browser's global setting and its
-        per-window overrides both outrank it (see ``UiHandler.resolve_persistence``).
-        """
-        try:
-            if ui.has_tags(["mayatk"]):
-                return self.PERSISTENCE_STICKY
-        except AttributeError:
-            pass
-        return super().default_persistence(ui)
 
     def _load_maya_ui(
         self,

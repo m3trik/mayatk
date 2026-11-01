@@ -1,7 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Maya->Unity hand-off bridge (export the selection into a Unity project's Assets/).
+"""The Maya half of the Unity hand-off: export the scope for a Unity project.
 
-Co-located panel (``unity_bridge_slots.UnityBridgeSlots`` + ``unity_bridge.ui``) +
-engine (``_unity_bridge.UnityBridge``). Discovered by :class:`mayatk.ui_utils.MayaUiHandler`.
+The engine (``_unity_bridge.UnityBridge``) and its export rows
+(``parameters.Parameters``, ``UnityBridge.params_registry()``); the panel is
+extapps' Unity Workflow app, which tentacle opens with this engine injected, and
+whose delivery (unitytk's copy into ``Assets/``) the engine sends through.
 """

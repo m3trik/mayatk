@@ -64,6 +64,15 @@ class ScaleKeys:
         if samples is None and by_speed:
             samples = 64
 
+        if isinstance(keys, str) and keys.strip().lower() == "auto":
+            # A Graph Editor key selection narrows a uniform scale; a speed
+            # scale always retimes whole blocks.
+            keys = (
+                "selected"
+                if not by_speed
+                and cmds.keyframe(query=True, selected=True, timeChange=True)
+                else None
+            )
         time_range, selected_keys_only = (
             self._normalize_keys_to_time_range_and_selection(keys)
         )
@@ -1482,6 +1491,9 @@ class ScaleKeys:
         """Scale keyframes uniformly or via motion-aware retiming.
 
         Parameters:
+            keys: Which keys: ``"selected"`` (the Graph Editor key selection),
+                ``"auto"`` (that selection in uniform mode when there is one,
+                else every key), a time or ``(start, end)``, or None (every key).
             split_static: If True (default), animation segments separated by static
                 gaps (flat keys) are treated as independent groups and scaled separately.
             flatten_tangents: If True (default), flattens all tangents to 'auto' after

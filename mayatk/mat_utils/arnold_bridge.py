@@ -398,6 +398,26 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
                 materials.append(str(surf[0]))
         return list(dict.fromkeys(materials))
 
+    @staticmethod
+    def base_materials() -> List[str]:
+        """Every scene material a bridge can serve: the scene's materials minus
+        the ``aiStandardSurface`` bridge shaders themselves (the Arnold Preview
+        Shader panel's All Scene Materials scope)."""
+        return [
+            m
+            for m in (MatUtils.get_scene_mats() or [])
+            if cmds.nodeType(m) != "aiStandardSurface"
+        ]
+
+    def select_bridged(self) -> List[str]:
+        """Select every base material that has a bridge (never the bridge
+        shaders, scene materials too) and return them. With none, the selection
+        is left as it is and ``[]`` comes back."""
+        bridged = [m for m in self.base_materials() if self.has_bridge(m)]
+        if bridged:
+            cmds.select(bridged, replace=True)
+        return bridged
+
     # ----------------------------------------------------------------- scoping
     def _resolve_materials(
         self,
@@ -857,159 +877,3 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             return True
 
         return False
-
-
-class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
-    """Switchboard slots for the ``arnold_bridge.ui`` panel.
-
-    A thin driver over :class:`ArnoldBridge` — no bridge logic lives here.
-    Add / Remove operate on the scope picked in the combobox (selected objects'
-    materials, or every scene material). Force makes Add rebuild a material that
-    already has a network instead of skipping it.
-    """
-
-    # (label, op-kwarg-resolver-key). The combobox shows the labels; the action
-    # methods map the current label to a scope via _scope_kwargs().
-    _SCOPE_LABELS = ("Selected Objects", "All Scene Materials")
-    _VERB = {"add": "Added", "remove": "Removed"}
-
-    def __init__(self, switchboard, log_level: str = "WARNING"):
-        super().__init__()
-        self.logger.setLevel(log_level)
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.arnold_bridge
-        self._bridge = ArnoldBridge()
-
-    # ------------------------------------------------------------------ header
-    def header_init(self, widget) -> None:
-        """Configure the header menu and help text."""
-        widget.config_buttons("menu", "collapse", "hide")
-        widget.menu.add(
-            "QPushButton",
-            setText="Select Bridged Materials",
-            setObjectName="select_bridged",
-            setToolTip="Select every scene material that currently has an "
-            "Arnold bridge.",
-        )
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Arnold Render Bridge",
-                body="Attach (or remove) an Arnold <i>aiStandardSurface</i> "
-                "shader alongside a game material so the asset renders in "
-                "Arnold — without disturbing the Stingray / Standard Surface "
-                "material that exports to FBX.",
-                steps=[
-                    "Pick a <b>Scope</b>: the selected objects' materials, or "
-                    "every scene material.",
-                    "<b>Add Network</b> mirrors each material's textures onto a "
-                    "new Arnold shader wired to the shading group's "
-                    "<i>aiSurfaceShader</i> slot.",
-                    "<b>Remove Network</b> deletes the Arnold network (the "
-                    "exported material is untouched). Enable <b>Force</b> to "
-                    "rebuild a material that already has a network.",
-                ],
-                sections=[
-                    (
-                        "Scene-only by design",
-                        [
-                            "The bridge drives <i>aiSurfaceShader</i>, which FBX "
-                            "doesn't represent — only the Stingray / Standard "
-                            "Surface material on <i>surfaceShader</i> exports. The "
-                            "Arnold network never leaves the Maya scene.",
-                            "It owns dedicated file nodes, so Remove cleanly deletes "
-                            "the whole Arnold island and the base material's "
-                            "textures stay put.",
-                        ],
-                    ),
-                ],
-            )
-        )
-
-    # -------------------------------------------------------------------- combo
-    def cmb000_init(self, widget) -> None:
-        """Populate the Scope combobox (Selected Objects is the default)."""
-        widget.clear()
-        widget.addItems(self._SCOPE_LABELS)
-        widget.setCurrentIndex(0)
-
-    # ------------------------------------------------------------------ actions
-    def b000(self) -> None:
-        """Add Network."""
-        self._run("add", force=self.ui.chk000.isChecked())
-
-    def b001(self) -> None:
-        """Remove Network."""
-        self._run("remove")
-
-    def select_bridged(self) -> None:
-        """Header action: select every base material that has a bridge.
-
-        Excludes the ``aiStandardSurface`` bridge shaders themselves: they're
-        scene materials too, but the overrides, never a base material.
-        """
-        bridged = [
-            m for m in self._scene_base_materials() if self._bridge.has_bridge(m)
-        ]
-        if not bridged:
-            self.ui.footer.setText("No materials have an Arnold network.")
-            return
-        cmds.select(bridged, replace=True)
-        self.ui.footer.setText(
-            f"Selected {len(bridged)} material(s) with an Arnold network."
-        )
-
-    # ------------------------------------------------------------------ helpers
-    @staticmethod
-    def _scene_base_materials() -> List[str]:
-        """Scene materials minus the ``aiStandardSurface`` bridge shaders."""
-        return [
-            m
-            for m in (MatUtils.get_scene_mats() or [])
-            if cmds.nodeType(m) != "aiStandardSurface"
-        ]
-
-    def _scope_kwargs(self):
-        """Resolve the Scope combobox to (kwargs, description) or (None, msg).
-
-        Returns ``(None, message)`` when the scope yields nothing actionable so
-        the caller can report it and bail.
-        """
-        label = self.ui.cmb000.currentText() or self._SCOPE_LABELS[0]
-        if "All Scene" in label:
-            materials = self._scene_base_materials()
-            if not materials:
-                return None, "No scene materials found."
-            return {"materials": materials}, f"{len(materials)} scene material(s)"
-
-        selection = cmds.ls(selection=True, long=True) or []
-        if not selection:
-            return None, ("Select object(s), or switch Scope to All Scene Materials.")
-        return {"objects": selection}, "selection"
-
-    def _run(self, op: str, force: bool = False) -> None:
-        """Resolve scope, run ``op`` on the bridge, and report the count."""
-        kwargs, desc = self._scope_kwargs()
-        if kwargs is None:
-            self.ui.footer.setText(desc)
-            return
-        if op == "add":
-            kwargs["force"] = force
-
-        with self.ui.footer.progress(
-            text=f"{op.capitalize()} Arnold network ({desc})…"
-        ):
-            result = getattr(self._bridge, op)(**kwargs)
-
-        n = len(result)
-        self.ui.footer.setText(
-            f"{self._VERB[op]} {n} Arnold network{'' if n == 1 else 's'} ({desc})."
-        )
-
-
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("arnold_bridge", reload=True)
-    ui.show(pos="screen", app_exec=True)

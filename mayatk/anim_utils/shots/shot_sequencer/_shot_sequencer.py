@@ -20,7 +20,12 @@ except ImportError:
 from pythontk import ShotSequencer as _ShotSequencerCore
 
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.anim_utils.shots._shots import Detection, ShotBlock, ShotStore
+from mayatk.anim_utils.shots._shots import (
+    Detection,
+    MayaShotsHost,
+    ShotBlock,
+    ShotStore,
+)
 from mayatk.anim_utils.shots._shot_plan import _INF as _PLAN_INF
 from mayatk.anim_utils._tangents import _NEIGHBOUR_DERIVED_TANGENTS
 
@@ -359,10 +364,10 @@ class ShotSequencer(_ShotSequencerCore):
             return None
         # A doc name the scene holds only inside a namespace (a referenced
         # asset, ``AC:door_geo`` for ``door_geo``): the store's own lookup
-        # (``ShotStore.member_nodes``), so a build and a reconcile agree.
-        # Unkeyed it had no curve to follow and was never re-pointed
-        # (BACKLOG 2026-10-10).
-        matches = ShotStore._member_nodes(name)
+        # (``ShotStore.member_nodes``, answered by its host), so a build and a
+        # reconcile agree.  Unkeyed it had no curve to follow and was never
+        # re-pointed (BACKLOG 2026-10-10).
+        matches = MayaShotsHost.member_nodes(name)
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -1339,7 +1344,8 @@ class ShotSequencer(_ShotSequencerCore):
         it — both of which read as the animation coming apart.
 
         PUBLIC because it has two consumers -- this class's own shot moves and
-        ``ClipMotionMixin``'s drag handler -- so the underscore was describing
+        the Shot Sequencer panel's key drags (``SequencerHost.commit_curve_moves``)
+        -- so the underscore was describing
         a contract that no longer held. Not to be confused with the unrelated
         ``AnimUtils.move_curve_keys``, which takes
         ``(curve, time_pairs, allow_merge=...)``: that one moves keys to

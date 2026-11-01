@@ -2,8 +2,11 @@
 # coding=utf-8
 """Tests for mayatk.anim_utils.playblast_exporter (2026-07 overhaul).
 
-Covers the target registry, frame-range resolution, capture primitives, the
-single-capture/multi-encode export planner, and regressions:
+``PlayblastExporter`` is ``ptk.SequenceExporter`` bound to Maya's host adapter
+(``MayaPlayblastHost``). Covers the target registry, frame-range resolution,
+capture primitives, the single-capture/multi-encode export planner, what the
+exporter hands ``cmds.playblast`` and ffmpeg (recorded, so it runs headless),
+and regressions:
 - encoded outputs from ranges not starting near frame 0 (ffmpeg start_number)
 - 'still' captures exactly one frame (was a full sequence)
 - render_with_arnold returns only files the run wrote (was: any stale
@@ -19,6 +22,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 try:
@@ -36,9 +40,11 @@ if QApplication and not QApplication.instance():
 import maya.cmds as cmds
 
 import pythontk as ptk
+import mayatk.anim_utils.playblast_exporter as playblast_module
 from mayatk.anim_utils.playblast_exporter import (
     CaptureResult,
     ExportTarget,
+    MayaPlayblastHost,
     PlayblastExporter,
 )
 
@@ -50,6 +56,60 @@ except ImportError:
     CV2_AVAILABLE = False
 
 FFMPEG_AVAILABLE = ptk.VidUtils.resolve_ffmpeg(required=False) is not None
+
+#: The render globals an Arnold sequence render sets and must restore.
+_ARNOLD_GLOBALS = (
+    "imageFilePrefix",
+    "animation",
+    "startFrame",
+    "endFrame",
+    "byFrameStep",
+    "skipExistingFrames",
+    "extensionPadding",
+    "outFormatControl",
+    "putFrameBeforeExt",
+    "periodInExt",
+)
+
+#: The render-options plug an unlicensed batch render reads.
+_ABORT_ON_LICENSE_FAIL = "defaultArnoldRenderOptions.abortOnLicenseFail"
+
+
+#: The render resolution plugs an Arnold sequence render sets and must restore.
+_RESOLUTION = (
+    "defaultResolution.width",
+    "defaultResolution.height",
+    "defaultResolution.deviceAspectRatio",
+    "defaultResolution.pixelAspect",
+)
+
+
+def _exr_size(path):
+    """``(width, height)`` from an OpenEXR header's ``dataWindow``."""
+    import struct
+
+    with open(path, "rb") as handle:
+        data = handle.read(65536)
+    pos = 8  # magic + version
+    while pos < len(data) and data[pos] != 0:
+        name_end = data.index(b"\0", pos)
+        type_end = data.index(b"\0", name_end + 1)
+        size = struct.unpack("<i", data[type_end + 1 : type_end + 5])[0]
+        if data[pos:name_end] == b"dataWindow":
+            x0, y0, x1, y1 = struct.unpack("<4i", data[type_end + 5 : type_end + 21])
+            return x1 - x0 + 1, y1 - y0 + 1
+        pos = type_end + 5 + size
+    return None
+
+
+def _mtoa_available() -> bool:
+    """True if the Arnold plug-in loads in this Maya (CI without Arnold: False)."""
+    try:
+        if not cmds.pluginInfo("mtoa", query=True, loaded=True):
+            cmds.loadPlugin("mtoa", quiet=True)
+        return bool(cmds.pluginInfo("mtoa", query=True, loaded=True))
+    except Exception:
+        return False
 
 from base_test import MayaTkTestCase
 
@@ -100,6 +160,84 @@ def _fake_encode(encoded=None):
         return output_filepath
 
     return encode
+
+
+class _RecordedPlayblast:
+    """``cmds.playblast`` replaced by a recorder that writes the files Maya
+    would (frames ``<filename>.<frame>.<ext>``, a still at its exact path, a
+    movie at its filename), ffmpeg's call recorded, and Maya's message and
+    warning lines captured -- so what the exporter hands each is pinned
+    headless.
+
+    ``editorPanelName`` is left out of :attr:`calls`: a GUI session has a
+    panel to name, batch has none.
+    """
+
+    def __init__(self, offered=("avi", "image", "qt")):
+        self.offered = list(offered)
+        self.calls, self.compress, self.notes, self.warnings = [], [], [], []
+        self._patches = [
+            patch.object(
+                playblast_module.cmds, "playblast", side_effect=self._playblast
+            ),
+            patch.object(ptk.VidUtils, "compress_video", side_effect=self._compress),
+            patch.object(ptk.VidUtils, "resolve_ffmpeg", return_value="ffmpeg"),
+            patch.object(ptk.SequenceEncoder, "_audio_peak_db", return_value=None),
+            patch.object(
+                playblast_module,
+                "om",
+                SimpleNamespace(MGlobal=SimpleNamespace(displayInfo=self.notes.append)),
+            ),
+            patch.object(
+                playblast_module.cmds, "warning", side_effect=self.warnings.append
+            ),
+        ]
+
+    def __enter__(self):
+        for p in self._patches:
+            p.start()
+        return self
+
+    def __exit__(self, *exc):
+        for p in reversed(self._patches):
+            p.stop()
+
+    def _playblast(self, *args, **kwargs):
+        if kwargs.get("query"):
+            return self.offered if kwargs.get("format") else None
+        kwargs.pop("editorPanelName", None)
+        self.calls.append(dict(kwargs))
+        if kwargs.get("format") == "image":
+            if "completeFilename" in kwargs:
+                with open(kwargs["completeFilename"], "wb") as handle:
+                    handle.write(b"still")
+                return kwargs["completeFilename"]
+            for frame in range(int(kwargs["startTime"]), int(kwargs["endTime"]) + 1):
+                name = f"{kwargs['filename']}.{frame:0{kwargs['framePadding']}d}"
+                with open(f"{name}.{kwargs['compression']}", "wb") as handle:
+                    handle.write(b"frame")
+            return kwargs["filename"]
+        with open(kwargs["filename"], "wb") as handle:
+            handle.write(b"movie")
+        return kwargs["filename"]
+
+    def _compress(self, **kwargs):
+        self.compress.append(dict(kwargs))
+        with open(kwargs["output_filepath"], "wb") as handle:
+            handle.write(b"video")
+        return kwargs["output_filepath"]
+
+
+#: The flags every capture hands ``cmds.playblast`` from the exporter's defaults.
+_DEFAULT_FLAGS = {
+    "forceOverwrite": True,
+    "viewer": False,
+    "offScreen": True,
+    "showOrnaments": True,
+    "percent": 100,
+    "quality": 100,
+    "widthHeight": (1920, 1080),
+}
 
 
 def _write_png(path, width, height, gray):
@@ -418,6 +556,260 @@ class TestPlayblastExporter(MayaTkTestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "stop_png_tmp")))
 
     # ------------------------------------------------------------------
+    # What the exporter produces (cmds.playblast and ffmpeg recorded)
+    # ------------------------------------------------------------------
+    def _files(self):
+        return sorted(
+            os.path.relpath(os.path.join(root, name), self.tmp).replace(os.sep, "/")
+            for root, _dirs, names in os.walk(self.tmp)
+            for name in names
+        )
+
+    def test_export_layout_and_capture_flags_are_pinned(self):
+        """One image playblast of the range into ``<name>_png/`` (requested, so
+        kept) feeds both movies, ``<dir>/<name>.<ext>``: the exporter's
+        settings reach ``cmds.playblast``, the scene's rate and the capture's
+        first frame reach ffmpeg, and each movie is announced on Maya's
+        message line."""
+        exporter = PlayblastExporter(
+            camera="persp",
+            width=320,
+            height=240,
+            percent=50,
+            quality=80,
+            off_screen=False,
+            show_ornaments=False,
+        )
+        with _RecordedPlayblast() as recorded:
+            results = exporter.export(
+                self.tmp,
+                name="shot",
+                targets=["mp4", "mov", "png_sequence"],
+                range_mode="custom",
+                start=3,
+                end=5,
+            )
+
+        self.assertTrue(all(r.ok for r in results), [r.error for r in results])
+        self.assertEqual(
+            self._files(),
+            [
+                "shot.mov",
+                "shot.mp4",
+                "shot_png/shot.0003.png",
+                "shot_png/shot.0004.png",
+                "shot_png/shot.0005.png",
+            ],
+        )
+        png_dir = ptk.format_path(os.path.join(self.tmp, "shot_png"))
+        self.assertEqual(
+            recorded.calls,
+            [
+                {
+                    **_DEFAULT_FLAGS,
+                    "offScreen": False,
+                    "showOrnaments": False,
+                    "percent": 50,
+                    "quality": 80,
+                    "widthHeight": (320, 240),
+                    "clearCache": True,
+                    "format": "image",
+                    "compression": "png",
+                    "framePadding": 4,
+                    "filename": os.path.join(png_dir, "shot"),
+                    "startTime": 3,
+                    "endTime": 5,
+                }
+            ],
+        )
+        self.assertEqual(
+            [
+                {k: v for k, v in call.items() if k != "output_filepath"}
+                for call in recorded.compress
+            ],
+            [
+                {
+                    "input_filepath": f"{png_dir}/shot.%04d.png",
+                    "frame_rate": 24.0,
+                    "start_number": 3,
+                    "audio_filepath": None,
+                    "audio_offset": 0.0,
+                    "crf": 21,
+                    "vf": "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "movflags": "+faststart",
+                }
+            ]
+            * 2,
+        )
+        self.assertEqual(
+            recorded.notes,
+            [f"Encoded movie created: {r.output}" for r in results[:2]],
+        )
+
+    def test_export_muxes_the_armed_sound_at_its_rebased_offset(self):
+        """The scene's sole sound, armed at frame 10, lands 5 frames into a
+        movie captured from frame 5 (24 fps): the encode muxes its file there,
+        and the native AVI is handed the node itself."""
+        cmds.playbackOptions(min=5, max=8)
+        wav = os.path.join(self.tmp, "track.wav").replace(os.sep, "/")
+        self._write_wav(wav, 0.5)
+        node = cmds.createNode("audio", name="track")
+        cmds.setAttr(f"{node}.filename", wav, type="string")
+        cmds.setAttr(f"{node}.offset", 10)
+
+        with _RecordedPlayblast() as recorded:
+            results = PlayblastExporter(include_audio=True).export(
+                self.tmp, name="aud", targets=["mp4", "avi"]
+            )
+
+        self.assertTrue(all(r.ok for r in results), [r.error for r in results])
+        self.assertEqual(
+            os.path.normcase(recorded.compress[0]["audio_filepath"]),
+            os.path.normcase(wav),
+        )
+        self.assertAlmostEqual(recorded.compress[0]["audio_offset"], 5 / 24.0)
+        movie = recorded.calls[-1]
+        self.assertEqual(
+            (movie["format"], movie["compression"], movie["sound"]),
+            ("avi", "none", node),
+        )
+        self.assertEqual(
+            movie["filename"], ptk.format_path(os.path.join(self.tmp, "aud.avi"))
+        )
+
+    def test_without_include_audio_nothing_is_muxed(self):
+        cmds.createNode("audio", name="track")
+        with _RecordedPlayblast() as recorded:
+            PlayblastExporter().export(self.tmp, name="mute", targets=["mp4", "avi"])
+        self.assertIsNone(recorded.compress[0]["audio_filepath"])
+        self.assertNotIn("sound", recorded.calls[-1])
+
+    def test_a_missing_audio_file_is_a_warning_and_no_audio(self):
+        node = cmds.createNode("audio", name="gone")
+        cmds.setAttr(
+            f"{node}.filename", os.path.join(self.tmp, "gone.wav"), type="string"
+        )
+        with _RecordedPlayblast() as recorded:
+            PlayblastExporter(include_audio=True).export(
+                self.tmp, name="gone", targets="mp4"
+            )
+        self.assertIsNone(recorded.compress[0]["audio_filepath"])
+        self.assertTrue(
+            any("not found" in w for w in recorded.warnings), recorded.warnings
+        )
+
+    def test_capture_still_hands_playblast_one_frame_and_the_exact_file(self):
+        cmds.currentTime(6)
+        target = os.path.join(self.tmp, "st", "one.png")
+        with _RecordedPlayblast() as recorded:
+            result = PlayblastExporter().capture_still(target)
+
+        self.assertEqual(result, ptk.format_path(target))
+        self.assertEqual(
+            recorded.calls,
+            [
+                {
+                    **_DEFAULT_FLAGS,
+                    "format": "image",
+                    "compression": "png",
+                    "frame": [6],
+                    "completeFilename": result,
+                }
+            ],
+        )
+        self.assertEqual(recorded.notes, [f"Still frame captured: {result}"])
+
+    def test_capture_movie_appends_the_formats_extension(self):
+        with _RecordedPlayblast() as recorded:
+            result = PlayblastExporter().capture_movie(
+                os.path.join(self.tmp, "mv", "movie"), start=2, end=4
+            )
+
+        self.assertEqual(
+            result, ptk.format_path(os.path.join(self.tmp, "mv", "movie.avi"))
+        )
+        self.assertEqual(
+            recorded.calls,
+            [
+                {
+                    **_DEFAULT_FLAGS,
+                    "clearCache": True,
+                    "format": "avi",
+                    "compression": "none",
+                    "filename": result,
+                    "startTime": 2,
+                    "endTime": 4,
+                }
+            ],
+        )
+        self.assertEqual(recorded.notes, [f"Playblast movie created: {result}"])
+
+    def test_export_overrides_reach_playblast_and_reserved_keys_do_not(self):
+        """``cmds.playblast`` overrides pass through; the plan's own keys and
+        the Maya targets' are never handed twice; ``frame_padding`` sets the
+        frames' digits and reaches no other playblast (the movie's refused an
+        unknown flag)."""
+        cmds.currentTime(4)
+        with _RecordedPlayblast() as recorded:
+            results = PlayblastExporter().export(
+                self.tmp,
+                name="cur",
+                targets=["png_sequence", "still", "avi"],
+                range_mode="current",
+                viewer=True,
+                filename="x",
+                sound="s",
+                fmt="f",
+                compression="c",
+                frame_padding=5,
+            )
+
+        self.assertTrue(all(r.ok for r in results), [r.error for r in results])
+        sequence, still, movie = recorded.calls
+        self.assertEqual(
+            (
+                sequence["viewer"],
+                sequence["framePadding"],
+                sequence["compression"],
+                sequence["filename"],
+            ),
+            (
+                True,
+                5,
+                "png",
+                os.path.join(ptk.format_path(os.path.join(self.tmp, "cur_png")), "cur"),
+            ),
+        )
+        self.assertNotIn("sound", sequence)
+        self.assertEqual((still["frame"], still["viewer"]), ([4], True))
+        self.assertNotIn("frame_padding", still)
+        self.assertEqual((movie["format"], movie["viewer"]), ("avi", True))
+        self.assertNotIn("frame_padding", movie)
+        self.assertNotIn("sound", movie)
+        self.assertEqual(
+            self._files(), ["cur.avi", "cur.png", "cur_png/cur.00004.png"]
+        )
+
+    def test_mayas_frame_padding_spelling_names_the_shared_one(self):
+        """``framePadding`` (cmds.playblast's spelling) once set a sequence's
+        digits; the exporter's is ``frame_padding``, shared with Blender. The
+        old spelling is refused by name, never silently ignored."""
+        with _RecordedPlayblast() as recorded:
+            with self.assertRaisesRegex(ValueError, "frame_padding"):
+                PlayblastExporter().capture_sequence(
+                    os.path.join(self.tmp, "seq"), prefix="p", start=1, end=2,
+                    framePadding=6,
+                )
+        self.assertEqual(recorded.calls, [])
+
+    def test_the_scene_answers_name_and_rate_class_level(self):
+        """A panel reads both before it builds an exporter."""
+        cmds.currentUnit(time="ntsc")
+        self.assertEqual(PlayblastExporter.scene_fps(), 30.0)
+        self.assertEqual(PlayblastExporter().sequence_name(), "playblast")
+        self.assertIsInstance(PlayblastExporter.HOST, MayaPlayblastHost)
+
+    # ------------------------------------------------------------------
     # Capture primitives (real playblast — batch-tolerant)
     # ------------------------------------------------------------------
     def test_capture_sequence_keeps_real_frame_numbers(self):
@@ -635,6 +1027,9 @@ class TestPlayblastExporter(MayaTkTestCase):
             patch(f"{pe_path}.arnoldRender", create=True, side_effect=fake_render),
             patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
             patch(
+                "mayatk.anim_utils.playblast_exporter.RenderUtils.ensure_arnold_options"
+            ),
+            patch(
                 "mayatk.anim_utils.playblast_exporter.RenderUtils.prepare_arnold_preview"
             ),
             patch(f"{pe_path}.workspace", return_value="images"),
@@ -645,7 +1040,9 @@ class TestPlayblastExporter(MayaTkTestCase):
                 create=True,
                 return_value="defaultRenderLayer",
             ),
-            patch.object(exporter, "_resolve_camera_shape", return_value="perspShape"),
+            patch.object(
+                MayaPlayblastHost, "_resolve_camera_shape", return_value="perspShape"
+            ),
         ):
             frames = exporter.render_with_arnold(out_dir, start=1, end=2, prefix="shot")
 
@@ -660,17 +1057,20 @@ class TestPlayblastExporter(MayaTkTestCase):
         order = []
         exporter = PlayblastExporter()
         pe_path = "mayatk.anim_utils.playblast_exporter"
+
+        def render(**kwargs):
+            order.append("render")
+            with open(os.path.join(out_dir, "shot.0001.exr"), "w") as handle:
+                handle.write("frame")
+
         with (
             patch(
                 f"{pe_path}.RenderUtils.prepare_arnold_preview",
                 side_effect=lambda: order.append("prepare"),
             ),
-            patch(
-                f"{pe_path}.cmds.arnoldRender",
-                create=True,
-                side_effect=lambda **kw: order.append("render"),
-            ),
+            patch(f"{pe_path}.cmds.arnoldRender", create=True, side_effect=render),
             patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
             patch(f"{pe_path}.cmds.workspace", return_value="images"),
             patch(f"{pe_path}.cmds.setAttr"),
             patch(
@@ -684,7 +1084,9 @@ class TestPlayblastExporter(MayaTkTestCase):
                 create=True,
                 return_value="defaultRenderLayer",
             ),
-            patch.object(exporter, "_resolve_camera_shape", return_value="perspShape"),
+            patch.object(
+                MayaPlayblastHost, "_resolve_camera_shape", return_value="perspShape"
+            ),
         ):
             exporter.render_with_arnold(out_dir, start=1, end=1, prefix="shot")
         self.assertEqual(order, ["prepare", "render"])
@@ -698,6 +1100,176 @@ class TestPlayblastExporter(MayaTkTestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    #: ``abortOnLicenseFail`` as mtoa creates the render options.
+    _abort_default = True
+
+    def _render_globals(self):
+        """The Arnold-touched render globals (an unset prefix reads ``""``)."""
+        values = {
+            attr: cmds.getAttr(f"defaultRenderGlobals.{attr}")
+            for attr in _ARNOLD_GLOBALS
+        }
+        values["imageFilePrefix"] = values["imageFilePrefix"] or ""
+        return values
+
+    def test_render_with_arnold_sets_and_restores_the_real_render_globals(self):
+        """Regression: the render read ``defaultRenderGlobals.framePadding``,
+        which Maya does not have (its padding is ``extensionPadding``), so the
+        Arnold Sequence target raised before a frame rendered; and it asked
+        ``arnoldRender`` for flags mtoa does not have (``startFrame``,
+        ``endFrame``, ``layer``: ignored, so one frame rendered into the Render
+        View's ``tmp/``). Only Arnold's call is stood in for: the globals, the
+        images rule and the ``name.#.ext`` names they make are Maya's."""
+        self.assertFalse(
+            cmds.attributeQuery("framePadding", node="defaultRenderGlobals", exists=True)
+        )
+        self.assertTrue(
+            cmds.attributeQuery(
+                "extensionPadding", node="defaultRenderGlobals", exists=True
+            )
+        )
+        out_dir = os.path.join(self.tmp, "arnold_globals")
+        # A scene rendering every other frame and skipping what exists would
+        # leave holes in the sequence: both are pinned for the render.
+        cmds.setAttr("defaultRenderGlobals.byFrameStep", 2)
+        cmds.setAttr("defaultRenderGlobals.skipExistingFrames", True)
+        before = self._render_globals()
+        resolution_before = [cmds.getAttr(plug) for plug in _RESOLUTION]
+        images_before = cmds.workspace(fileRuleEntry="images")
+        calls, seen = [], []
+
+        def batch_render(**kwargs):
+            """Write what Arnold's batch render writes for the globals it reads."""
+            calls.append(kwargs)
+            rg = self._render_globals()
+            rg.update({plug: cmds.getAttr(plug) for plug in _RESOLUTION})
+            seen.append(rg)
+            folder = cmds.workspace(fileRuleEntry="images")
+            for frame in range(int(rg["startFrame"]), int(rg["endFrame"]) + 1):
+                number = f"{frame:0{rg['extensionPadding']}d}"
+                name = (
+                    f"{rg['imageFilePrefix']}.{number}.exr"
+                    if rg["putFrameBeforeExt"] and rg["periodInExt"] == 1
+                    else f"{rg['imageFilePrefix']}.exr.{number}"
+                )
+                with open(os.path.join(folder, name), "wb") as handle:
+                    handle.write(b"exr")
+
+        pe_path = "mayatk.anim_utils.playblast_exporter"
+        with (
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
+            patch(f"{pe_path}.RenderUtils.prepare_arnold_preview"),
+            patch(
+                f"{pe_path}.cmds.arnoldRender", create=True, side_effect=batch_render
+            ),
+        ):
+            frames = PlayblastExporter(width=320, height=240).render_with_arnold(
+                out_dir, start=1, end=2, camera="persp", prefix="shot", frame_padding=3
+            )
+
+        self.assertEqual(
+            [os.path.basename(f) for f in frames], ["shot.001.exr", "shot.002.exr"]
+        )
+        self.assertEqual(
+            calls,
+            [{"batch": True, "camera": "perspShape", "width": 320, "height": 240}],
+        )
+        pinned = ("animation", "startFrame", "endFrame", "byFrameStep",
+                  "skipExistingFrames", "extensionPadding")
+        self.assertEqual(
+            {k: seen[0][k] for k in pinned},
+            {"animation": True, "startFrame": 1.0, "endFrame": 2.0, "byFrameStep": 1.0,
+             "skipExistingFrames": False, "extensionPadding": 3},
+        )
+        width, height, aspect, pixel = (seen[0][plug] for plug in _RESOLUTION)
+        self.assertEqual((width, height, pixel), (320, 240, 1.0))
+        self.assertAlmostEqual(aspect, 320 / 240.0, places=6)  # a float attribute
+        self.assertEqual([cmds.getAttr(plug) for plug in _RESOLUTION], resolution_before)
+        self.assertEqual(self._render_globals(), before)
+        self.assertEqual(cmds.workspace(fileRuleEntry="images"), images_before)
+
+    def test_render_with_arnold_refuses_before_touching_the_scene(self):
+        """A refused layer or a backwards range raises before the scene is
+        readied for Arnold (shaders bridged, culling mirrored) or a folder made."""
+        pe_path = "mayatk.anim_utils.playblast_exporter"
+        out_dir = os.path.join(self.tmp, "refused")
+        before = self._render_globals()
+        with (
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
+            patch(f"{pe_path}.RenderUtils.prepare_arnold_preview") as prepare,
+            patch(f"{pe_path}.cmds.arnoldRender", create=True) as render,
+        ):
+            with self.assertRaisesRegex(ValueError, "current render layer"):
+                PlayblastExporter().render_with_arnold(
+                    out_dir, start=1, end=2, camera="persp", render_layer="other"
+                )
+            with self.assertRaisesRegex(ValueError, "after end frame"):
+                PlayblastExporter().render_with_arnold(
+                    out_dir, start=5, end=2, camera="persp"
+                )
+        prepare.assert_not_called()
+        render.assert_not_called()
+        self.assertFalse(os.path.exists(out_dir))
+        self.assertEqual(self._render_globals(), before)
+
+    def test_a_render_that_wrote_no_frame_is_an_error(self):
+        """Not "0 frame(s) written" as a success: an aborted batch render (an
+        unlicensed Arnold with abortOnLicenseFail on) fails its target."""
+        pe_path = "mayatk.anim_utils.playblast_exporter"
+        before = self._render_globals()
+        with (
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.RenderUtils.ensure_arnold_options"),
+            patch(f"{pe_path}.RenderUtils.prepare_arnold_preview"),
+            patch(f"{pe_path}.cmds.arnoldRender", create=True),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no frames"):
+                PlayblastExporter().render_with_arnold(
+                    os.path.join(self.tmp, "aborted"), start=1, end=2, camera="persp"
+                )
+        self.assertEqual(self._render_globals(), before)
+
+    def test_render_with_arnold_renders_frames_with_a_live_arnold(self):
+        """Arnold itself, in this fresh Maya (unlicensed, it watermarks): two
+        frames of a trivial scene, through the camera asked for (none is
+        renderable, so only the render's camera flag can pick it), land in the
+        output folder as ``<prefix>.<frame>.exr``, and the scene's render
+        globals are put back."""
+        if not _mtoa_available():
+            self.skipTest("mtoa (Arnold) plugin not available")
+        camera = cmds.camera(name="shotCam")[0]
+        cmds.setAttr(f"{camera}.translate", 0, 2, 12)
+        # No camera renderable, the one asked for included: only the render's
+        # camera flag can pick it.
+        for shape in cmds.ls(type="camera"):
+            cmds.setAttr(f"{shape}.renderable", False)
+        out_dir = os.path.join(self.tmp, "arnold_live")
+        before = self._render_globals()
+        resolution_before = [cmds.getAttr(plug) for plug in _RESOLUTION]
+
+        # This machine may hold no Arnold license: the render must watermark,
+        # as the Render View does, rather than abort (the batch default).
+        frames = PlayblastExporter(width=64, height=36).render_with_arnold(
+            out_dir, start=1, end=2, camera=camera, prefix="live"
+        )
+
+        self.assertEqual(
+            [os.path.basename(f) for f in frames], ["live.0001.exr", "live.0002.exr"]
+        )
+        for frame in frames:
+            self.assertGreater(os.path.getsize(frame), 0, frame)
+            self.assertEqual(_exr_size(frame), (64, 36), frame)
+        self.assertEqual(sorted(os.listdir(out_dir)), ["live.0001.exr", "live.0002.exr"])
+        self.assertEqual(self._render_globals(), before)
+        self.assertEqual(cmds.getAttr(_ABORT_ON_LICENSE_FAIL), self._abort_default)
+        self.assertEqual([cmds.getAttr(plug) for plug in _RESOLUTION], resolution_before)
+        self.assertNotEqual(
+            os.path.normcase(cmds.workspace(fileRuleEntry="images")),
+            os.path.normcase(out_dir),
+        )
+
     def test_arnold_extension_translator_map(self):
         pe_path = "mayatk.anim_utils.playblast_exporter.cmds"
         for translator, expected in (
@@ -707,7 +1279,7 @@ class TestPlayblastExporter(MayaTkTestCase):
             (None, "exr"),
         ):
             with patch(f"{pe_path}.getAttr", return_value=translator):
-                self.assertEqual(PlayblastExporter._arnold_extension(), expected)
+                self.assertEqual(MayaPlayblastHost._arnold_extension(), expected)
 
 
 if __name__ == "__main__":

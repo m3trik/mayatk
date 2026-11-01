@@ -12,6 +12,7 @@ Tests for RigUtils class functionality including:
 - Skin cluster operations
 """
 
+import math
 import unittest
 from mayatk.node_utils.attributes._attributes import Attributes
 import maya.cmds as cmds
@@ -31,6 +32,30 @@ except ImportError:
     from mayatk.xform_utils._xform_utils import XformUtils
 
 from base_test import MayaTkTestCase
+
+
+def _face_vertex_normals(mesh):
+    """``{(face, vertex): (world normal, locked)}`` for *mesh*'s shape."""
+    import maya.api.OpenMaya as om
+
+    shape = cmds.listRelatives(mesh, shapes=True, fullPath=True, noIntermediate=True)[0]
+    sel = om.MSelectionList()
+    sel.add(shape)
+    fn = om.MFnMesh(sel.getDagPath(0))
+    out = {}
+    for f in range(fn.numPolygons):
+        for v, nid in zip(fn.getPolygonVertices(f), fn.getFaceNormalIds(f)):
+            n = om.MVector(fn.getFaceVertexNormal(f, v, om.MSpace.kWorld)).normal()
+            out[(f, v)] = (n, fn.isNormalLocked(nid))
+    return out
+
+
+def _max_angle(before, after):
+    """The largest angle (degrees) between matching face-vertex normals."""
+    return max(
+        math.degrees(math.acos(max(-1.0, min(1.0, before[k][0] * after[k][0]))))
+        for k in before
+    )
 
 
 class TestRigUtils(MayaTkTestCase):
@@ -239,6 +264,47 @@ class TestRigUtils(MayaTkTestCase):
 
         with self.assertRaises(ValueError):
             RigUtils.create_locator_at_object(self.sphere, rotate_order="abc")
+
+    def test_create_locator_at_object_keeps_locked_normals(self):
+        """Regression: the rig unlocked every normal (``unFreezeNormal``) to undo
+        the ``-normal 1`` freeze it ran, so an FBX import's locked normals over
+        hard-flagged edges went faceted (64 of 112 off by 22.5 degrees on a
+        soft/hard cylinder). The freeze keeps normals as Maya's own does.
+        Fixed: 2026-10-31."""
+        mesh = cmds.polySphere(name="imported", sx=10, sy=6, ch=False)[0]
+        cmds.polySoftEdge(mesh, angle=180, ch=False)
+        cmds.polyNormalPerVertex(f"{mesh}.vtx[*]", freezeNormal=True)
+        cmds.polySoftEdge(mesh, angle=0, ch=False)
+        cmds.xform(mesh, translation=(3, 1, -2), rotation=(30, 45, 10), scale=(1, 2, 0.5))
+        holder = cmds.group(empty=True, name="holder")
+        cmds.xform(holder, translation=(1, 0, 0), rotation=(10, 20, 0), scale=(1.5, 1, 1.5))
+        mesh = cmds.parent(mesh, holder)[0]
+        before = _face_vertex_normals(mesh)
+
+        RigUtils.create_locator_at_object(mesh)
+
+        after = _face_vertex_normals("imported_GEO")
+        self.assertTrue(all(locked for _, locked in after.values()), "normals unlocked")
+        self.assertLess(_max_angle(before, after), 0.01)
+
+    def test_create_locator_at_group_leaves_contents_normals_unlocked(self):
+        """Regression: the LOC freeze ran ``-normal 1`` over a group's contents and
+        nothing unlocked them, so every normal inside a rigged group ended up
+        locked. Fixed: 2026-10-31."""
+        cyl = cmds.polyCylinder(name="part", sx=8, sy=2, sz=1, ch=False)[0]
+        cmds.polySoftEdge(cyl, angle=50, ch=False)
+        cmds.xform(cyl, translation=(3, 1, -2), rotation=(30, 45, 10), scale=(1, 2, 0.5))
+        grp = cmds.group(cyl, name="assembly")
+        before = _face_vertex_normals(cyl)
+        self.assertFalse(any(locked for _, locked in before.values()))
+
+        RigUtils.create_locator_at_object(grp)
+
+        after = _face_vertex_normals(cmds.ls("part*", type="transform", long=True)[0])
+        self.assertFalse(
+            any(locked for _, locked in after.values()),
+            f"{sum(locked for _, locked in after.values())} normals locked",
+        )
 
     def test_create_locator_at_group_preserves_position(self):
         """Verify locator is placed at the group's content center, not scene root.
@@ -1268,6 +1334,43 @@ class TestRigUtils(MayaTkTestCase):
         self.assertFalse(cmds.objExists(bundle.distance_node))
         self.assertEqual(TelescopeRig.scene_bundles(), [])
 
+    def test_telescope_rig_partition_selection_reads_the_selection_order(self):
+        """The roles tentacle's Telescope Rig panel builds from: a leading /
+        trailing locator is the base / end, the rest are the segments."""
+        base = cmds.spaceLocator(n="part_base")[0]
+        end = cmds.spaceLocator(n="part_end")[0]
+        segs = [cmds.polyCube(n=f"part_seg{i}")[0] for i in range(2)]
+        grp = cmds.group(cmds.polyCube(n="part_inner")[0], n="part_grp")
+
+        cmds.select(base, *segs, end)
+        self.assertEqual(TelescopeRig.partition_selection(), (base, segs, end))
+        cmds.select(segs[0], grp)  # a group whose mesh hangs below is a segment
+        self.assertEqual(
+            TelescopeRig.partition_selection(), (None, [segs[0], grp], None)
+        )
+        cmds.select(clear=True)
+        self.assertEqual(TelescopeRig.partition_selection(), (None, [], None))
+
+    def test_telescope_rig_teardown_of_two_rigs_is_one_undo_step(self):
+        """A Remove over a selection spanning two rigs: one call, one Ctrl+Z."""
+        rigs = []
+        for k in range(2):
+            segs = []
+            for i in range(2):
+                seg = cmds.polyCube(n=f"pair{k}_seg{i}", h=4)[0]
+                cmds.xform(seg, ws=True, t=(k * 10, 2 + i * 3, 0))
+                segs.append(seg)
+            rigs.append(TelescopeRig().setup_telescope_rig(segments=segs, name=f"pair{k}"))
+
+        self.assertTrue(TelescopeRig().teardown(rigs))
+        self.assertEqual(TelescopeRig.scene_bundles(), [])
+        self.assertFalse(cmds.ls("pair*_LOC"))
+
+        cmds.undo()  # both rigs come back together
+        self.assertEqual(
+            sorted(b.name for b in TelescopeRig.scene_bundles()), ["pair0", "pair1"]
+        )
+
     def test_create_switch(self):
         """Test create_switch method via Attributes."""
         # Test 1: Bool — production returns the plug string
@@ -1477,6 +1580,86 @@ class TestRebindKeepsBindPoses(MayaTkTestCase):
 
     def test_at_rest_the_rebind_keeps_the_original_bind_pose(self):
         self._rebind("rest")
+
+
+class TestRiggingPanelOperations(MayaTkTestCase):
+    """The operations the Rigging panel (tentacle's ``RiggingSlots``) calls in
+    both hosts: blendertk's twins take the same calls."""
+
+    def test_add_locator_is_display_sized_ordered_and_selected(self):
+        loc = RigUtils.add_locator(size=2.5, rotate_order="zyx")
+        shape = cmds.listRelatives(loc, shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{shape}.localScale")[0]], [2.5] * 3
+        )
+        self.assertEqual([round(v, 6) for v in cmds.getAttr(f"{loc}.scale")[0]], [1.0] * 3)
+        self.assertEqual(cmds.getAttr(f"{loc}.rotateOrder", asString=True), "zyx")
+        self.assertEqual(cmds.ls(selection=True), cmds.ls(loc))
+
+    def test_add_locator_refuses_a_bad_rotate_order(self):
+        with self.assertRaises(ValueError):
+            RigUtils.add_locator(rotate_order="xxy")
+
+    def test_utility_nodes_are_sorted_and_unknown_ones_refused(self):
+        self.assertEqual(list(RigUtils.UTILITY_NODES), sorted(RigUtils.UTILITY_NODES))
+        self.assertEqual(
+            set(RigUtils.UTILITY_NODES), {"Cluster", "IK Handle", "Joints", "Lattice"}
+        )
+        with self.assertRaises(ValueError):
+            RigUtils.create_utility_node("Armature")
+
+    def test_a_lattice_surrounds_the_selection(self):
+        cmds.select(self.create_test_cube("lattice_cube"))
+        nodes = RigUtils.create_utility_node("Lattice")
+        self.assertTrue(cmds.ls(nodes, type="transform"))
+        self.assertTrue(cmds.ls(type="ffd"))
+
+    def test_auto_rig_names_the_maya_riggers(self):
+        self.assertEqual(RigUtils.AUTO_RIGS, ("Quick Rig", "HumanIK"))
+        with self.assertRaises(ValueError):
+            RigUtils.auto_rig("Generate Rig")
+
+    def test_remove_locator_returns_what_it_removed(self):
+        loc = RigUtils.create_locator_at_object(self.create_test_cube("rigged_cube"))[0]
+        other = self.create_test_cube("not_a_locator")
+        self.assertEqual(RigUtils.remove_locator(other), [])  # not a locator
+        self.assertEqual(RigUtils.remove_locator(loc), [loc])
+        self.assertFalse(cmds.objExists(loc))
+        cmds.select(clear=True)
+        self.assertEqual(RigUtils.remove_locator(None), [])
+
+    def test_remove_locator_takes_the_selection(self):
+        loc = RigUtils.create_locator_at_object(self.create_test_cube("sel_cube"))[0]
+        cmds.select(loc)
+        self.assertEqual(RigUtils.remove_locator(), [loc])
+
+    def test_create_locator_at_object_takes_blenders_group_display(self):
+        cube = self.create_test_cube("display_cube")
+        locs = RigUtils.create_locator_at_object(cube, group_display="ring")
+        self.assertEqual(len(locs), 1)
+
+    def test_lock_transforms_locks_the_scope_named(self):
+        cube = cmds.ls(self.create_test_cube("lock_cube"), long=True)[0]
+        nodes, attrs = RigUtils.lock_transforms(cube, lock=True, scope="rotate")
+        self.assertEqual((nodes, attrs), ([cube], ["rx", "ry", "rz"]))
+        self.assertTrue(cmds.getAttr(f"{cube}.ry", lock=True))
+        self.assertFalse(cmds.getAttr(f"{cube}.tx", lock=True))
+        RigUtils.lock_transforms(cube, lock=False, scope="all")
+        self.assertFalse(cmds.getAttr(f"{cube}.ry", lock=True))
+
+    def test_lock_transforms_takes_the_selection(self):
+        cube = self.create_test_cube("sel_lock_cube")
+        cmds.select(cube)
+        nodes, attrs = RigUtils.lock_transforms(None, lock=True, scope="all")
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(len(attrs), 9)
+        self.assertTrue(cmds.getAttr(f"{cube}.sz", lock=True))
+        cmds.select(clear=True)
+        self.assertEqual(RigUtils.lock_transforms(None), ([], []))
+
+    def test_lock_transforms_refuses_an_unknown_scope(self):
+        with self.assertRaises(ValueError):
+            RigUtils.lock_transforms(self.create_test_cube("scope_cube"), scope="xyz")
 
 
 if __name__ == "__main__":

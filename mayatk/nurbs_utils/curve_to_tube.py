@@ -2,16 +2,13 @@
 # coding=utf-8
 """Sweep a circular profile along NURBS curve(s) to build a tube.
 
-The work splits into two reusable halves (SRP):
-
-- :class:`CurveToTube` — *pure geometry*. Given curve(s) and a handful of
-  plain parameters it sweeps a profile along each path and returns the created
-  transform(s). The output is either a **NURBS** surface or a **polygon**
-  mesh; it has no Qt dependency (it raises the preview's :class:`OperationError`
-  for clean error popups, as :mod:`~mayatk.edit_utils.bridge` does).
-- :class:`CurveToTubeSlots` — *UI wiring*. Drives the engine through the
-  hermetic :class:`~mayatk.core_utils.preview.Preview`, exposing an
-  output-type combo (NURBS / Polygon) and the options that go with each.
+:class:`CurveToTube` is *pure geometry*: given curve(s) and a handful of plain
+parameters it sweeps a profile along each path and returns the created
+transform(s), either a **NURBS** surface or a **polygon** mesh. It has no Qt
+dependency (it raises the preview's :class:`OperationError` for clean error
+popups, as :mod:`~mayatk.edit_utils.bridge` does). Its panel is tentacle's
+``slots/tools/curve_to_tube.py``, one Slots class for both hosts, which drives
+it through the hermetic :class:`~mayatk.core_utils.preview.Preview`.
 
 Both output types share one node chain, so toggling *Keep History* never
 changes the topology — it only decides whether the history is kept (the curve
@@ -45,7 +42,7 @@ except ImportError:
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils.preview import Preview, OperationError
+from mayatk.core_utils.preview import OperationError
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 
@@ -178,6 +175,37 @@ class CurveToTube(ptk.LoggingMixin):
                 cmds.select(clear=True)
         except Exception:
             pass
+
+    @staticmethod
+    def describe(tubes) -> str:
+        """One line of stats for built tubes: a polygon tube's triangle count,
+        a NURBS tube's spans; ``""`` when none of them exists any more (a
+        preview rollback removes them). The Curve to Tube panel's footer.
+
+        Parameters:
+            tubes (list): Tube transforms, as :meth:`create` returns them.
+
+        Returns:
+            (str) e.g. ``"1,024 tris"``, ``"2 tubes — NURBS surface · 8×4, 8×6 spans"``.
+        """
+        alive = [t for t in (tubes or []) if t and cmds.objExists(t)]
+        if not alive:
+            return ""
+        prefix = f"{len(alive)} tubes — " if len(alive) > 1 else ""
+        if cmds.listRelatives(alive[0], shapes=True, type="mesh"):
+            tris = sum(cmds.polyEvaluate(t, triangle=True) or 0 for t in alive)
+            return f"{prefix}{tris:,} tris"
+        spans = []
+        for t in alive:
+            shape = (
+                cmds.listRelatives(t, shapes=True, fullPath=True, type="nurbsSurface")
+                or [None]
+            )[0]
+            if shape:
+                spans.append(
+                    f"{cmds.getAttr(shape + '.spansU')}×{cmds.getAttr(shape + '.spansV')}"
+                )
+        return f"{prefix}NURBS surface · {', '.join(spans)} spans"
 
     # ----------------------------------------------------------- internals
     @classmethod
@@ -698,174 +726,6 @@ class CurveToTube(ptk.LoggingMixin):
             except Exception:
                 pass
 
-
-class CurveToTubeSlots(ptk.LoggingMixin):
-    """Switchboard slot wiring for the Curve to Tube UI (hermetic preview)."""
-
-    # A live polygon tube resamples its source curve in place (RDP) -- tell the
-    # Preview to snapshot the selected curve(s) so rollback restores them.
-    PRESERVE_GEOMETRY = True
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.curve_to_tube
-        self.last_tubes: List[str] = []
-
-        # Output-type combo (NURBS / Polygon) drives which options apply.
-        self.ui.cmb000.add(list(CurveToTube.OUTPUT_TYPES))
-        # Polygon topology: quads vs triangles (was the "Quads" checkbox). Quads is
-        # the default, matching the prior checked state.
-        self.ui.cmb_topology.add([("Quads", "quads"), ("Triangles", "triangles")])
-        self.ui.cmb_topology.setAsCurrent("quads")
-
-        # Per-field reset buttons (uitk option-box): click resets a field to its
-        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
-        # Must precede connect_multi/Preview — wrapping reparents the widgets and
-        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
-        self.sb.add_reset_buttons(self.ui)
-
-        # Select Result is first-class in Preview: it (de)selects the tube(s)
-        # on every preview build and on commit, and wires chk004 live.
-        self.preview = Preview(
-            self,
-            self.ui.chk000,
-            self.ui.b000,
-            message_func=self.sb.message_box,
-            validation_func=self._validate,
-            select_result_checkbox=self.ui.chk004,
-            result_provider=lambda: self.last_tubes,
-        )
-        # Re-sweep live as any numeric field changes.
-        self.sb.connect_multi(self.ui, "s000-3", "valueChanged", self.preview.refresh)
-        # Output type and the poly-only toggles also re-sweep; the combo also
-        # enables/disables the options that don't apply to the current type.
-        self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
-        self.ui.cmb000.currentIndexChanged.connect(self._toggle_output_options)
-        self.ui.chk001.toggled.connect(self.preview.refresh)
-        self.ui.cmb_topology.currentIndexChanged.connect(self.preview.refresh)
-        self.ui.chk003.toggled.connect(self.preview.refresh)  # Live (keep history)
-
-        self._toggle_output_options()
-
-        # Footer doubles as a stats readout (triangle count, spans) once a
-        # tube is built; show a hint until then.
-        try:
-            self.ui.footer.setDefaultStatusText("Select NURBS curve(s), then Preview.")
-        except Exception:
-            pass
-
-    def header_init(self, widget):
-        """Configure header help text."""
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Curve to Tube",
-                body="Sweep a circular profile along selected NURBS curves to "
-                "build a tube, output as a NURBS surface or a polygon mesh.",
-                steps=[
-                    "Select one or more NURBS curves.",
-                    "Pick an <b>Output</b> type (NURBS or Polygon).",
-                    "Set <b>Radius</b> and <b>Sections</b> (sides around).",
-                    "For polygon, set <b>Path Res</b> (ring density along the "
-                    "curve) and toggle <b>Caps</b> / <b>Quads</b>.",
-                    "Toggle <b>Preview</b> to iterate, then <b>Create</b> to commit.",
-                ],
-                notes=[
-                    "<b>Sections</b> sets the profile smoothness for NURBS and "
-                    "the literal number of sides for polygon.",
-                    "<b>Path Res</b> sets ring density along the path. Rings are "
-                    "placed by an <i>RDP</i> simplification of the curve — dense "
-                    "where it bends, sparse on straight runs; higher = finer. "
-                    "<b>Path Res</b>, <b>Caps</b>, and <b>Quads</b> apply to "
-                    "polygon output only.",
-                    "<b>Keep History</b> retains the construction history so the "
-                    "curve keeps driving the tube (edit the curve and it "
-                    "updates). The topology is identical either way — it only "
-                    "decides whether the history is kept.",
-                    "<b>Select Result</b> selects the finished tube(s) on "
-                    "<b>Create</b> so you can see the resulting tessellation.",
-                ],
-            )
-        )
-
-    def _toggle_output_options(self, *_):
-        """Enable only the options that apply to the current output type."""
-        is_poly = self.ui.cmb000.currentData() == "polygon"
-        self.ui.s002.setEnabled(is_poly)  # Path divisions
-        self.ui.chk001.setEnabled(is_poly)  # Caps
-        self.ui.cmb_topology.setEnabled(is_poly)  # Quads/Triangles
-        self.ui.s003.setEnabled(not is_poly)  # Degree (NURBS profile/surface)
-
-    def _validate(self, objects) -> bool:
-        """Preview gate: require at least one NURBS curve in the selection."""
-        if not CurveToTube._curve_shapes(objects):
-            self.sb.message_box("Select one or more NURBS curves.")
-            return False
-        return True
-
-    def b001_init(self, widget):
-        """Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
-        current values as the defaults, Ctrl+Shift+Click forgets them)."""
-        from uitk.managers.reset_gesture import ResetGesture
-
-        self._reset_gesture = ResetGesture(widget)
-
-    def perform_operation(self, objects, contract):
-        """Build the tube(s) from the selected curves (Preview entry point).
-
-        ``contract`` is the hermetic ``CleanupContract`` during the live preview
-        and ``None`` on the commit replay. Select Result is applied by Preview
-        itself (it owns the checkbox + ``result_provider``) after this build and
-        on commit, so the toggle governs the live preview selection too.
-        """
-        self.last_tubes = CurveToTube.create(
-            objects,
-            output_type=self.ui.cmb000.currentData(),
-            radius=self.ui.s000.value(),
-            sections=self.ui.s001.value(),
-            path_divisions=self.ui.s002.value(),
-            degree=self.ui.s003.value(),
-            caps=self.ui.chk001.isChecked(),
-            quads=self.ui.cmb_topology.currentData() == "quads",
-            live=self.ui.chk003.isChecked(),
-        )
-        self._update_footer()
-
-    def _update_footer(self):
-        """Show stats for the last build in the footer (triangle count for a
-        polygon tube, spans for a NURBS one). Updates live as the preview
-        re-sweeps; clears to the default hint when there is no result."""
-        try:
-            footer = self.ui.footer
-        except Exception:
-            return
-        tubes = [t for t in self.last_tubes if t and cmds.objExists(t)]
-        if not tubes:
-            footer.setStatusText("")  # falls back to the default hint
-            return
-        prefix = f"{len(tubes)} tubes — " if len(tubes) > 1 else ""
-        if self.ui.cmb000.currentData() == "polygon":
-            tris = sum(cmds.polyEvaluate(t, triangle=True) or 0 for t in tubes)
-            footer.setStatusText(f"{prefix}{tris:,} tris")
-        else:
-            spans = []
-            for t in tubes:
-                shp = (
-                    cmds.listRelatives(t, shapes=True, type="nurbsSurface") or [None]
-                )[0]
-                if shp:
-                    spans.append(
-                        f"{cmds.getAttr(shp + '.spansU')}×{cmds.getAttr(shp + '.spansV')}"
-                    )
-            footer.setStatusText(f"{prefix}NURBS surface · {', '.join(spans)} spans")
-
-
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("curve_to_tube", reload=True)
-    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

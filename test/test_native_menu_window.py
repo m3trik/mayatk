@@ -54,6 +54,19 @@ class TestNativeMenuWrapper(MayaTkTestCase):
         self.created_uis.append(ui)
         return ui
 
+    def test_the_handler_names_its_toolkit_on_the_switchboard(self):
+        """``sb.tk``: the host a Slots class written for either host calls, so a panel
+        this handler stands up alone (a shelf button) finds Maya; one a caller named
+        already stays."""
+        from uitk import Switchboard
+        from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
+
+        self.assertIs(self.sb.tk, sys.modules["mayatk"])
+        named = Switchboard()
+        named.tk = marker = object()
+        MayaUiHandler(switchboard=named)
+        self.assertIs(named.tk, marker)
+
     def test_synchronous_population(self):
         """get_menu must return a populated wrapper (not empty + deferred)."""
         ui = self._wrap_menu("edit")

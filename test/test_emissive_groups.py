@@ -1,11 +1,12 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Test suite for mayatk.mat_utils.emissive_groups.EmissiveGroups.
+"""mayatk's Emissive Groups (``mat_utils/emissive_groups.py``): pythontk's model
+over the Maya half, in a fresh mayapy.
 
-Covers the scene-data contract (objectSet membership + data_internal
-registry + data_export manifest), slot stability/retirement, both bake
-encodings, and validation. The FBX round-trip of the color set is covered
-separately by the live export check (temp_tests), not here.
+Covers the scene-data contract (objectSet membership + data_internal registry
++ data_export manifest), slot stability/retirement, both bake encodings,
+validation, keyable weights and the FBX round trip of the color set and the
+weight curves. The model alone is ``test_emissive_groups_model.py``.
 """
 
 import json
@@ -14,12 +15,13 @@ import shutil
 import tempfile
 import unittest
 
-import maya.cmds as cmds
 import pythontk as ptk
 
+import maya.cmds as cmds
+
+from base_test import MayaTkTestCase
 from mayatk.mat_utils.emissive_groups import EmissiveGroups
 from mayatk.node_utils.data_nodes import DataNodes
-from base_test import MayaTkTestCase
 
 
 class _GroupsCase(MayaTkTestCase):
@@ -27,6 +29,7 @@ class _GroupsCase(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
+        cmds.file(new=True, force=True)  # drops the data nodes with the scene
         self.cube = cmds.polyCube(name="eg_cube")[0]
 
     def _add_two(self):
@@ -89,7 +92,7 @@ class TestCarrierMerge(_GroupsCase):
         import pythontk as ptk
 
         EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
-        canonical = EmissiveGroups._set_node("front")
+        canonical = EmissiveGroups._store("front")
         stray = cmds.sets(empty=True, name=f"{canonical}1")
         bystander = cmds.polySphere(name="eg_bystander")[0]
         cmds.select(bystander)

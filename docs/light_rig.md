@@ -1,7 +1,7 @@
 # Light Rigs
 
 Save the lights in a scene as a named **rig**, swap the scene between rigs, and restore any one of them exactly.
-Engine: `mtk.LightRig` ([`light_utils/light_rig.py`](../mayatk/light_utils/light_rig.py)); panel: `light_rig.ui`, opened from tentacle's Lighting menu (**Light Rigs**).
+Engine: `mtk.LightRig` ([`light_utils/light_rig.py`](../mayatk/light_utils/light_rig.py)); panel: tentacle's Light Rigs tool (`slots/tools/light_rig.py` + `ui/tools/light_rig.ui`), opened from its Lighting menu (**Light Rigs**).
 
 ## What a rig is
 

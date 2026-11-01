@@ -5,7 +5,7 @@
 :class:`ShadowRig` builds a ground plane carrying the targets' projected
 shadow and drives it to follow the source; its live viewport overlay is
 :class:`~mayatk.rig_utils.shadow_rig.shadow_preview.ShadowPreview`. The panel
-is ``shadow_rig_slots.py`` + ``shadow_rig.ui``.
+is tentacle's (``slots/tools/shadow_rig.py``).
 """
 
 import os
@@ -612,6 +612,154 @@ class ShadowRig(ptk.LoggingMixin):
             if linked and cmds.ls(linked, long=True) == wanted:
                 planes.append(plane)
         return planes
+
+    # ------------------------------------------------- the panel's readings
+    @classmethod
+    def find_source(cls, name):
+        """The existing source named *name* -- its transform's long name (a
+        light shape's name resolves to its transform) -- or None: nothing by
+        that name yet (:meth:`ensure_source` creates one). Mirrored by
+        blendertk's, which returns the object."""
+        name = str(name or "")
+        if not name or not cmds.objExists(name):
+            return None
+        found = cmds.ls(name, transforms=True, long=True)
+        if found:
+            return found[0]
+        shapes = cmds.ls(name, shapes=True, long=True) or []
+        parents = (
+            cmds.listRelatives(shapes[0], parent=True, fullPath=True) if shapes else None
+        )
+        return parents[0] if parents else None
+
+    @classmethod
+    def shadow_targets(cls, objects, sources=None, recursive=True):
+        """The shadow casters among *objects* -- what a build of them casts
+        from: mesh-bearing transforms that are not one of the *sources* (a
+        light or locator in a selection is the source, never a target); a
+        component picks its object. What tentacle's Shadow Rig panel builds
+        from.
+
+        Parameters:
+            objects (list): Nodes -- a selection's transforms, shapes or
+                components.
+            sources (list/None): The source names; default
+                :attr:`DEFAULT_SOURCE_NAME`.
+            recursive (bool): A group counts by its descendant meshes (the
+                panel's Include Children).
+
+        Returns:
+            list: The targets' long names, in order.
+
+        Raises:
+            OperationError: Nothing in *objects* can cast a shadow; its causes
+                say why (mayatk's Preview shows them).
+        """
+        from mayatk.core_utils.preview import OperationError
+
+        names = [str(s) for s in (sources or [cls.DEFAULT_SOURCE_NAME])]
+        source_nodes = set()
+        for name in names:
+            if cmds.objExists(name):
+                source_nodes.update(cmds.ls(name, long=True) or [])
+        # a component picks its object
+        nodes = [str(obj).split(".")[0] for obj in objects or []]
+        targets, rejected = [], []
+        for node in nodes:
+            long = (cmds.ls(node, long=True) or [node])[0]
+            if long in source_nodes or cls.source_is_directional(node):
+                continue
+            if cls.has_mesh_geometry(node, recursive):
+                if long not in targets:
+                    targets.append(long)
+            else:
+                rejected.append(CoreUtils.leaf_name(node))
+        if targets:
+            return targets
+        causes = []
+        if rejected:
+            causes.append(
+                "Not mesh geometry: "
+                + ", ".join(rejected[:6])
+                + (" ..." if len(rejected) > 6 else "")
+            )
+        if nodes and all(
+            (cmds.ls(n, long=True) or [None])[0] in source_nodes for n in nodes
+        ):
+            causes.append(
+                "The selection is the shadow source itself -- select the "
+                "mesh(es) that cast the shadow."
+            )
+        if not recursive:
+            causes.append(
+                "Include Children is off: a group only counts when its "
+                "descendant meshes are included."
+            )
+        raise OperationError(
+            "Select the mesh(es) to cast a shadow from.",
+            causes=causes,
+            title="No shadow targets",
+        )
+
+    @staticmethod
+    def source_selection():
+        """The selection read as shadow sources (the panel's Source From
+        Selection): ``(names, fixtures)``. Selected faces are a fixture -- a
+        luminaire whose real area light should be the source
+        (``LightUtils.lights_from_geometry`` builds it): they come back as
+        *fixtures*, with no names. Otherwise *names* are the selected
+        transforms in the order picked, long names (a light's shape picks its
+        transform). Mirrored by blendertk's, where a mesh in Edit Mode is the
+        fixture."""
+        sel = cmds.ls(selection=True, long=True) or []
+        faces = (
+            cmds.filterExpand(*sel, selectionMask=34, expand=True) if sel else None
+        ) or []
+        if faces:
+            return [], faces
+        transforms = cmds.ls(sel, transforms=True, long=True) or []
+        for shape in cmds.ls(sel, shapes=True, long=True) or []:
+            transforms += cmds.listRelatives(shape, parent=True, fullPath=True) or []
+        return list(dict.fromkeys(transforms)), []
+
+    @classmethod
+    def delete_orphaned_textures(cls, paths):
+        """Delete each of *paths* -- a shadow plane's own silhouette or
+        horizon PNG -- that no shadow plane in the scene uses any more: what a
+        discarded preview pass, or one a later pass renamed, leaves on disk.
+        A path a plane still uses, a missing one and a locked one are left.
+        Mirrored by blendertk's.
+
+        A stored ``fileTextureName`` may be project-relative (a saved and
+        reopened scene), so both sides are compared as Maya resolves them
+        (:meth:`MatUtils.resolve_path`, no repair search).
+
+        Returns:
+            list: The paths removed.
+        """
+
+        def key(path):
+            resolved = MatUtils.resolve_path(path, search=False) or path
+            return os.path.normcase(os.path.abspath(resolved))
+
+        live = {
+            key(t)
+            for plane in cls.find_shadow_planes()
+            for t in (cls._plane_texture_path(plane), cls._plane_horizon_path(plane))
+            if t
+        }
+        removed = []
+        for path in dict.fromkeys(p for p in paths or [] if p):
+            if key(path) in live:
+                continue
+            if not os.path.exists(path):
+                continue
+            try:
+                os.remove(path)
+            except OSError:
+                continue  # locked / read-only: the scene is right either way
+            removed.append(path)
+        return removed
 
     # --------------------------------------------------------------- plane
     def _ensure_plane_attr(self, ln, dv, min_val=None, max_val=None, keyable=True):
@@ -1740,21 +1888,22 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         """
         restored = []
         for plane in cls.find_shadow_planes(planes):
-            if cls.plane_is_live(plane):
-                continue
-            rig = cls.from_plane(plane)
-            if rig is None:
-                cls.logger.warning(
-                    f"{plane}: built before the target/source stamps; re-create "
-                    "the rig to restore its expression."
-                )
-                continue
-            if not (rig.light and cmds.objExists(rig.light)):
-                cls.logger.warning(f"{plane}: its source is gone; set a new one first.")
-                continue
-            cls._clear_baked_keys(plane)
-            rig._relink_drivers(rig.setup_expression)
-            restored.append(plane)
+            with Units.working_as(linear=cls.rig_unit(plane), angle=None):
+                if cls.plane_is_live(plane):
+                    continue
+                rig = cls.from_plane(plane)
+                if rig is None:
+                    cls.logger.warning(
+                        f"{plane}: built before the target/source stamps; re-create "
+                        "the rig to restore its expression."
+                    )
+                    continue
+                if not (rig.light and cmds.objExists(rig.light)):
+                    cls.logger.warning(f"{plane}: its source is gone; set a new one first.")
+                    continue
+                cls._clear_baked_keys(plane)
+                rig._relink_drivers(rig.setup_expression)
+                restored.append(plane)
         if restored:
             cls.refresh_export_metadata()
         return restored
@@ -1770,58 +1919,59 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             The new :class:`ShadowRig`, or None when *plane* predates the
             stamps or its targets / source are gone.
         """
-        rig = cls.from_plane(plane)
-        if rig is None:
-            cls.logger.warning(
-                f"{plane}: built before the target/source stamps; cannot rebuild."
-            )
-            return None
-        if recursive is None:
-            recursive = True
-            if cmds.attributeQuery(cls._RECURSIVE_ATTR, node=plane, exists=True):
-                recursive = bool(cmds.getAttr(f"{plane}.{cls._RECURSIVE_ATTR}"))
-        if texture_res is None:
-            texture_res = cls._texture_size(rig.texture_path) or 512
-        if shader_type is None:
-            shader_type = (
-                "stingray"
-                if rig.shader and cmds.nodeType(rig.shader) == "StingrayPBS"
-                else "standard"
-            )
-        targets = [t for t in rig.targets if cmds.objExists(t)]
-        source = rig.light
-        if not targets or not (source and cmds.objExists(source)):
-            cls.logger.warning(
-                f"{plane}: its targets or source are gone; cannot rebuild."
-            )
-            return None
-        ground = rig.ground_height
-        rig_type = rig.rig_type
-        horizon = cls._horizon_params(plane)
-        atlased = cls.plane_is_atlased(plane)
-        from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
+        with Units.working_as(linear=cls.rig_unit(plane), angle=None):
+            rig = cls.from_plane(plane)
+            if rig is None:
+                cls.logger.warning(
+                    f"{plane}: built before the target/source stamps; cannot rebuild."
+                )
+                return None
+            if recursive is None:
+                recursive = True
+                if cmds.attributeQuery(cls._RECURSIVE_ATTR, node=plane, exists=True):
+                    recursive = bool(cmds.getAttr(f"{plane}.{cls._RECURSIVE_ATTR}"))
+            if texture_res is None:
+                texture_res = cls._texture_size(rig.texture_path) or 512
+            if shader_type is None:
+                shader_type = (
+                    "stingray"
+                    if rig.shader and cmds.nodeType(rig.shader) == "StingrayPBS"
+                    else "standard"
+                )
+            targets = [t for t in rig.targets if cmds.objExists(t)]
+            source = rig.light
+            if not targets or not (source and cmds.objExists(source)):
+                cls.logger.warning(
+                    f"{plane}: its targets or source are gone; cannot rebuild."
+                )
+                return None
+            ground = rig.ground_height
+            rig_type = rig.rig_type
+            horizon = cls._horizon_params(plane)
+            atlased = cls.plane_is_atlased(plane)
+            from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
 
-        previewed = ShadowPreview.is_attached(plane)
-        cls.delete_rigs([plane])
-        rebuilt = cls.create(
-            targets,
-            texture_res=texture_res,
-            source_name=source,
-            recursive=recursive,
-            ground_height=ground,
-            shader_type=shader_type,
-            rig_type=rig_type,
-            horizon_size=horizon.get("size"),
-            horizon_spans=horizon.get("spans"),
-        )
-        if atlased:
-            # The rig left its atlas on delete; a rebuilt rig rejoins it.
-            cls.pack_atlas([rebuilt.shadow_plane])
-        if previewed and rebuilt.rig_type == "horizon":
-            # Display state follows the rig: the delete stood the preview
-            # down, the rebuilt plane gets it back.
-            cls._reattach_preview(rebuilt.shadow_plane)
-        return rebuilt
+            previewed = ShadowPreview.is_attached(plane)
+            cls.delete_rigs([plane])
+            rebuilt = cls.create(
+                targets,
+                texture_res=texture_res,
+                source_name=source,
+                recursive=recursive,
+                ground_height=ground,
+                shader_type=shader_type,
+                rig_type=rig_type,
+                horizon_size=horizon.get("size"),
+                horizon_spans=horizon.get("spans"),
+            )
+            if atlased:
+                # The rig left its atlas on delete; a rebuilt rig rejoins it.
+                cls.pack_atlas([rebuilt.shadow_plane])
+            if previewed and rebuilt.rig_type == "horizon":
+                # Display state follows the rig: the delete stood the preview
+                # down, the rebuilt plane gets it back.
+                cls._reattach_preview(rebuilt.shadow_plane)
+            return rebuilt
 
     @staticmethod
     def _texture_size(path):
@@ -2049,55 +2199,56 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
         refreshed = []
         for plane in cls.find_shadow_planes(planes):
-            rig = cls.from_plane(plane)
-            if rig is None:
-                cls.logger.warning(
-                    f"{plane}: built before the target/source stamps; re-create "
-                    "the rig to recalculate its silhouette."
+            with Units.working_as(linear=cls.rig_unit(plane), angle=None):
+                rig = cls.from_plane(plane)
+                if rig is None:
+                    cls.logger.warning(
+                        f"{plane}: built before the target/source stamps; re-create "
+                        "the rig to recalculate its silhouette."
+                    )
+                    continue
+                node = cls._plane_texture_node(plane)
+                # The plane's OWN tile, never the atlas its file node names while
+                # packed: the raster overwrites this file and the tile is then
+                # copied into the atlas in place.
+                path = rig.texture_path
+                res = size or cls._texture_size(path) or 512
+                recursive = True
+                if cmds.attributeQuery(cls._RECURSIVE_ATTR, node=plane, exists=True):
+                    recursive = bool(cmds.getAttr(f"{plane}.{cls._RECURSIVE_ATTR}"))
+                fit = cls.plane_is_live(plane) if refit is None else bool(refit)
+                if fit and rig._layout_moved():
+                    rig._refit_layout()
+                rig.create_silhouette_texture(
+                    size=res, recursive=recursive, path=path, refit=fit
                 )
-                continue
-            node = cls._plane_texture_node(plane)
-            # The plane's OWN tile, never the atlas its file node names while
-            # packed: the raster overwrites this file and the tile is then
-            # copied into the atlas in place.
-            path = rig.texture_path
-            res = size or cls._texture_size(path) or 512
-            recursive = True
-            if cmds.attributeQuery(cls._RECURSIVE_ATTR, node=plane, exists=True):
-                recursive = bool(cmds.getAttr(f"{plane}.{cls._RECURSIVE_ATTR}"))
-            fit = cls.plane_is_live(plane) if refit is None else bool(refit)
-            if fit and rig._layout_moved():
-                rig._refit_layout()
-            rig.create_silhouette_texture(
-                size=res, recursive=recursive, path=path, refit=fit
-            )
-            bound = rig.texture_path
-            if cls.plane_is_atlased(plane):
-                # The tile is rewritten in place; the plane keeps sampling
-                # the atlas, so nothing else repacks.
-                bound = cls._write_atlas_tile(plane, "projected")
-            if rig.rig_type == "horizon":
-                # The map depends on the geometry, not the source: re-bake only
-                # when the target changed since the last bake.
-                params = cls._horizon_params(plane)
-                rig.bake_horizon(
-                    size=params.get("size"),
-                    spans=params.get("spans"),
-                    only_if_changed=True,
-                )
-                if cls._plane_attr(plane, cls._HORIZON_ATLAS_ATTR, ""):
-                    cls._write_atlas_tile(plane, "horizon")
-                if ShadowPreview.is_attached(plane):
-                    # The preview samples the map through its own texture
-                    # node: rebind it (attach is idempotent) or it keeps
-                    # showing the map the re-bake just replaced.
-                    cls._reattach_preview(plane)
-            if node and bound:
-                # VP2 caches by path and ignores a set to the same value:
-                # clear, then set, so the rewritten file is actually reloaded.
-                cmds.setAttr(f"{node}.fileTextureName", "", type="string")
-                cmds.setAttr(f"{node}.fileTextureName", bound, type="string")
-            refreshed.append(plane)
+                bound = rig.texture_path
+                if cls.plane_is_atlased(plane):
+                    # The tile is rewritten in place; the plane keeps sampling
+                    # the atlas, so nothing else repacks.
+                    bound = cls._write_atlas_tile(plane, "projected")
+                if rig.rig_type == "horizon":
+                    # The map depends on the geometry, not the source: re-bake only
+                    # when the target changed since the last bake.
+                    params = cls._horizon_params(plane)
+                    rig.bake_horizon(
+                        size=params.get("size"),
+                        spans=params.get("spans"),
+                        only_if_changed=True,
+                    )
+                    if cls._plane_attr(plane, cls._HORIZON_ATLAS_ATTR, ""):
+                        cls._write_atlas_tile(plane, "horizon")
+                    if ShadowPreview.is_attached(plane):
+                        # The preview samples the map through its own texture
+                        # node: rebind it (attach is idempotent) or it keeps
+                        # showing the map the re-bake just replaced.
+                        cls._reattach_preview(plane)
+                if node and bound:
+                    # VP2 caches by path and ignores a set to the same value:
+                    # clear, then set, so the rewritten file is actually reloaded.
+                    cmds.setAttr(f"{node}.fileTextureName", "", type="string")
+                    cmds.setAttr(f"{node}.fileTextureName", bound, type="string")
+                refreshed.append(plane)
         if refreshed:
             cls.refresh_export_metadata()
         return refreshed
@@ -2146,7 +2297,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 "ShadowRig.refresh_silhouette) before exporting."
             )
         return ptk.SceneRecords.SHADOWS.make(
-            {"unit_scale": cls.unit_scale(), "planes": records}
+            {"unit_scale": ctx.unit(cls.unit_scale), "planes": records}
         )
 
     @classmethod
@@ -2979,7 +3130,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         """
         value = min(1.0, max(0.0, float(value)))
 
-        def rescale(plane, old, how):
+        def rescale(plane, old, value, how):
             plug = f"{plane}.{cls.OPACITY_ATTR}"
             if how == "keys":
                 if old > 1e-6:
@@ -3012,12 +3163,15 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         stale on a plane moved by hand), keyed ones shift by the difference
         (they were baked from the old stamp).
 
+        *value* is in the working unit; each plane takes it in its own rig's
+        unit (:meth:`rig_unit`), the one its stamps and expression are in.
+
         Returns:
             The planes changed.
         """
         value = float(value)
 
-        def move(plane, old, how):
+        def move(plane, old, value, how):
             plug = f"{plane}.translateY"
             if how == "keys":
                 cmds.keyframe(plug, edit=True, relative=True, valueChange=value - old)
@@ -3025,41 +3179,56 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 cmds.setAttr(plug, value + cls.GROUND_OFFSET)
 
         return cls._retune(
-            planes, "groundHeight", value, "translateY", move, "Shadow Ground Height"
+            planes,
+            "groundHeight",
+            value,
+            "translateY",
+            move,
+            "Shadow Ground Height",
+            length=True,
         )
 
     @classmethod
-    def _retune(cls, planes, stamp, value, channel, carry, label):
+    def _retune(cls, planes, stamp, value, channel, carry, label, length=False):
         """Set *stamp* to *value* on every shadow plane in *planes*, and hand
         what a live expression would have done with it to ``carry(plane, old,
-        how)`` -- *how* is ``"keys"`` (an animCurve drives *channel*),
+        value, how)`` -- *how* is ``"keys"`` (an animCurve drives *channel*),
         ``"driven"`` (anything else does: the expression reads the stamp
         itself) or None (it holds a value of its own). One undo step;
-        republishes the export record."""
+        republishes the export record.
+
+        A *length* is in the working unit: each plane takes it converted to
+        its rig's unit (:meth:`rig_unit`), and its edit runs in that unit
+        (``Units.working_as``), so a stamp written after the user switched
+        units is still in the unit its expression and the record read it in.
+        """
         changed = []
         with CoreUtils.undo_chunk(label):
             for plane in cls.find_shadow_planes(planes):
                 plug = f"{plane}.{stamp}"
                 if not cmds.objExists(plug):
                     continue
-                old = float(cmds.getAttr(plug))
-                cmds.setAttr(plug, value)
-                drivers = (
-                    cmds.listConnections(
-                        f"{plane}.{channel}",
-                        source=True,
-                        destination=False,
-                        skipConversionNodes=True,
+                unit = cls.rig_unit(plane) if length else None
+                new = Units.convert(value, "working", unit) if length else value
+                with Units.working_as(linear=unit, angle=None):
+                    old = float(cmds.getAttr(plug))
+                    cmds.setAttr(plug, new)
+                    drivers = (
+                        cmds.listConnections(
+                            f"{plane}.{channel}",
+                            source=True,
+                            destination=False,
+                            skipConversionNodes=True,
+                        )
+                        or []
                     )
-                    or []
-                )
-                if not drivers:
-                    how = None
-                elif cmds.nodeType(drivers[0]).startswith("animCurve"):
-                    how = "keys"
-                else:
-                    how = "driven"
-                carry(plane, old, how)
+                    if not drivers:
+                        how = None
+                    elif cmds.nodeType(drivers[0]).startswith("animCurve"):
+                        how = "keys"
+                    else:
+                        how = "driven"
+                    carry(plane, old, new, how)
                 changed.append(plane)
             if changed:
                 cls.refresh_export_metadata()

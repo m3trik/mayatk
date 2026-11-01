@@ -3006,25 +3006,6 @@ class GameShaderTest(unittest.TestCase):
                 self.assertFalse(self._slot_sources(name, attr), attr)
 
 
-class GameShaderPanelFolderTest(unittest.TestCase):
-    """The panel's Browse opens in the scene project's texture folder.
-
-    Regression: it joined ``get_env_info("workspace_dir")`` -- the project
-    folder's NAME, as the HUD shows it -- with ``sourceimages``: a path
-    relative to Maya's working directory. Added: 2026-10-13
-    """
-
-    def test_browse_starts_in_the_scene_projects_texture_folder(self):
-        from mayatk.mat_utils.game_shader import GameShaderSlots
-
-        folder = GameShaderSlots.source_images_dir.fget(None)
-        self.assertTrue(os.path.isabs(folder), folder)
-        self.assertEqual(
-            os.path.normcase(folder),
-            os.path.normcase(mtk.DataNodes.scene_source_images_dir()),
-        )
-
-
 class GameShaderFBXTest(QuickTestCase):
     """Tests for FBX export compatibility."""
 
@@ -3072,15 +3053,27 @@ class GameShaderFBXTest(QuickTestCase):
         )
 
 
-class GameShaderAssignToSelectionTest(unittest.TestCase):
-    """The panel's Assign to Selection step (``GameShaderSlots._assign_to_selection``)."""
+class GameShaderShaderTypeChoicesTest(unittest.TestCase):
+    """``GameShader.shader_type_choices``: what the Game Shader panel's Shader
+    Type combo lists. The combo saves its INDEX, so the order is a contract."""
+
+    def test_the_three_shader_types_in_the_panels_order(self):
+        self.assertEqual(
+            GameShader.shader_type_choices(),
+            [
+                ("Stingray PBS", "stingray"),
+                ("Standard Surface", "standard_surface"),
+                ("Open PBR", "open_pbr"),
+            ],
+        )
+
+
+class GameShaderAssignNetworkTest(unittest.TestCase):
+    """``GameShader.assign_network``: the panel's Assign to Selection step."""
 
     def setUp(self):
-        from mayatk.mat_utils.game_shader import GameShaderSlots
-
         cmds.file(new=True, force=True)
-        # The step needs only the logger: skip the switchboard-bound __init__.
-        self.slots = GameShaderSlots.__new__(GameShaderSlots)
+        self.engine = GameShader()
         self.cube = cmds.polyCube(name="assign_cube")[0]
         self.shader = cmds.shadingNode("lambert", name="assign_mat", asShader=True)
 
@@ -3094,7 +3087,7 @@ class GameShaderAssignToSelectionTest(unittest.TestCase):
         return mats or []
 
     def test_single_material_is_assigned_to_selection(self):
-        self.slots._assign_to_selection(self.shader, [self.cube])
+        self.assertTrue(self.engine.assign_network(self.shader, [self.cube]))
         self.assertIn("assign_mat", self._assigned(self.cube))
 
     def test_the_built_network_is_assigned_to_selection(self):
@@ -3107,29 +3100,33 @@ class GameShaderAssignToSelectionTest(unittest.TestCase):
         """
         tex_dir = tempfile.mkdtemp(prefix="gs_assign_")
         self.addCleanup(shutil.rmtree, tex_dir, ignore_errors=True)
-        built = GameShader().create_network(
+        built = self.engine.create_network(
             [_write_test_image(os.path.join(tex_dir, "rock_BaseColor.png"))],
             name="assign_rock",
         )
-        self.slots._assign_to_selection(built, [self.cube])
+        self.assertTrue(self.engine.assign_network(built, [self.cube]))
         self.assertIn("assign_rock", self._assigned(self.cube))
         self.assertFalse(cmds.ls("*SGSG"), "a shading group built for the group")
 
     def test_several_materials_skip_the_assignment(self):
         other = cmds.shadingNode("lambert", name="other_mat", asShader=True)
-        self.slots._assign_to_selection([self.shader, other], [self.cube])
+        self.assertFalse(self.engine.assign_network([self.shader, other], [self.cube]))
         self.assertNotIn("assign_mat", self._assigned(self.cube))
         self.assertNotIn("other_mat", self._assigned(self.cube))
+
+    def test_nothing_built_assigns_nothing(self):
+        """A build whose every set failed (``[None]``) has nothing to assign."""
+        self.assertFalse(self.engine.assign_network([None], [self.cube]))
+        self.assertNotIn("assign_mat", self._assigned(self.cube))
 
     def test_empty_selection_warns_and_assigns_nothing(self):
         """Nothing selected is the user's state, not a failure: one warning
         naming it, never ``assign_mat``'s "no objects" error."""
-        with self.assertLogs(self.slots.logger, level="WARNING") as logs:
-            self.slots._assign_to_selection(self.shader, [])
+        with self.assertLogs(self.engine.logger, level="WARNING") as logs:
+            self.assertFalse(self.engine.assign_network(self.shader, []))
         self.assertEqual([r.levelname for r in logs.records], ["WARNING"], logs.output)
         self.assertIn("nothing was selected", logs.output[0])
         self.assertFalse(cmds.listConnections(self.shader, type="shadingEngine"))
-
 
 # -----------------------------------------------------------------------------
 

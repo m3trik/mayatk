@@ -153,7 +153,7 @@ class _TiedKeysInternal:
         objects = cls._resolve_keyed_objects(objects)
         if not objects:
             cmds.warning("No keyed objects found.")
-            return
+            return 0
 
         # Determine the keyframe range
         if custom_range:
@@ -162,7 +162,7 @@ class _TiedKeysInternal:
             range_result = cls.get_keyframe_times(objects, as_range=True)
             if range_result is None:
                 cmds.warning("No keyframes found on any objects.")
-                return
+                return 0
             start_frame, end_frame = range_result
         else:
             start_frame = cmds.playbackOptions(query=True, minTime=True)
@@ -191,7 +191,7 @@ class _TiedKeysInternal:
             print(
                 f"Keyframes tied to frames {tie_start_frame} and {tie_end_frame} for keyed attributes."
             )
-            return
+            return 0
 
         # Tangent type constants
         kStep = oma2.MFnAnimCurve.kTangentStep
@@ -215,6 +215,7 @@ class _TiedKeysInternal:
             except RuntimeError:
                 continue  # Curve may have been deleted
 
+        inserted_total = 0
         with UndoRecorder.record() as recorder:
             for i in range(sel.length()):
                 dep = sel.getDependNode(i)
@@ -369,10 +370,12 @@ class _TiedKeysInternal:
                 # Record exactly which keys were inserted so untie_keyframes can
                 # remove them without relying on value-equality guesswork.
                 cls._write_tied_key_metadata(fn.name(), inserted_bookends)
+                inserted_total += len(inserted_bookends)
 
         print(
             f"Keyframes tied to frames {tie_start_frame} and {tie_end_frame} for keyed attributes."
         )
+        return inserted_total
 
     @classmethod
     def _untie_keyframes(cls, objects, on_delete=None):

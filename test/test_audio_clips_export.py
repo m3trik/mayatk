@@ -259,6 +259,27 @@ class TestAudioClipsExport(MayaTkTestCase):
             "legacy internal source attr should be dropped",
         )
 
+    def test_the_record_leaves_its_digests_to_the_dependency_pass(self):
+        """``media`` -- each embedded clip's SHA-256, what Unity compares a
+        same-named clip against before it reuses one -- is the FBX dependency
+        pass's to write, from the bytes it embedded
+        (``ptk.FbxMedia.embed_dependencies``). Written here from the source
+        files, it named audio a raw File > Export or the Game Exporter never
+        embedded, and Unity bound nothing where a library clip had bound
+        (review, 2026-10-31). Added: 2026-10-31"""
+        self._seed_tracks()
+        wav = self.temp_path("footstep_take3.wav")
+        with open(wav, "wb") as fh:
+            fh.write(b"footstep bytes")
+        audio_utils.set_path("footstep", wav)
+
+        record = AudioClips.export_record(ptk.ExportContext())
+        self.assertIsNotNone(record)
+        self.assertNotIn("media", record.payload)
+        self.assertEqual(
+            ptk.SceneRecords.problems(ptk.SceneRecords.AUDIO, record.payload), []
+        )
+
     def test_prepare_for_export_is_idempotent(self):
         """Repeated calls overwrite cleanly; no duplicate attrs."""
         self._seed_tracks()

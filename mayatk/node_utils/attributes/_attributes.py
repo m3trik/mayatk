@@ -629,8 +629,9 @@ class Attributes(ptk.HelpMixin):
         """Get attributes selected in the channel box.
 
         With none selected there -- Maya empties the box while it is tabbed
-        away -- the selection of a panel standing in for it (mayatk's
-        Channels) counts instead; see :meth:`ChannelBox.add_stand_in`.
+        away -- the selection of a panel standing in for it (tentacle's
+        Channels panel, through ``Channels.link_channel_box``) counts instead;
+        see :meth:`ChannelBox.add_stand_in`.
 
         Returns:
             list[str]: e.g. ``['tx', 'ry', 'sz']``

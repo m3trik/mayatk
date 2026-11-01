@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-# Full ecosystem on path so mayatk's uitk-backed Slots classes resolve.
-for _name in ("mayatk", "pythontk", "uitk", "tentacle"):
+# mayatk and the packages it imports on path, so its uitk-backed modules resolve.
+for _name in ("mayatk", "pythontk", "uitk"):
     _p = REPO / _name
     if _p.is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

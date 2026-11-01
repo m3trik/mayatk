@@ -1,45 +1,43 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
+"""Unity bridge engine -- the Maya half of the Unity Workflow app.
 
-The Maya->Unity hand-off, built on the same :class:`pythontk.HandoffBridge` skeleton as the
-Blender bridge but with a **copy-to-assets** deliverer instead of a script-launch one: Unity ingests
-any file dropped into ``Assets/`` through its own asset pipeline on focus, so the session-safe,
-license-free hand-off is simply *copy the FBX into the project* (and optionally launch the editor).
-Unlike the Maya<->Blender bridges there is no fresh-instance-launch dance -- dropping a file into
-``Assets/`` never disturbs a running editor or unsaved work.
+The Unity Workflow app (extapps' ``unity_workflow``) is the one Unity panel; inside Maya,
+tentacle opens it with this class as its engine (``ui.slots.engine = mtk.UnityBridge``), and
+the app's Current Scene source sends through it. This half resolves the app's Scope, exports
+it -- the FBX with the scene records (the ``data_export`` carrier) and the curve-proxy
+transport the Unity importers rebind -- finishes it as the Scene Exporter finishes its FBX,
+and hands the file to the delivery the app attached (``deliverer=``: unitytk's copy into
+``Assets/`` and optional Editor launch). The delivery, the project and the launch are the
+app's; nothing here names the Unity side.
 
 Composition:
 
 * :class:`mayatk.env_utils.handoff_export.MayaExportMixin` -- the Maya selection + FBX export
   (shared with :class:`mayatk.env_utils.blender_bridge.BlenderBridge`).
-* :class:`unitytk.CopyToAssetsDeliverer` -- the copy-into-``Assets/`` + optional editor launch
-  Strategy (shared with the blendertk Unity bridge; lives next to ``unitytk.UnityLauncher``).
-* :class:`pythontk.HandoffBridge` -- the ``send()`` orchestration.
+* :class:`pythontk.HandoffBridge` -- the ``send()`` orchestration (``scope_objects``, the
+  delivery's preflight before the export) over the attached :class:`pythontk.Deliverer`.
 
-``import maya.cmds`` is deferred (via the mixin) so the engine surface resolves headlessly; the
-``unitytk`` import is module-level (pure-Python, no DCC/Qt).
+``import maya.cmds`` is deferred (via the mixin) so the engine surface resolves headlessly.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import pythontk as ptk
 
-from mayatk.env_utils.handoff_export import MayaExportMixin
-
-
-_PKG_DIR = Path(__file__).resolve().parent
+from mayatk.env_utils.handoff_export import BridgeHost, MayaExportMixin
 
 
 class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
-    """Export the Maya selection and copy it into a Unity project's ``Assets/``.
+    """Export the Maya scope for a Unity project, through the delivery the caller attaches.
 
-    Set :attr:`project_path` to the target Unity project (the folder containing ``Assets/``) before
-    calling :meth:`send` -- the panel wires this from its 'Unity Project' field. Delivery is the
-    :class:`unitytk.CopyToAssetsDeliverer` Strategy.
+    The Unity Workflow app builds it with its own deliverer (``UnityBridge(deliverer=...)``)
+    and sets :attr:`project_path` (the folder containing ``Assets/``) from its 'Unity
+    Project' field before calling :meth:`send`; the produced payload -- the FBX, and its
+    ``default_asset_name`` -- is what that deliverer copies in. A send with no delivery
+    attached refuses before it exports.
     """
 
     payload_prefix = "mtk_to_unity"
@@ -60,39 +58,46 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
     #: be an exact slice: the split resamples every curve, or a node keyed only
     #: outside a shot plays its rest pose through it (``FbxUtils.apply_takes``).
     resample_takes = True
-    #: ...and this panel offers no animation knob, so the hand-off exports the
+    #: ...and the app offers no animation knob, so the hand-off exports the
     #: animation and splits the declared shots unless a request says otherwise.
     #: Without it no take was split (``resample_takes`` never ran) and Unity
     #: built one ``Take 001`` clip for a scene that declares its shots.
     include_animation = True
 
-    @staticmethod
-    def _deliverer_cls():
-        """unitytk's deliverer, imported on use rather than at module scope.
-
-        ``unitytk`` is an optional distribution (``pip install mayatk[unity]``).
-        Deferring the import keeps a missing one from raising while the module
-        is merely being imported -- which would fire before any UI exists to say
-        so -- and lets the panel offer to install it on demand instead
-        (:meth:`uitk.bridge.BridgeSlotsBase.ensure_optional_package`).
-        """
-        from unitytk import CopyToAssetsDeliverer
-
-        return CopyToAssetsDeliverer
-
-    def __init__(self, project_path: Optional[str] = None):
+    def __init__(
+        self,
+        project_path: Optional[str] = None,
+        deliverer: Optional[ptk.Deliverer] = None,
+    ):
         super().__init__()
         self.project_path = project_path
-        self.deliverer = self._deliverer_cls()()
+        self.deliverer = deliverer
 
     # ------------------------------------------------------------------ bindings
-    def list_template_modes(self):
-        return UnityBridge.list_delivery_modes()
-
-    def params_defaults(self):
+    @classmethod
+    def params_registry(cls):
+        """The export rows the Unity Workflow app shows for its Current Scene
+        source (``parameters.Parameters``, a ``uitk.bridge.ParamRegistry``), and
+        what :meth:`params_defaults` reads. Imported on use, as the defaults always
+        were: the registry is uitk's, and the engine surface imports without uitk
+        (a headless Blender ships no Qt binding)."""
         from mayatk.env_utils.unity_bridge import parameters as _params
 
-        return _params.Parameters.defaults()
+        return _params.Parameters
+
+    def params_defaults(self):
+        return self.params_registry().defaults()
+
+    @staticmethod
+    def install_package(spec: str) -> None:
+        """Install the pip requirement *spec* where this Maya session imports it
+        from (``BridgeHost.install_package``): the route the app takes for its
+        optional unitytk when Maya opened it.
+
+        Parameters:
+            spec: A requirement, e.g. ``unitytk>=0.1.0``.
+        """
+        BridgeHost.install_package(spec)
 
     def _produce(self, objects, request) -> ptk.Payload:
         """Export the FBX (via the mixin), embed what it depends on, and stamp
@@ -118,22 +123,3 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
         from mayatk.core_utils._core_utils import CoreUtils
 
         return CoreUtils.leaf_name(objects[0])
-
-    @classmethod
-    def list_delivery_modes(cls) -> List[Tuple[str, str]]:
-        """``[(mode_stem, ""), ...]`` for the panel's delivery combo."""
-        return list(cls._deliverer_cls().DELIVERY_MODES)
-
-
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    bridge = UnityBridge(project_path=None)
-    try:
-        import maya.cmds as cmds
-
-        sel = cmds.ls(selection=True) or []
-    except ModuleNotFoundError:
-        sel = []
-    # bridge.project_path = r"C:/path/to/UnityProject"
-    # bridge.send(sel, template="copy_to_assets", mode="send_to")

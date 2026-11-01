@@ -62,6 +62,24 @@ class RenderUtilsTest(unittest.TestCase):
         names = [r["name"] for r in RenderUtils.get_available_renderers()]
         self.assertEqual(len(names), len(set(names)))
 
+    # --------------------------------------------------------------- cameras
+    def test_render_cameras_put_persp_first(self):
+        cameras = RenderUtils.render_cameras()
+        self.assertEqual(cameras[0], "persp")
+        self.assertIn("top", cameras)
+        self.assertNotIn("perspShape", cameras)
+        self.assertEqual(cameras[1:], sorted(cameras[1:]))
+        made = cmds.rename(cmds.camera()[0], "shotCam")
+        self.assertIn(made, RenderUtils.render_cameras())
+
+    def test_render_camera_takes_a_shape_for_its_transform(self):
+        module = sys.modules[RenderUtils.__module__]
+        with mock.patch.object(module, "mel") as fake_mel:
+            RenderUtils.render_camera("perspShape")
+        command = fake_mel.eval.call_args[0][0]
+        self.assertIn('"persp"', command)
+        self.assertNotIn("perspShape", command)
+
     # ------------------------------------------------------------- selection
     def test_current_renderer_is_str(self):
         self.assertIsInstance(RenderUtils.current_renderer(), str)

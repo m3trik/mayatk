@@ -688,6 +688,51 @@ class TestProjectSetupOps(unittest.TestCase):
         self.assertEqual(self.setup_ops._pending["high_poly"], None)
 
 
+class TestInstallerLaunchAtStart(unittest.TestCase):
+    """A fresh install turns on Painter's switch to start the plugin at launch:
+    Painter starts a ``plugins/`` module only when ``python_plugins/<name>/
+    launch_at_start`` reads ``on`` (default off), so a first send found no
+    server until the user ticked it in the Python menu (2026-10-31)."""
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        from qtpy import QtCore
+
+        from mayatk.mat_utils.substance_bridge.substance_rpc import installer
+
+        self.installer = installer
+        self.dir = tempfile.mkdtemp(prefix="substance_rpc_install_")
+        self.addCleanup(__import__("shutil").rmtree, self.dir, True)
+        self.settings = QtCore.QSettings(
+            os.path.join(self.dir, "painter.ini"), QtCore.QSettings.IniFormat
+        )
+        for target, value in (
+            ("painter_settings", lambda: self.settings),
+            ("user_plugin_dir", lambda: Path(self.dir) / "plugins"),
+        ):
+            patch = mock.patch.object(installer.Installer, target, staticmethod(value))
+            patch.start()
+            self.addCleanup(patch.stop)
+        patch = mock.patch.object(
+            installer.PluginInstaller,
+            "install_plugin",
+            return_value=Path(self.dir) / "plugins" / "substance_rpc",
+        )
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_fresh_install_turns_the_switch_on(self):
+        self.installer.Installer.install()
+        self.assertEqual(self.settings.value(self.installer.LAUNCH_AT_START_KEY), "on")
+
+    def test_a_users_off_stands(self):
+        self.settings.setValue(self.installer.LAUNCH_AT_START_KEY, "off")
+        self.installer.Installer.install()
+        self.assertEqual(self.settings.value(self.installer.LAUNCH_AT_START_KEY), "off")
+
+
 class TestPluginImportSafety(unittest.TestCase):
     def test_import_binds_no_port(self):
         # The package was imported at module scope above; the server must

@@ -60,6 +60,17 @@ class _CoreUtilsInternal(object):
     """Internal utilities for Maya CoreUtils."""
 
     @staticmethod
+    def _transform_of(node: str) -> str:
+        """*node*'s transform when it is a shape -- what ``ls -objectsOnly``
+        resolves a component to -- else *node* itself; named as ``cmds.ls``
+        names it."""
+        if cmds.objectType(node, isAType="shape"):
+            parents = cmds.listRelatives(node, parent=True, fullPath=True) or []
+            if parents:
+                return (cmds.ls(parents[0]) or parents)[0]
+        return node
+
+    @staticmethod
     def _prepare_reparent(
         nodes: List[object],
     ) -> Tuple[Optional[str], List[str]]:
@@ -362,38 +373,145 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     def selected(func: Callable) -> Callable:
-        """A decorator to pass the current selection to the target parameter if None is given.
+        """Pass the selection (:meth:`selected_objects`) to *func*'s target parameter
+        when it is ``None``; with nothing selected, return ``[]`` without calling it.
 
-        The selection is injected into the first *non-receiver* parameter: index 0
-        for static methods, index 1 for instance / class methods. The receiver is
-        detected by introspecting the wrapped callable's signature (``functools.wraps``
-        exposes ``__wrapped__``, so the real parameter names are visible even through
-        an inner ``undoable`` / ``reparent`` wrapper) rather than guessing from the
-        runtime type of the first argument, which misidentifies a data-bearing first
-        positional argument as ``self``.
+        The target is the first *non-receiver* parameter: index 0 for static
+        methods, index 1 for instance / class methods. The receiver is detected by
+        introspecting the wrapped callable's signature (``functools.wraps`` exposes
+        ``__wrapped__``, so the real parameter names are visible even through an
+        inner wrapper) rather than guessing from the runtime type of the first
+        argument, which misidentifies a data-bearing first positional argument as
+        ``self``. A target given by keyword is found by name.
         """
-
-        # Receiver detection is fixed at decoration time (the wrapped callable's
-        # signature never changes), so resolve the target index once here rather
-        # than re-introspecting on every call.
+        # Resolved once, at decoration: the wrapped callable's signature never changes.
         try:
             params = list(inspect.signature(func).parameters.values())
             has_receiver = bool(params) and params[0].name in ("self", "cls")
         except (TypeError, ValueError):
-            has_receiver = False
+            params, has_receiver = [], False
         target = 1 if has_receiver else 0
+        name = params[target].name if len(params) > target else None
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
-            if len(args) <= target or args[target] is None:
-                selection = cmds.ls(selection=True) or []
+            if name in kwargs:
+                if kwargs[name] is None:
+                    selection = CoreUtils.selected_objects()
+                    if not selection:
+                        return []
+                    kwargs = {**kwargs, name: selection}
+            elif len(args) <= target or args[target] is None:
+                selection = CoreUtils.selected_objects()
                 if not selection:
                     return []
                 args = args[:target] + (selection,) + args[target + 1 :]
-
             return func(*args, **kwargs)
 
         return wrapped
+
+    @staticmethod
+    def selected_objects(**kwargs) -> List[str]:
+        """The current selection, ``[]`` when it is empty (``cmds.ls(selection=True)``).
+        What :meth:`selected` passes; twin of blendertk's ``CoreUtils.selected_objects``.
+
+        Parameters:
+            **kwargs: ``cmds.ls`` filters (``objectsOnly``, ``flatten``, ``type``,
+                ``long``); ``selection=True`` is always applied. Maya's own: the
+                blendertk twin takes none (a Blender selection is objects), so a
+                panel shared by both hosts calls it bare.
+        """
+        return cmds.ls(selection=True, **kwargs) or []
+
+    @staticmethod
+    def active_object() -> Optional[str]:
+        """The selection's lead object: the last one selected, which Maya draws
+        green and makes the target of parent, constraints and align. A selected
+        component stands for its object's transform; in component mode with no
+        component selected, the last hilited object leads. Twin of blendertk's
+        ``CoreUtils.active_object`` (Blender's active object).
+
+        Returns:
+            (str/None): The node as ``cmds.ls`` names it; ``None`` with nothing
+                selected or hilited.
+        """
+        nodes = cmds.ls(selection=True, objectsOnly=True) or cmds.ls(hilite=True) or []
+        return CoreUtils._transform_of(nodes[-1]) if nodes else None
+
+    @staticmethod
+    def ensure_component_mode(
+        object_type: str = "mesh", component: Optional[str] = None
+    ) -> Optional[str]:
+        """Enter component mode on the selected (or hilited) objects of
+        *object_type*, optionally setting the component mask.
+
+        Twin of blendertk's ``CoreUtils.ensure_component_mode`` (Edit Mode
+        there): what a tool calls before it works on components. Every object
+        of the type is hilited -- Maya edits each hilited object's components,
+        as Blender's multi-object Edit Mode does -- and the mode stays.
+
+        Parameters:
+            object_type (str): ``"mesh"`` or ``"curve"`` (NURBS and Bezier), or
+                a Maya shape type; case-insensitive.
+            component (str, optional): ``"vertex"``, ``"edge"`` or ``"face"``
+                (meshes): the component mask to set.
+
+        Returns:
+            (str/None): The lead object of the type (the last selected one), as
+                ``cmds.ls`` names it; ``None`` when no selected or hilited
+                object is of the type, and nothing changes.
+        """
+        shape_type = {"mesh": "mesh", "curve": "nurbsCurve"}.get(
+            object_type.lower(), object_type
+        )
+        nodes = list(reversed(cmds.ls(selection=True, objectsOnly=True) or []))
+        nodes += cmds.ls(hilite=True) or []
+        objects = []
+        for node in nodes:
+            obj = CoreUtils._transform_of(node)
+            if obj in objects:
+                continue
+            try:
+                shapes = cmds.listRelatives(
+                    obj, shapes=True, type=shape_type, noIntermediate=True
+                )
+                if shapes or cmds.objectType(obj, isAType=shape_type):
+                    objects.append(obj)
+            except RuntimeError:  # a DG node (a selected set or shader)
+                continue
+        if not objects:
+            return None
+        # Entering component mode hilites every selected object; only the
+        # type's stay, as in Blender's Edit Mode.
+        cmds.selectMode(component=True)
+        others = [
+            node
+            for node in cmds.ls(hilite=True) or []
+            if CoreUtils._transform_of(node) not in objects
+        ]
+        if others:
+            cmds.hilite(others, unHilite=True)
+        cmds.hilite(objects)
+        if component:
+            flag = {"vertex": "vertex", "vert": "vertex", "face": "facet"}.get(
+                component.lower(), component.lower()
+            )
+            cmds.selectType(**{flag: True})
+        return objects[0]
+
+    @staticmethod
+    def ensure_object_mode() -> bool:
+        """Leave component mode for object mode; the hilited objects stay
+        selected. Twin of blendertk's ``CoreUtils.ensure_object_mode`` (Object
+        Mode there): what object-level work calls first. Set, not queried --
+        setting it is idempotent and ``selectMode`` queries read False in batch.
+
+        Returns:
+            bool: ``True``. Maya never refuses (the blendertk twin raises
+                ``RuntimeError`` when Blender does).
+        """
+        cmds.selectMode(object=True)
+        return True
 
     @staticmethod
     @contextlib.contextmanager
@@ -553,27 +671,6 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                 return context.result
 
         return wrapped
-
-    @staticmethod
-    def wrap_control(control_name, container):
-        """Embed a Maya Native UI Object."""
-        from qtpy import QtWidgets
-        from shiboken6 import wrapInstance
-        from maya.OpenMayaUI import MQtUtil
-
-        layout = QtWidgets.QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layoutName = ptk.set_case(container.objectName() + "Layout", "camel")
-        layout.setObjectName(layoutName)
-        cmds.setParent(layoutName)
-
-        derivedClass = ptk.get_derived_type(container)
-
-        ptr = MQtUtil.findControl(control_name)
-        control = wrapInstance(int(ptr), derivedClass)
-        layout.addWidget(control)
-
-        return control
 
     @staticmethod
     def confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]:

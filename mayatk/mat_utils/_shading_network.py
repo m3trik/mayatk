@@ -29,6 +29,59 @@ class _ShadingNetworkInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
     @staticmethod
+    def _rename_mat(material, name):
+        """Body of :meth:`MatUtils.rename_mat`."""
+        material = str(material)
+        if not cmds.objExists(material):
+            raise ValueError(f"No material named '{material}'.")
+        return cmds.rename(material, name)
+
+    @staticmethod
+    def _delete_mats(materials):
+        """Body of :meth:`MatUtils.delete_mats`."""
+        existing = [
+            str(m) for m in ptk.make_iterable(materials) if m and cmds.objExists(str(m))
+        ]
+        if existing:
+            cmds.delete(existing)
+        return existing
+
+    @classmethod
+    def _delete_unused_materials(cls):
+        """Body of :meth:`MatUtils.delete_unused_materials`."""
+        before = [str(m) for m in cls.get_scene_mats(exclude_defaults=False) or []]
+        mel.eval("MLdeleteUnused")
+        return sorted(name for name in before if not cmds.objExists(name))
+
+    @staticmethod
+    def _assign_new_mat(objects):
+        """Body of :meth:`MatUtils.assign_new_mat`."""
+        message = "No renderable object is selected for assignment."
+        if objects is not None:
+            objects = [str(o) for o in ptk.make_iterable(objects) if o]
+            if not objects:
+                raise ValueError(message)
+            cmds.select(objects, replace=True)
+        if not (cmds.ls(selection=True, type="mesh", dag=True, geometry=True) or []):
+            raise ValueError(message)
+        mel.eval(
+            'buildObjectMenuItemsNow "MainPane|viewPanes|modelPanel4|modelPanel4|'
+            'modelPanel4|modelPanel4ObjectPop";'
+        )
+        mel.eval('createAssignNewMaterialTreeLister ""')
+        return None
+
+    @staticmethod
+    def _show_mat_attributes(material):
+        """Body of :meth:`MatUtils.show_mat_attributes`."""
+        material = str(material)
+        if not cmds.objExists(material):
+            raise ValueError(f"No material named '{material}'.")
+        cmds.select(material, replace=True)
+        mel.eval(f'showEditorExact("{material}")')
+        return [material]
+
+    @staticmethod
     def _is_clash_variant(candidate: str, want: str) -> bool:
         """True when *candidate* is *want* modulo Maya's clash-rename digit suffix."""
         if candidate == want:

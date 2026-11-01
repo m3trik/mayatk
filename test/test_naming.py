@@ -691,5 +691,386 @@ class TestConformShapeNames(MayaTkTestCase):
         self.assertIn("smoothyShapeOrig", leafs)
 
 
+class TestNamingToolApi(MayaTkTestCase):
+    """What the Naming panel (tentacle) asks of the engine."""
+
+    def test_scope_objects_is_the_selection_or_the_scene(self):
+        a = cmds.polyCube(n="scopeA")[0]
+        cmds.polyCube(n="scopeB")
+        cmds.select(a)
+        self.assertEqual(Naming.scope_objects(), cmds.ls(a, uuid=True))  # frozen by UUID
+        names = {
+            n.split("|")[-1] for n in cmds.ls(Naming.scope_objects(scene=True), long=True)
+        }
+        self.assertLessEqual({"scopeA", "scopeB"}, names)
+        cmds.select(clear=True)
+        self.assertEqual(Naming.scope_objects(), [])
+
+    def test_select_by_name_selects_the_matches(self):
+        cube = cmds.polyCube(n="findMe")[0]
+        loc = cmds.spaceLocator(n="findLoc")[0]
+        cmds.group(em=True, n="other")  # searched, never matched
+        found, searched = Naming.select_by_name("findMe|findLoc")  # exact terms
+        self.assertEqual(sorted(found), sorted(cmds.ls([cube, loc], long=True)))
+        self.assertEqual(sorted(cmds.ls(selection=True, long=True)), sorted(found))
+        self.assertGreater(searched, len(found))
+        found, searched = Naming.select_by_name("find*", locators_only=True)
+        self.assertEqual((found, searched), (cmds.ls(loc, long=True), 1))
+
+    def test_select_by_name_with_no_match_clears_the_selection(self):
+        cmds.select(cmds.polyCube(n="keepMe")[0])
+        self.assertEqual(Naming.select_by_name("noSuchName")[0], [])
+        self.assertEqual(cmds.ls(selection=True), [])
+
+    def test_select_link_labels_the_leaf_and_selects_the_path(self):
+        path = cmds.ls(cmds.polyCube(n="linked")[0], long=True)[0]
+        self.assertEqual(
+            Naming.select_link(path), Naming.log_link("linked", "select", node=path)
+        )
+
+    def test_location_suffix_skips_what_has_no_location(self):
+        near = cmds.polyCube(n="row")[0]
+        far = cmds.polyCube(n="row")[0]  # Maya names it row1
+        cmds.move(5, 0, 0, far)
+        material = cmds.shadingNode("lambert", asShader=True, n="rowMat")
+        Naming.append_location_based_suffix([far, near, material])
+        self.assertTrue(cmds.objExists("row_01") and cmds.objExists("row_02"))
+        self.assertTrue(cmds.objExists("rowMat"))
+
+    def test_location_suffix_with_no_transform_renames_nothing(self):
+        material = cmds.shadingNode("lambert", asShader=True, n="loneMat")
+        self.assertEqual(Naming.append_location_based_suffix([material]), [])
+        self.assertTrue(cmds.objExists("loneMat"))
+
+    def test_every_convention_entry_applies_in_maya(self):
+        self.assertEqual(Naming.UNSUPPORTED_TYPES, {})
+
+
+class _Captured:
+    """Collect what ``Naming.logger`` emits during a block (message texts)."""
+
+    def __init__(self):
+        import logging
+
+        self.texts = []
+        handler = logging.Handler()
+        handler.emit = lambda record: self.texts.append(record.getMessage())
+        self.handler = handler
+
+    def __enter__(self):
+        Naming.logger.addHandler(self.handler)
+        return self
+
+    def __exit__(self, *_exc):
+        Naming.logger.removeHandler(self.handler)
+
+    def lines(self, word):
+        return [t for t in self.texts if word in t]
+
+
+class TestNamingEdgeCases(MayaTkTestCase):
+    """The Naming probe's findings (2026-10-31), one regression each."""
+
+    def tearDown(self):
+        cmds.namespace(setNamespace=":")
+        super().tearDown()
+
+    # -- S1-A: the node's own namespace is kept --------------------------------
+
+    def test_every_operation_keeps_the_namespace(self):
+        """Regression: each operation renamed ``ns:prop1`` into the CURRENT
+        namespace (``|PROP1``, ``|prop1_GEO``, ...), dropping ``ns``."""
+        cmds.namespace(add="ns")
+        runs = (
+            lambda n: Naming.set_case([n], "upper"),
+            lambda n: Naming.suffix_by_type([n]),
+            lambda n: Naming.strip_chars([n], 1, trailing=True),
+            lambda n: Naming.rename([n], "**_v2"),
+            lambda n: Naming.append_location_based_suffix([n]),
+        )
+        for run in runs:
+            node = cmds.polyCube(n="ns:prop1")[0]
+            uid = _uuid(node)
+            run(node)
+            path = cmds.ls(uid, long=True)[0]
+            self.assertTrue(path.split("|")[-1].startswith("ns:"), path)
+            cmds.delete(path)
+
+    def test_a_root_node_stays_in_the_root_while_another_namespace_is_current(self):
+        cmds.group(em=True, n="rootobj")
+        uid = _uuid("rootobj")
+        cmds.namespace(add="other")
+        cmds.namespace(setNamespace=":other")
+        Naming.rename(["|rootobj"], "moved")
+        self.assertEqual(cmds.ls(uid, long=True), ["|moved"])
+
+    # -- S1-B: the Scene scope is the user's objects ---------------------------
+
+    def test_scene_scope_holds_the_users_objects_only(self):
+        """Regression: the Scene scope was every DG node minus a few, so it
+        renamed script nodes, renderer singletons and construction history."""
+        cube = cmds.polyCube(n="crate")[0]  # also makes polyCube1 history
+        mat = cmds.shadingNode("lambert", asShader=True, n="crateMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, n="crateSG")
+        layer = cmds.createDisplayLayer(empty=True, n="propsLayer")
+        cmds.scriptNode(n="myScriptNode", beforeScript="pass", sourceType="python")
+        cmds.scriptNode(n="uiConfigurationScriptNode", beforeScript="pass")
+        cmds.createNode("unknown", n="pluginSingleton")
+        names = {n.split("|")[-1] for n in Naming.scene_objects()}
+        self.assertLessEqual({cube, mat, sg, layer}, names)
+        for system in ("polyCube1", "myScriptNode", "uiConfigurationScriptNode",
+                       "pluginSingleton", "time1", "lambert1", "persp"):
+            self.assertNotIn(system, names)
+        found, searched = Naming.select_by_name("*")
+        self.assertEqual(searched, len(Naming._user_nodes()))
+        self.assertNotIn("polyCube1", {f.split("|")[-1] for f in found})
+        self.assertNotIn("time1", {f.split("|")[-1] for f in found})
+
+    # -- S1-D / S2-C: two phases in every operation, nothing stranded ----------
+
+    def test_a_locked_node_in_a_location_batch_strands_nothing(self):
+        """Regression: the park ran before the skip filter and caught nothing:
+        RuntimeError, and the others left as p0000000000, p0000000001."""
+        a = cmds.group(em=True, n="a")
+        lk = cmds.group(em=True, n="lk")
+        b = cmds.group(em=True, n="b")
+        for i, node in enumerate((a, lk, b)):
+            cmds.move(i, 0, 0, node)
+        cmds.lockNode(lk, lock=True)
+        try:
+            with _Captured() as log:
+                Naming.append_location_based_suffix([a, lk, b])
+            leafs = {n.split("|")[-1] for n in cmds.ls(type="transform")}
+            self.assertFalse([n for n in leafs if "park" in n or n.startswith("p000")])
+            self.assertIn("lk", leafs)
+            self.assertLessEqual({"a_01", "b_03"}, leafs)
+            self.assertEqual(len(log.lines("Skipped")), 1, log.texts)
+        finally:
+            cmds.lockNode(lk, lock=False)
+
+    def test_a_swap_renames_both(self):
+        """Regression: obj1 -> obj2 / obj2 -> obj1 gave obj3, obj1."""
+        u1, u2 = _uuid(cmds.group(em=True, n="obj1")), _uuid(cmds.group(em=True, n="obj2"))
+        Naming.rename(["obj1", "obj2"], "obj2|obj1", "obj1|obj2")
+        self.assertEqual((_name(u1), _name(u2)), ("obj2", "obj1"))
+
+    # -- E: what Maya will not rename is skipped, in one line ------------------
+
+    def test_locked_and_default_nodes_are_skipped_in_one_line(self):
+        ok = cmds.group(em=True, n="okCube")
+        lk = cmds.group(em=True, n="lockedCube")
+        cmds.lockNode(lk, lock=True)
+        try:
+            with _Captured() as log:
+                result = Naming.rename(
+                    ["|persp", "lambert1", "time1", lk, ok], "**_x"
+                )
+            self.assertEqual(log.lines("Could not rename"), [])
+            self.assertEqual(len(log.lines("Skipped")), 1, log.texts)
+            self.assertEqual(result[-1], "okCube_x")
+            self.assertEqual(len(result), 5)
+        finally:
+            cmds.lockNode(lk, lock=False)
+
+    # -- F: a shape follows its transform -------------------------------------
+
+    def test_a_shape_selected_with_its_transform_follows_it(self):
+        """Regression: select -hi, then Suffix By Type named the shape
+        'seatShape_GEO'; Maya carries a shape along with its transform."""
+        seat = cmds.polyCube(n="seat")[0]
+        cmds.select(seat, hi=True)
+        Naming.suffix_by_type(cmds.ls(selection=True, long=True))
+        self.assertEqual(cmds.listRelatives("|seat_GEO", shapes=True), ["seat_GEOShape"])
+
+    # -- G: a numbered duplicate is re-affixed, not decorated -----------------
+
+    def test_suffix_by_type_re_affixes_a_numbered_duplicate(self):
+        """Regression: Ctrl+D of crate_GEO (crate_GEO1) came out crate_GEO1_GEO."""
+        dup = cmds.polyCube(n="crate_GEO1")[0]
+        idx = cmds.polyCube(n="wall_GEO_01")[0]
+        ud, ui = _uuid(dup), _uuid(idx)
+        Naming.suffix_by_type([dup, idx])
+        self.assertEqual((_name(ud), _name(ui)), ("crate1_GEO", "wall_01_GEO"))
+
+    # -- H: alphabetical numbering is re-runnable -----------------------------
+
+    def test_alphabetical_location_is_re_runnable(self):
+        """Regression: a second alphabetical run gave tile_C_C."""
+        tiles = []
+        for x in range(4):
+            tiles.append(_uuid(cmds.group(em=True, n="tile")))
+            cmds.move(x, 0, 0, cmds.ls(tiles[-1])[0])
+        Naming.append_location_based_suffix(cmds.ls(tiles), alphabetical=True)
+        first = [_name(u) for u in tiles]
+        self.assertEqual(first, ["tile_A", "tile_B", "tile_C", "tile_D"])
+        Naming.append_location_based_suffix(cmds.ls(tiles), alphabetical=True)
+        self.assertEqual([_name(u) for u in tiles], first)
+
+    def test_independent_groups_re_run_is_stable(self):
+        """A kept type suffix: the number before it is this tool's, so a re-run
+        groups the objects again instead of numbering each alone (collision)."""
+        u1 = _uuid(cmds.group(em=True, n="Container_GRP"))
+        u2 = _uuid(cmds.group(em=True, n="Container_GRP"))
+        cmds.move(10, 0, 0, cmds.ls(u2)[0])
+        for alphabetical, want in ((False, ("Container_01_GRP", "Container_02_GRP")),
+                                   (True, ("Container_A_GRP", "Container_B_GRP"))):
+            for _run in range(2):
+                Naming.append_location_based_suffix(
+                    cmds.ls([u1, u2]),
+                    independent_groups=True,
+                    strip_defined_suffixes=False,
+                    alphabetical=alphabetical,
+                    valid_suffixes=["_GRP"],
+                )
+                self.assertEqual((_name(u1), _name(u2)), want)
+
+    def test_alphabetical_keeps_a_side_marker(self):
+        """A letter the tool never wrote ('_L', '_R') is name content."""
+        left, right = cmds.group(em=True, n="arm_L"), cmds.group(em=True, n="arm_R")
+        cmds.move(1, 0, 0, right)
+        ul, ur = _uuid(left), _uuid(right)
+        Naming.append_location_based_suffix([left, right], alphabetical=True)
+        self.assertEqual((_name(ul), _name(ur)), ("arm_L_A", "arm_R_B"))
+
+    # -- K / L: every planned name is legalized -------------------------------
+
+    def test_strip_leading_keeps_the_digit(self):
+        """Regression: stripping 'a' from 'a1box' gave '_box'."""
+        u = _uuid(cmds.group(em=True, n="a1box"))
+        Naming.strip_chars(cmds.ls(u), 1)
+        self.assertEqual(_name(u), "_1box")
+
+    def test_every_planned_name_is_legalized(self):
+        """A leading digit gets '_' (Maya itself drops it: '1box' -> 'box');
+        a name with nothing legal left is skipped, with a warning."""
+        u = _uuid(cmds.group(em=True, n="c4"))
+        Naming.rename(cmds.ls(u), "1box")
+        self.assertEqual(_name(u), "_1box")
+        u = _uuid(cmds.group(em=True, n="c7"))
+        with _Captured() as log:
+            Naming.rename(cmds.ls(u), "---")
+        self.assertEqual(_name(u), "c7")
+        self.assertTrue(log.lines("no letters or digits"), log.texts)
+        u = _uuid(cmds.group(em=True, n="c6"))
+        with _Captured() as log:
+            Naming.rename(cmds.ls(u), "crate_#")
+        self.assertTrue(log.lines("not a counter"), log.texts)
+
+    # -- M: the dry run predicts Maya's numbering -----------------------------
+
+    def test_a_dry_run_predicts_the_live_numbering(self):
+        """Regression: the preview read 'box, box, box'; live gave box1, box2."""
+        cmds.group(em=True, n="box")
+        cubes = [cmds.group(em=True, n=f"pCube{i}") for i in (1, 2, 3)]
+        mat = cmds.shadingNode("lambert", asShader=True, n="mat")
+        g = cmds.group(em=True, n="g")
+        kid = cmds.group(em=True, n="kid", parent=g)
+        targets = cubes + [mat, kid]
+        uids = [_uuid(t) for t in targets]
+        dry = Naming.rename(targets, "box", dry_run=True)
+        with _Captured() as log:
+            live = Naming.rename(cmds.ls(uids, long=True), "box")
+        live_leafs = [_name(u) for u in uids]
+        # DAG siblings of 'box' number on; the DG node collides with every
+        # node name; the child of 'g' has no sibling 'box'.
+        self.assertEqual(live_leafs, ["box1", "box2", "box3", "box4", "box"])
+        self.assertEqual(dry, live_leafs)
+        self.assertEqual([n.split("|")[-1] for n in live], live_leafs)
+        self.assertEqual(log.lines("instead of"), [])
+
+    def test_a_frozen_scope_survives_a_parent_rename(self):
+        """Regression: Apply after the user renamed a parent found nothing in
+        scope -- the frozen long names had gone stale."""
+        g = cmds.group(em=True, n="grp")
+        kid = cmds.group(em=True, n="kid", parent=g)
+        cmds.select(kid)
+        frozen = Naming.scope_objects()
+        cmds.rename(g, "group_renamed_by_user")
+        Naming.rename(frozen, "**_v2")
+        self.assertTrue(cmds.objExists("|group_renamed_by_user|kid_v2"))
+
+    # -- S3: Find --------------------------------------------------------------
+
+    def test_find_matches_a_namespace_the_pattern_names(self):
+        cmds.namespace(add="ns")
+        cmds.group(em=True, n="ns:box")
+        cmds.group(em=True, n="box")
+        found, _searched = Naming.select_by_name("ns:*")
+        self.assertEqual(found, ["|ns:box"])
+        found, _searched = Naming.select_by_name("box")
+        self.assertEqual(sorted(found), ["|box", "|ns:box"])
+        # A regex group's '(?:' is no namespace: the leaf is matched as ever.
+        found, _searched = Naming.select_by_name("(?:box)", regex=True)
+        self.assertEqual(sorted(found), ["|box", "|ns:box"])
+
+    def test_locators_only_finds_every_instance(self):
+        loc = cmds.spaceLocator(n="aim")[0]
+        inst = cmds.instance(loc, n="aimInst")[0]
+        found, searched = Naming.select_by_name("aim*", locators_only=True)
+        self.assertEqual(sorted(found), sorted(cmds.ls([loc, inst], long=True)))
+        self.assertEqual(searched, 2)
+
+    # -- Suffix By Location's order --------------------------------------------
+
+    def _row(self):
+        """east, west, north, up, center, far_west, near_east -- the probe's L1."""
+        spots = {
+            "east": (3, 0, 0), "west": (-3, 0, 0), "north": (0, 0, -3),
+            "up": (0, 3, 0), "center": (0, 0, 0), "far_west": (-6, 0, 0),
+            "near_east": (1, 0, 0),
+        }
+        uids = {}
+        for name, pos in spots.items():
+            node = cmds.group(em=True, n=name)
+            cmds.move(*pos, node)
+            uids[name] = _uuid(node)
+        return uids
+
+    def test_location_orders_along_an_axis_by_signed_position(self):
+        uids = self._row()
+        Naming.append_location_based_suffix(cmds.ls(list(uids.values())), order="x")
+        got = {name: _name(u) for name, u in uids.items()}
+        # x: far_west -6, west -3, then the three at x=0 by y, z (north z=-3
+        # first, center, up y=3), near_east 1, east 3.
+        self.assertEqual(got["far_west"], "far_west_01")
+        self.assertEqual(got["west"], "west_02")
+        self.assertEqual(got["north"], "north_03")
+        self.assertEqual(got["center"], "center_04")
+        self.assertEqual(got["up"], "up_05")
+        self.assertEqual(got["near_east"], "near_east_06")
+        self.assertEqual(got["east"], "east_07")
+
+    def test_location_auto_numbers_along_the_row(self):
+        row = []
+        for x in (4, -2, 9, 0):
+            node = cmds.group(em=True, n="post")
+            cmds.move(x, 0.001 * x, 0, node)  # a row along X, a hair of Y noise
+            row.append(_uuid(node))
+        Naming.append_location_based_suffix(cmds.ls(row), order="auto")
+        self.assertEqual([_name(u) for u in row], ["post_03", "post_01", "post_04", "post_02"])
+        Naming.append_location_based_suffix(cmds.ls(row), order="auto", reverse=True)
+        self.assertEqual([_name(u) for u in row], ["post_02", "post_04", "post_01", "post_03"])
+
+    def test_location_distance_ties_break_by_position_not_selection(self):
+        """Regression: east and west at equal distance numbered in selection order."""
+        uids = self._row()
+        for names in (("east", "west"), ("west", "east")):
+            nodes = cmds.ls([uids[n] for n in names])
+            Naming.append_location_based_suffix(nodes, strip_trailing_ints=True)
+            self.assertEqual(_name(uids["west"]), "west_01")
+            self.assertEqual(_name(uids["east"]), "east_02")
+
+    def test_location_reads_the_pivot_not_the_bounding_box(self):
+        """Regression: an empty group's bounding box sits at the origin, so it
+        numbered first wherever it stood."""
+        null = cmds.group(em=True, n="nullA")
+        cmds.move(10, 0, 0, null)
+        box = cmds.polyCube(n="boxC")[0]
+        cmds.move(2, 0, 0, box)
+        un, ub = _uuid(null), _uuid(box)
+        Naming.append_location_based_suffix([null, box])
+        self.assertEqual((_name(ub), _name(un)), ("boxC_01", "nullA_02"))
+
+
 if __name__ == "__main__":
     unittest.main()

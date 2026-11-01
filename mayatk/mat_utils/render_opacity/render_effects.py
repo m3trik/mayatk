@@ -23,7 +23,6 @@ from mayatk.mat_utils.render_opacity.channels import (
     HIGHLIGHT,
     OPACITY,
     ChannelSpec,
-    spec_for,
 )
 
 
@@ -264,7 +263,7 @@ class RenderEffects(ptk.LoggingMixin):
             RuntimeError: When *delete_visibility_keys* is ``False`` and one
                 or more objects have visibility keyframes.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if mode not in ("attribute", "remove"):
             # Refused up front: past this point the objects' existing channel
             # (and, with delete_visibility_keys, their visibility keys) is
@@ -381,7 +380,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             List of ``(object_name, "in"|"out")`` per keyed object.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         objects = cls._selection_or(objects)
         if not objects:
             return []
@@ -626,7 +625,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             The keyed objects' short names.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         objects = cls._selection_or(objects)
         if not objects:
             return []
@@ -787,7 +786,7 @@ class RenderEffects(ptk.LoggingMixin):
         """
         from mayatk.node_utils._node_utils import NodeUtils
 
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         transforms = NodeUtils.get_transform_node(list(objects or [])) or []
         # The leaf the producer publishes (``render_effects``) and the GLB
         # node is named: no DAG path, no namespace.
@@ -799,6 +798,64 @@ class RenderEffects(ptk.LoggingMixin):
             colors=colors,
             fps=fps or cls._scene_fps() or 30.0,
         )
+
+    # ------------------------------------------------------------------
+    # The selection the Render Effects panel acts on
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def selected_objects(last_only: bool = False) -> List[str]:
+        """The objects the Render Effects actions act on: the selection, in
+        the order it was made -- or, with *last_only*, its lead alone (the
+        last selected; blendertk's twin reads the active object, Blender
+        keeping no selection order).
+
+        Parameters:
+            last_only: Only the selection's lead.
+
+        Returns:
+            Node names as ``cmds.ls(selection=True)`` gives them; ``[]`` when
+            nothing is selected, or outside Maya.
+        """
+        if cmds is None:
+            return []
+        objects = cmds.ls(selection=True) or []
+        return objects[-1:] if last_only else objects
+
+    @classmethod
+    def has_channel(cls, obj, channel="opacity") -> bool:
+        """Whether *obj* carries *channel*'s attribute (twin of blendertk's).
+
+        Parameters:
+            obj: A node.
+            channel: The channel name or spec; ``"opacity"``.
+
+        Raises:
+            KeyError: An unknown channel.
+        """
+        return OpacityAttributeMode.has_channel(obj, ChannelSpec.resolve(channel))
+
+    @staticmethod
+    def select_objects(objects) -> List[str]:
+        """Make *objects* the selection without recording an undo step -- a
+        view of them, not an edit (the Shot Manifest focusing the Render
+        Effects panel on one object) -- and return them resolved. Twin of
+        blendertk's.
+
+        Parameters:
+            objects: Nodes or names; the missing ones are dropped.
+
+        Returns:
+            Long names of the objects selected. With none resolved the
+            selection is left as it was (an empty ``cmds.ls`` would have
+            listed every node).
+        """
+        names = [str(o) for o in objects or ()]
+        resolved = (cmds.ls(names, long=True) or []) if names and cmds else []
+        if resolved:
+            with CoreUtils.undo_disabled():
+                cmds.select(resolved, replace=True)
+        return resolved
 
     # ------------------------------------------------------------------
     # Colour revision
@@ -814,7 +871,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             Long names, in scene order.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         return [
             obj
             for obj in (cmds.ls(type="transform", long=True) or [])
@@ -840,7 +897,7 @@ class RenderEffects(ptk.LoggingMixin):
         Returns:
             ``{long name: (r, g, b)}``, skipping objects without the channel.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if objects is None:
             objects = cls.objects_with_channel(spec)
         colors: Dict[str, Tuple] = {}
@@ -863,7 +920,7 @@ class RenderEffects(ptk.LoggingMixin):
             ``{long name: ((r, g, b) | None, ...)}``, skipping objects without
             the channel.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if objects is None:
             objects = cls.objects_with_channel(spec)
         out: Dict[str, Tuple] = {}
@@ -899,7 +956,7 @@ class RenderEffects(ptk.LoggingMixin):
         Raises:
             ValueError: When *color* is missing, or the channel has no colour.
         """
-        spec = spec_for(channel)
+        spec = ChannelSpec.resolve(channel)
         if color is None:
             raise ValueError("A colour is required.")
         if objects is None:
@@ -1002,11 +1059,15 @@ class RenderEffects(ptk.LoggingMixin):
         range as a seed.
 
         Parameters:
-            ctx: The export's decisions (``clip_span``) and the records
-                produced before this one -- the shot record's ``fps`` and the
-                takes its clips declare (``ptk.SceneRecords.declared_takes``);
-                the stored records are read when this assembly did not produce
-                them (an authoring-time republish).
+            ctx: The export's decisions (``clip_span``, ``nodes``) and the
+                records produced before this one -- the shot record's ``fps``
+                and the takes its clips declare
+                (``ptk.SceneRecords.declared_takes``); the stored records are
+                read when this assembly did not produce them (an authoring-time
+                republish). A scoped write keeps the tracks of the nodes it
+                ships, and its take spans count their curves alone (the record
+                is ``export_scoped``): another node's keys are no channel of
+                this file, and a track for it warned "not in this GLB".
 
         A scene that declares takes publishes the whole-timeline entry even
         with no keyed visibility, as the record's only content: it is what
@@ -1022,7 +1083,7 @@ class RenderEffects(ptk.LoggingMixin):
             measured origin of declared takes (the publisher then clears the
             channel).
         """
-        tracks = cls.visibility_tracks()
+        tracks = [track for track in cls.visibility_tracks() if ctx.ships(track["node"])]
         if not tracks and ctx.clip_span is None:
             return None
 
@@ -1061,7 +1122,11 @@ class RenderEffects(ptk.LoggingMixin):
             clip_spans=ptk.MeshConvert.clip_spans(
                 (),
                 takes if tracks else (),
-                key_spans=cls._scene_key_spans if tracks else None,
+                key_spans=(
+                    (lambda windows: cls._scene_key_spans(windows, ctx))
+                    if tracks
+                    else None
+                ),
                 stack_range=stack_range,
             ),
         )
@@ -1332,7 +1397,9 @@ class RenderEffects(ptk.LoggingMixin):
 
     @classmethod
     def _scene_key_spans(
-        cls, windows: List[Tuple[Optional[float], Optional[float]]]
+        cls,
+        windows: List[Tuple[Optional[float], Optional[float]]],
+        ctx: Optional[ptk.ExportContext] = None,
     ) -> List[Optional[Tuple[float, float]]]:
         """Per window, the scene's first and last authored key inside it.
 
@@ -1345,10 +1412,25 @@ class RenderEffects(ptk.LoggingMixin):
         indices (``AnimUtils.curve_key_spans``): listing every key time cost
         10 s a pass on a post-bake production assembly, and the export bracket
         and ``export_data_node`` each run one (2026-09-14).
+
+        A scoped *ctx* counts the curves of the write alone: one driving a
+        DAG node it leaves out is no channel of the file (``ctx.ships``). A
+        curve driving a node outside the DAG (a blend shape's weight, a
+        shader's input) still counts -- what it animates may ride a shipped
+        mesh.
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
 
-        curves = [curve for curve, _plug in cls._curve_outputs()]
+        pairs = cls._curve_outputs()
+        if ctx is not None and ctx.nodes is not None:
+            driven = {plug.partition(".")[0] for _curve, plug in pairs}
+            dag = set(cmds.ls(list(driven), type="dagNode") or []) if driven else set()
+            pairs = [
+                (curve, plug)
+                for curve, plug in pairs
+                if plug.partition(".")[0] not in dag or ctx.ships(plug.partition(".")[0])
+            ]
+        curves = [curve for curve, _plug in pairs]
         return AnimUtils.curve_key_spans(curves, windows)
 
     @classmethod
@@ -1372,7 +1454,7 @@ class RenderEffects(ptk.LoggingMixin):
             # cls.logger.warning("No objects selected.")
             return
 
-        spec = spec_for(channel) if channel is not None else None
+        spec = ChannelSpec.resolve(channel) if channel is not None else None
         modes = [mode] if mode else ["material", "attribute"]
 
         # Legacy material-mode leftovers BEFORE the attribute — the

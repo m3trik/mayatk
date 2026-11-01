@@ -10,7 +10,6 @@ Tests for DisplayUtils class functionality including:
 - Visible geometry queries
 """
 
-import types
 import unittest
 import maya.cmds as cmds
 import mayatk as mtk
@@ -536,69 +535,24 @@ class TestColorIdSets(MayaTkTestCase):
         self.assertEqual(len(cmds.ls(sets=True) or []), before)
 
 
-class _StubCheckBox:
-    """``isChecked``-only stand-in for a channel checkbox."""
+class TestColorIdChannelScope(MayaTkTestCase):
+    """Each channel resets on its own, and the API the shared Color ID panel calls
+    (tentacle's ``slots/tools/color_id.py``, whose channel wiring is tested there).
 
-    def __init__(self, state):
-        self._state = bool(state)
-
-    def isChecked(self):
-        return self._state
-
-
-class _StubSwitchboard:
-    """Switchboard stand-in — the reset path reads only the Ctrl modifier + message_box."""
-
-    CTRL = object()
-
-    def __init__(self):
-        self.messages = []
-        self.modifier = None  # set to CTRL to exercise the reset-everything path
-        self.app = types.SimpleNamespace(keyboardModifiers=lambda: self.modifier)
-        self.QtCore = types.SimpleNamespace(
-            Qt=types.SimpleNamespace(ControlModifier=self.CTRL)
-        )
-
-    def message_box(self, message, **kwargs):
-        self.messages.append(message)
-
-
-class TestColorIdSlotsChannelScope(MayaTkTestCase):
-    """The channel checkboxes scope Reset, not just Set Color / Select By Color.
-
-    Regression: ``b000`` called ``reset_colors(objects)`` with no flags, so all five
-    ``reset_*`` defaults (True) fired — clearing a wireframe tint also reassigned lambert1,
-    deleted the object's materials, its vertex-color sets and its ID set."""
+    Regression: the panel's Reset called ``reset_colors(objects)`` with no flags, so all
+    five ``reset_*`` defaults (True) fired — clearing a wireframe tint also reassigned
+    lambert1, deleted the object's materials, its vertex-color sets and its ID set."""
 
     RED = (0.8, 0.1, 0.1)
+    BLUE = (0.1, 0.2, 0.9)
 
     def setUp(self):
         super().setUp()
-        from mayatk.display_utils.color_id import ColorId, ColorIdSlots
+        from mayatk.display_utils.color_id import ColorId
 
         self.ColorId = ColorId
         self.cube = cmds.polyCube(name="cid_scope")[0]
         self.shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
-        # Slot instance without the Qt __init__: b000 touches only the checkboxes,
-        # the Ctrl modifier and message_box, all stubbed above.
-        self.slots = ColorIdSlots.__new__(ColorIdSlots)
-        self.slots.sb = _StubSwitchboard()
-
-    def _set_channels(
-        self,
-        wireframe=False,
-        outliner=False,
-        material=False,
-        vertex=False,
-        set_per_color=False,
-    ):
-        self.slots.ui = types.SimpleNamespace(
-            chk012=_StubCheckBox(wireframe),
-            chk013=_StubCheckBox(outliner),
-            chk014=_StubCheckBox(material),
-            chk015=_StubCheckBox(vertex),
-            chk016=_StubCheckBox(set_per_color),
-        )
 
     def _apply_every_channel(self):
         self.ColorId.apply_color(
@@ -612,10 +566,18 @@ class TestColorIdSlotsChannelScope(MayaTkTestCase):
         )
         cmds.select(self.cube)
 
+    def _reset(self, objects, **channels):
+        """``reset_colors`` with every channel off but *channels*."""
+        flags = dict.fromkeys(
+            ("reset_wireframe", "reset_outliner", "reset_material", "reset_vertex", "reset_sets"),
+            False,
+        )
+        flags.update(channels)
+        self.ColorId.reset_colors(objects, **flags)
+
     def test_reset_leaves_unchecked_channels_alone(self):
         self._apply_every_channel()
-        self._set_channels(wireframe=True)  # only the wireframe channel is enabled
-        self.slots.b000()
+        self._reset([self.cube], reset_wireframe=True)  # only the wireframe channel
 
         self.assertFalse(cmds.getAttr(f"{self.cube}.overrideEnabled"))
         # material kept (a reset would have swapped in lambert1's grey)
@@ -628,14 +590,7 @@ class TestColorIdSlotsChannelScope(MayaTkTestCase):
 
     def test_reset_clears_every_enabled_channel(self):
         self._apply_every_channel()
-        self._set_channels(
-            wireframe=True,
-            outliner=True,
-            material=True,
-            vertex=True,
-            set_per_color=True,
-        )
-        self.slots.b000()
+        self.ColorId.reset_colors([self.cube])  # every channel defaults on
 
         self.assertFalse(cmds.getAttr(f"{self.cube}.overrideEnabled"))
         self.assertFalse(cmds.getAttr(f"{self.cube}.useOutlinerColor"))
@@ -654,46 +609,90 @@ class TestColorIdSlotsChannelScope(MayaTkTestCase):
         found = self.ColorId.get_objects_by_color(self.RED, check_material_color=True)
         self.assertEqual([n.split("|")[-1] for n in found], ["cid_scope"])
 
-    def test_reset_with_no_channels_enabled_is_a_no_op(self):
-        self._apply_every_channel()
-        self._set_channels()
-        self.slots.b000()
-
-        self.assertTrue(cmds.getAttr(f"{self.cube}.overrideEnabled"))
-        self.assertTrue(self.slots.sb.messages)
-
-    def test_select_by_color_with_no_channels_keeps_the_selection(self):
-        """With nothing checked it fell through to a zero-check query, and answered the
-        empty result by clearing the user's selection."""
-        cmds.select(self.cube)
-        self._set_channels()
-        self.slots.b002()
-
-        self.assertEqual(
-            cmds.ls(selection=True, long=True), cmds.ls(self.cube, long=True)
-        )
-        self.assertTrue(self.slots.sb.messages)
-
-    def test_ctrl_click_reset_reaches_the_transforms(self):
-        """Ctrl+click sweeps ``cmds.ls(geometry=True)`` — shapes — but Set Color writes the
-        outliner/wireframe channels on the transform, so it has to walk up to reach them."""
+    def test_scene_objects_reach_the_transforms(self):
+        """The panel's Ctrl+click Reset covers ``scene_objects()``. It used to sweep
+        ``cmds.ls(geometry=True)`` — shapes — but Set Color writes the outliner and
+        wireframe channels on the transform, so that sweep cleared nothing."""
         self.ColorId.apply_color(
             [self.cube], self.RED, apply_to_wireframe=True, apply_to_outliner=True
         )
-        cmds.select(clear=True)  # the Ctrl path must not depend on a selection
-        self.slots.sb.modifier = self.slots.sb.CTRL
-        self._set_channels(wireframe=True, outliner=True)
-        self.slots.b000()
+        cmds.select(clear=True)  # scene-wide: no selection involved
+        objects = self.ColorId.scene_objects()
+        self.assertIn(cmds.ls(self.cube, long=True)[0], objects)
+        self._reset(objects, reset_wireframe=True, reset_outliner=True)
 
         self.assertFalse(cmds.getAttr(f"{self.cube}.overrideEnabled"))
         self.assertFalse(cmds.getAttr(f"{self.cube}.useOutlinerColor"))
 
     def test_reset_vertex_colors_accepts_shapes(self):
-        """Ctrl+click reset passes ``cmds.ls(geometry=True)`` — i.e. shapes, not transforms."""
+        """Ctrl+click reset used to pass ``cmds.ls(geometry=True)`` — shapes, not transforms."""
         self.ColorId.apply_color([self.cube], self.RED, apply_to_vertex=True)
         self.assertTrue(cmds.polyColorSet(self.shape, query=True, allColorSets=True))
         self.ColorId.reset_vertex_colors([self.shape])
         self.assertFalse(cmds.polyColorSet(self.shape, query=True, allColorSets=True))
+
+    def test_set_color_and_reset_are_one_undo_step_each(self):
+        prior = cmds.undoInfo(query=True, state=True)
+        # Standalone Maya starts with recording OFF: the undo below would pass vacuously.
+        cmds.undoInfo(state=True, infinity=True)
+        self.addCleanup(cmds.undoInfo, state=prior)
+        cmds.setAttr(f"{self.cube}.translateZ", 9.0)
+
+        self.ColorId.apply_color(
+            [self.cube], self.RED, apply_to_wireframe=True, apply_to_outliner=True
+        )
+        cmds.undo()
+        self.assertFalse(cmds.getAttr(f"{self.cube}.overrideEnabled"))
+        self.assertFalse(cmds.getAttr(f"{self.cube}.useOutlinerColor"))
+        self.assertEqual(
+            cmds.getAttr(f"{self.cube}.translateZ"), 9.0, "undid the edit BEFORE it"
+        )
+
+        self.ColorId.apply_color(
+            [self.cube], self.RED, apply_to_wireframe=True, apply_to_outliner=True
+        )
+        self._reset([self.cube], reset_wireframe=True, reset_outliner=True)
+        cmds.undo()
+        self.assertTrue(cmds.getAttr(f"{self.cube}.overrideEnabled"))
+        self.assertTrue(cmds.getAttr(f"{self.cube}.useOutlinerColor"))
+
+    def test_get_color_reads_the_enabled_channels_in_order(self):
+        self.ColorId.apply_color([self.cube], self.RED, apply_to_wireframe=True)
+        self.ColorId.apply_color([self.cube], self.BLUE, apply_to_outliner=True)
+
+        both = self.ColorId.get_color(
+            self.cube, check_wireframe_color=True, check_outliner_color=True
+        )
+        self.assertLess(self.ColorId.get_color_difference(both, self.BLUE), 1e-3)
+        wire = self.ColorId.get_color(self.cube, check_wireframe_color=True)
+        self.assertLess(self.ColorId.get_color_difference(wire, self.RED), 1e-3)
+        self.assertIsNone(self.ColorId.get_color(self.cube))  # no channel: no read
+
+        self.ColorId.apply_color([self.cube], self.RED, apply_to_vertex=True)
+        vertex = self.ColorId.get_color(self.cube, check_vertex_color=True)
+        self.assertIsNotNone(vertex)
+        self.assertLess(self.ColorId.get_color_difference(vertex, self.RED), 0.05)
+
+    def test_lead_object_is_the_last_selected(self):
+        other = cmds.polyCube(name="cid_other")[0]
+        cmds.select([other, self.cube])
+        self.assertEqual(self.ColorId.lead_object(), cmds.ls(self.cube, long=True)[0])
+        cmds.select(clear=True)
+        self.assertIsNone(self.ColorId.lead_object())
+
+    def test_select_by_color_replaces_the_selection(self):
+        other = cmds.polyCube(name="cid_other")[0]
+        self.ColorId.apply_color([self.cube], self.RED, apply_to_wireframe=True)
+        cmds.select(other)
+
+        found = self.ColorId.select_by_color(self.RED, check_wireframe_color=True)
+        self.assertEqual(found, cmds.ls(self.cube, long=True))
+        self.assertEqual(cmds.ls(selection=True, long=True), cmds.ls(self.cube, long=True))
+
+        self.assertEqual(
+            self.ColorId.select_by_color(self.BLUE, check_wireframe_color=True), []
+        )
+        self.assertEqual(cmds.ls(selection=True) or [], [])
 
 
 class TestHiddenInOutliner(MayaTkTestCase):
@@ -937,9 +936,9 @@ class TestIsolationSet(MayaTkTestCase):
     def test_dag_roots_keeps_parents_and_drops_dg_and_descendants(self):
         """Preview's node diff mixes long DAG paths with short DG names and
         lists every descendant; only the shallowest DAG paths are isolatable."""
-        from mayatk.core_utils.preview import Preview
+        from mayatk.core_utils.preview import MayaPreviewSession
 
-        roots = Preview._dag_roots(
+        roots = MayaPreviewSession._dag_roots(
             {"|grp", "|grp|child", "|grp|child|leaf", "|other", "lambert1", "polyCube1"}
         )
         self.assertEqual(roots, ["|grp", "|other"])
@@ -1018,6 +1017,206 @@ class TestIsolationSet(MayaTkTestCase):
         members = self._members(panel)
         for tube in tubes:
             self.assertIn(tube.split("|")[-1], members, f"{tube} not isolated")
+
+
+class TestDisplayToggles(MayaTkTestCase):
+    """The Display menu's toggles (``tentacle/slots/display.py`` calls them
+    through ``self.tk``; blendertk's twins answer the same in Blender)."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = cmds.polyCube(name="dt_a")[0]
+        self.b = cmds.polyCube(name="dt_b")[0]
+        self.c = cmds.polyCube(name="dt_c")[0]
+        cmds.select(clear=True)
+
+    def _xray(self, node):
+        shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+        return bool(cmds.displaySurface(shape, query=True, xRay=True)[0])
+
+    def test_hide_and_show_act_on_the_selection(self):
+        cmds.select(self.a)
+        self.assertEqual(mtk.DisplayUtils.hide_objects(), ["dt_a"])
+        self.assertFalse(cmds.getAttr(f"{self.a}.visibility"))
+        cmds.select(self.a)  # Maya selects a hidden node (the Outliner)
+        self.assertEqual(mtk.DisplayUtils.show_objects(), ["dt_a"])
+        self.assertTrue(cmds.getAttr(f"{self.a}.visibility"))
+
+    def test_nothing_selected_is_an_empty_list(self):
+        for op in (
+            mtk.DisplayUtils.hide_objects,
+            mtk.DisplayUtils.show_objects,
+            mtk.DisplayUtils.toggle_xray,
+            mtk.DisplayUtils.toggle_wireframe,
+            mtk.DisplayUtils.toggle_template,
+            mtk.DisplayUtils.toggle_uv_border_edges,
+        ):
+            with self.subTest(op=op.__name__):
+                self.assertEqual(op(), [])
+        self.assertTrue(cmds.getAttr(f"{self.a}.visibility"))
+
+    def test_toggle_xray_takes_the_selection(self):
+        cmds.select([self.a, f"{self.b}.f[0]"])  # a component stands for its mesh
+        self.assertEqual(mtk.DisplayUtils.toggle_xray(), (True, 2))
+        self.assertTrue(self._xray(self.a) and self._xray(self.b))
+        self.assertFalse(self._xray(self.c))
+
+    def test_xray_others_and_clear(self):
+        cmds.select(self.a)
+        self.assertEqual(mtk.DisplayUtils.toggle_xray_others(), (True, 2))
+        self.assertEqual(
+            [self._xray(n) for n in (self.a, self.b, self.c)], [False, True, True]
+        )
+        cmds.select(clear=True)  # nothing selected: every shape is "other"
+        self.assertEqual(mtk.DisplayUtils.toggle_xray_others(), (True, 3))
+        mtk.DisplayUtils.clear_xray()
+        self.assertFalse(any(self._xray(n) for n in (self.a, self.b, self.c)))
+
+    def test_wireframe_toggles_together_and_set_shades_again(self):
+        mtk.DisplayUtils.set_wireframe([self.b])
+        cmds.select([self.a, self.b])  # the first, shaded, decides: all wireframe
+        self.assertIs(mtk.DisplayUtils.toggle_wireframe(), True)
+        for node in (self.a, self.b):
+            self.assertEqual(cmds.getAttr(f"{node}.overrideShading"), 0)
+        self.assertIs(mtk.DisplayUtils.toggle_wireframe(), False)
+        self.assertEqual(cmds.getAttr(f"{self.a}.overrideShading"), 1)
+        mtk.DisplayUtils.set_wireframe([self.c])
+        self.assertEqual(mtk.DisplayUtils.set_wireframe([self.c], False), ["dt_c"])
+        self.assertEqual(cmds.getAttr(f"{self.c}.overrideShading"), 1)
+
+    def test_template_is_uniform(self):
+        cmds.setAttr(f"{self.b}.template", True)
+        cmds.select([self.a, self.b])  # mixed: template both
+        state, nodes = mtk.DisplayUtils.toggle_template()
+        self.assertTrue(state)
+        self.assertEqual(sorted(nodes), ["dt_a", "dt_b"])
+        self.assertTrue(mtk.DisplayUtils.is_templated(self.a))
+        state, _nodes = mtk.DisplayUtils.toggle_template([self.a, self.b])
+        self.assertFalse(state)
+        self.assertFalse(mtk.DisplayUtils.is_templated(self.b))
+
+    def test_uv_border_edges_toggle_uniformly(self):
+        cmds.select([self.a, self.b])
+        shown = mtk.DisplayUtils.toggle_uv_border_edges()
+        self.assertTrue(shown)
+        self.assertTrue(all(cmds.polyOptions(self.a, query=True, displayMapBorder=True)))
+        self.assertFalse(mtk.DisplayUtils.toggle_uv_border_edges())
+        locator = cmds.spaceLocator()[0]
+        self.assertIsNone(mtk.DisplayUtils.toggle_uv_border_edges([locator]))
+
+    def test_polygon_display_cycles(self):
+        cmds.select(self.a)
+        ids = [mtk.DisplayUtils.cycle_component_ids() for _ in range(5)]
+        self.assertEqual(ids, ["vertex", "edge", "face", "uv", "off"])
+        normals = [mtk.DisplayUtils.cycle_normals_display() for _ in range(4)]
+        self.assertEqual(normals, ["face", "vertex", "tangent", "off"])
+        first = mtk.DisplayUtils.toggle_soft_edge_display()
+        self.assertIsInstance(first, bool)
+        self.assertEqual(mtk.DisplayUtils.toggle_soft_edge_display(), not first)
+        cmds.select(clear=True)
+        self.assertIsNone(mtk.DisplayUtils.cycle_component_ids())
+        self.assertIsNone(mtk.DisplayUtils.cycle_normals_display())
+        self.assertIsNone(mtk.DisplayUtils.toggle_soft_edge_display())
+
+    @skipIfBatch("needs a model panel and the UV Editor's")
+    def test_viewport_toggles_flip_and_return(self):
+        for op in (
+            mtk.DisplayUtils.toggle_material_override,
+            mtk.DisplayUtils.toggle_wireframe_inactive,
+            mtk.DisplayUtils.toggle_uv_checker,
+        ):
+            with self.subTest(op=op.__name__):
+                first = op()
+                self.assertIsInstance(first, bool)
+                self.assertEqual(op(), not first)
+        first = mtk.DisplayUtils.toggle_uv_distortion()
+        self.assertIn(first, ("on", "off"))
+        self.assertNotEqual(mtk.DisplayUtils.toggle_uv_distortion(), first)
+
+    def test_the_wireframe_color_editor_has_a_friendly_name(self):
+        self.assertEqual(
+            mtk.UiUtils.get_editor_types()["Wireframe Color"], "objectColorPalette"
+        )
+
+
+class TestSmoothLevel(MayaTkTestCase):
+    """get_smooth_level / set_smooth_level: the subdivision panel's level controls."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="smooth_level_cube")[0]
+        self.shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+
+    def test_get_reads_the_first_mesh(self):
+        cmds.setAttr(f"{self.shape}.smoothLevel", 3)
+        self.assertEqual(mtk.DisplayUtils.get_smooth_level(self.cube)["level"], 3)
+        cmds.select(clear=True)
+        self.assertIsNone(mtk.DisplayUtils.get_smooth_level())
+
+    def test_set_turns_the_preview_on_and_reports_the_meshes(self):
+        took = mtk.DisplayUtils.set_smooth_level(self.cube, level=4)
+        self.assertEqual(len(took), 1)
+        self.assertEqual(cmds.getAttr(f"{self.shape}.smoothLevel"), 4)
+        self.assertEqual(cmds.getAttr(f"{self.shape}.displaySmoothMesh"), 2)
+        self.assertEqual(cmds.optionVar(q="proxyDivisions"), 4)
+
+    def test_a_locked_plug_raises_value_error(self):
+        cmds.setAttr(f"{self.shape}.smoothLevel", lock=True)
+        try:
+            with self.assertRaises(ValueError):
+                mtk.DisplayUtils.set_smooth_level(self.cube, level=5)
+        finally:
+            cmds.setAttr(f"{self.shape}.smoothLevel", lock=False)
+
+    def test_no_mesh_returns_empty(self):
+        curve = cmds.curve(degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        self.assertEqual(mtk.DisplayUtils.set_smooth_level(curve, level=2), [])
+        cmds.select(clear=True)
+        self.assertEqual(mtk.DisplayUtils.set_smooth_level(None, level=2), [])
+
+
+class TestToggleLocalAxes(MayaTkTestCase):
+    """``DisplayUtils.toggle_local_axes`` / ``joint_display_scale``: the Rigging
+    panel's Local Rotation Axes button and its Maya display scale."""
+
+    def test_joints_with_nothing_selected_toggle_every_joint(self):
+        cmds.select(clear=True)
+        a = cmds.joint(name="axes_a")
+        cmds.select(clear=True)
+        b = cmds.joint(name="axes_b", position=(0, 2, 0))
+        cmds.select(clear=True)
+        self.assertIs(mtk.DisplayUtils.toggle_local_axes(None, joints=True), True)
+        self.assertTrue(cmds.getAttr(f"{a}.displayLocalAxis"))
+        self.assertTrue(cmds.getAttr(f"{b}.displayLocalAxis"))
+        self.assertIs(mtk.DisplayUtils.toggle_local_axes(None, joints=True), False)
+        self.assertFalse(cmds.getAttr(f"{a}.displayLocalAxis"))
+
+    def test_selected_joints_toggle_alone(self):
+        cmds.select(clear=True)
+        a = cmds.joint(name="only_a")
+        cmds.select(clear=True)
+        b = cmds.joint(name="only_b", position=(0, 2, 0))
+        cmds.select(a)
+        mtk.DisplayUtils.toggle_local_axes(None, joints=True)
+        self.assertTrue(cmds.getAttr(f"{a}.displayLocalAxis"))
+        self.assertFalse(cmds.getAttr(f"{b}.displayLocalAxis"))
+
+    def test_objects_toggle_their_own_axes_and_nothing_is_none(self):
+        cube = cmds.polyCube(name="axes_cube")[0]
+        cmds.select(cube)
+        self.assertIs(mtk.DisplayUtils.toggle_local_axes(None), True)
+        self.assertTrue(cmds.getAttr(f"{cube}.displayLocalAxis"))
+        cmds.select(clear=True)
+        self.assertIsNone(mtk.DisplayUtils.toggle_local_axes(None))
+        self.assertIsNone(mtk.DisplayUtils.toggle_local_axes(None, joints=True))
+
+    @skipIfBatch("Joint display scales are a GUI session's display preference")
+    def test_joint_display_scale_reads_and_sets(self):
+        before = mtk.DisplayUtils.joint_display_scale("joint")
+        self.addCleanup(mtk.DisplayUtils.joint_display_scale, "joint", before)
+        self.assertAlmostEqual(mtk.DisplayUtils.joint_display_scale("joint", 1.5), 1.5)
+        with self.assertRaises(ValueError):
+            mtk.DisplayUtils.joint_display_scale("bone")
 
 
 if __name__ == "__main__":

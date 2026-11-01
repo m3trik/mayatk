@@ -237,68 +237,8 @@ class ExplodedView:
         self.exploded_objects.clear()
 
 
-class ExplodedViewSlots(ExplodedView):
-    """Exploded View Slots"""
-
-    def __init__(self, switchboard):
-        super().__init__()
-
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.exploded_view
-
-    def header_init(self, widget):
-        """Configure header help text."""
-        # Gesture-scoped window: pin button + auto-hide on key_show release.
-        widget.config_buttons("menu", "collapse", "pin")
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Exploded View",
-                body="Spread selected objects outward from their shared "
-                "center to inspect interior parts. Original world positions "
-                "are stored on each object via an <i>original_position</i> "
-                "attribute, so the explode is fully reversible.",
-                sections=[
-                    (
-                        "Actions",
-                        [
-                            "<b>Explode</b> — push selected objects away from the "
-                            "group's centroid by the configured factor.",
-                            "<b>Un-Explode</b> — return selected objects to their "
-                            "stored positions.",
-                            "<b>Un-Explode All</b> — reset every exploded object "
-                            "in the scene (regardless of selection).",
-                            "<b>Toggle Explode</b> — alternate between exploded "
-                            "and original views on the current selection.",
-                        ],
-                    ),
-                ],
-            )
-        )
-
-    def b000(self):
-        """Explode button"""
-        self.explode()
-
-    def b001(self):
-        """Un-explode selected button"""
-        self.un_explode()
-
-    def b002(self):
-        """Un-explode all button"""
-        self.un_explode_all()
-
-    def b003(self):
-        """Toggle Exlode"""
-        self.toggle_explode()
-
-
 # -----------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("exploded_view", reload=True)
-    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

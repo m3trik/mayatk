@@ -554,16 +554,6 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         logged = " ".join(str(call.args[0]) for call in warned.call_args_list)
         self.assertIn("cancelled", logged)
 
-    def test_holding_esc_cancels_the_panels_process_button(self):
-        """The panel's Process (``b000``) runs inside the dispatcher's
-        CancelScope (``@Cancelable``) -- the scope a hidden run polls. Without
-        it nothing activates one, and Esc held over a stuck run did nothing.
-        Added: 2026-10-19"""
-        from mayatk.uv_utils.rizom_bridge.rizom_bridge_slots import RizomBridgeSlots
-
-        meta = getattr(RizomBridgeSlots.b000, "_cancelable_meta", None) or {}
-        self.assertGreater(meta.get("timeout") or 0, 0)
-
     def test_passthrough_script_still_substitutes_params(self):
         """A script with its own ZomLoad/ZomSave skips the wrapper but must
         still get version-stripping + placeholder substitution."""
@@ -2114,78 +2104,99 @@ class TestRizomBridgeNonAsciiPaths(MayaTkTestCase):
                 self.assertLessEqual(max(us), 1.0, "the pack never landed")
 
 
-class TestRizomBridgeUiResize(MayaTkTestCase):
-    """The window must shrink/grow when the active script's parameters change."""
+class TestRizomBridgePanelSurface(MayaTkTestCase):
+    """What tentacle's RizomUV Bridge reads off the engine: the preset folder, the
+    registry, the presets and rows the installed version runs, and what Process
+    runs for a preset. Nothing launches RizomUV (those calls are stood in for)."""
 
-    def test_window_height_tracks_visible_param_rows(self):
-        """Switching scripts hides/shows rows and the window follows."""
-        from qtpy import QtWidgets
-        from uitk import Switchboard
-        from mayatk.uv_utils.rizom_bridge.rizom_bridge_slots import (
-            RizomBridgeSlots,
-        )
-        from mayatk.uv_utils.rizom_bridge import _rizom_bridge as bridge_mod
-        from mayatk.uv_utils.rizom_bridge import parameters as _params
+    V2020 = r"C:/Program Files/Rizom Lab/RizomUV VS RS 2020.1/Rizomuv_VS.exe"
+    V2022 = r"C:/Program Files/Rizom Lab/RizomUV 2022.2/Rizomuv_VS.exe"
 
-        sb = Switchboard(
-            ui_source=str(bridge_mod._PKG_DIR),
-            slot_source=RizomBridgeSlots,
-        )
-        ui = sb.loaded_ui.rizom_bridge
-        # Don't load (or persist) saved geometry -- we want a controlled height.
-        ui.restore_window_size = False
-        ui.show()
-        QtWidgets.QApplication.processEvents()
-        ui.is_initialized = True
+    def test_the_folder_and_registry_are_the_engines(self):
+        self.assertEqual(RizomUVBridge.SCRIPT_DIR, _SCRIPT_DIR)
+        self.assertIs(RizomUVBridge.params_registry(), _params.Parameters)
 
-        cmb = ui.cmb000
-        items_by_text = {cmb.itemText(i): i for i in range(cmb.count())}
+    def test_a_preset_gated_above_the_installed_version_is_not_listed(self):
+        old = dict(RizomUVBridge(rizom_path=self.V2020).list_template_modes())
+        new = dict(RizomUVBridge(rizom_path=self.V2022).list_template_modes())
+        self.assertNotIn("unwrap_hybrid", old)
+        self.assertIn("unwrap_hybrid", new)
+        self.assertEqual(set(new), {p.stem for p in _SCRIPT_DIR.glob("*.lua")})
+        self.assertTrue(all(mode == "" for mode in new.values()))
 
-        # Only presets actually offered in the combo are selectable -- a
-        # version-gated preset (unwrap_hybrid below its gate) is absent, so
-        # compare among what the combo lists, not the file glob.
-        scripts = [
-            s for s in items_by_text if (bridge_mod._SCRIPT_DIR / f"{s}.lua").is_file()
-        ]
-
-        def row_count(stem):
-            path = bridge_mod._SCRIPT_DIR / f"{stem}.lua"
-            return len(
-                _params.Parameters.referenced_keys(path.read_text(encoding="utf-8"))
+    def test_the_rows_are_what_the_installed_version_keeps(self):
+        """Includes expand before the strip: a gated token living only in an
+        include must not re-surface as a row the send would drop."""
+        P = _params.Parameters
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        for path in (self.V2020, self.V2022):
+            bridge = RizomUVBridge(rizom_path=path)
+            expected = P.referenced_keys(
+                P.strip_unsupported(P.expand_includes(pack), bridge.rizom_version)
             )
+            self.assertEqual(bridge.referenced_keys(pack), expected, path)
+        old = RizomUVBridge(rizom_path=self.V2020).referenced_keys(pack)
+        self.assertNotIn("SCALING_MIX", old)  # no effect on 2020.1
+        self.assertIn("PACK_ROTATE_ENABLE", old)  # works there via Mode/Step
 
-        if len(scripts) < 2:
-            self.skipTest("Need at least two selectable scripts to compare heights.")
-        sorted_by_rows = sorted(scripts, key=row_count)
-        few, many = sorted_by_rows[0], sorted_by_rows[-1]
-        if row_count(few) == row_count(many):
-            self.skipTest("All selectable scripts reference the same param count.")
+    def test_process_round_trips_a_preset(self):
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "process_with_rizomuv") as run:
+            bridge.run_preset(["|a"], "pack", params={"ITERATIONS": 5})
+        run.assert_called_once_with(["|a"], preset="pack", params={"ITERATIONS": 5})
 
-        # Start with the wider preset and force the window taller than
-        # whatever fit would compute, so we can observe a shrink delta.
-        cmb.setCurrentIndex(items_by_text[many])
-        QtWidgets.QApplication.processEvents()
-        ui.resize(ui.width(), 800)
-        QtWidgets.QApplication.processEvents()
-        height_many = ui.height()
+    def test_send_opens_the_selection_one_way(self):
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "send_to_rizomuv") as send:
+            with mock.patch.object(bridge, "process_with_rizomuv") as run:
+                bridge.run_preset(["|a"], bridge.SEND_PRESET, params={})
+        send.assert_called_once_with(["|a"], params={})
+        run.assert_not_called()
 
-        cmb.setCurrentIndex(items_by_text[few])
-        # Drain the event queue enough for the deferred fit (QTimer.singleShot)
-        # to fire AND its resize() to settle.
-        for _ in range(5):
-            QtWidgets.QApplication.processEvents()
-        height_few = ui.height()
+    def test_the_header_counts_objects_not_component_entries(self):
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        selection = ["|cube.map[0:3]", "|cube.map[8:11]", "|sphere"]
+        with mock.patch.object(bridge, "process_with_rizomuv"):
+            with mock.patch.object(bridge.logger, "info") as said:
+                bridge.run_preset(selection, "pack")
+        lines = [str(call.args[0]) for call in said.call_args_list]
+        self.assertIn("--- pack on 2 object(s) ---", lines)
 
-        ui.close()
-        ui.deleteLater()
+    def test_pack_into_existing_needs_a_layout_to_pack_into(self):
+        """A mesh whose material no other mesh shares: warned, nothing runs."""
+        cube = cmds.polyCube(name="lonePackCube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="lonePackMat")
+        group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=group)
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "process_with_rizomuv") as run:
+            with mock.patch.object(bridge.logger, "warning") as warned:
+                bridge.pack_into_existing([cube])
+        run.assert_not_called()
+        self.assertIn("no existing layout", str(warned.call_args))
 
-        self.assertLess(
-            height_few,
-            height_many,
-            f"Window did not shrink: '{many}' ({row_count(many)} rows) "
-            f"@ {height_many}px -> '{few}' ({row_count(few)} rows) "
-            f"@ {height_few}px.",
+    def test_pack_into_existing_packs_into_the_shared_materials_layout(self):
+        """The processed set is every mesh on the material; only the selection
+        moves (``select_objects``)."""
+        layout = cmds.polyCube(name="layoutPackCube")[0]
+        new = cmds.polyCube(name="newPackCube")[0]
+        cmds.polyCube(name="unrelatedPackCube")  # on another material: stays out
+        shader = cmds.shadingNode("lambert", asShader=True, name="layoutPackMat")
+        group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader", force=True)
+        cmds.sets([layout, new], edit=True, forceElement=group)
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "process_with_rizomuv") as run:
+            bridge.pack_into_existing([new], params={"PACK_SPACING": 2})
+        (processed,), kwargs = run.call_args
+        self.assertEqual(
+            sorted(cmds.ls(processed, long=True)),
+            sorted(cmds.ls([layout, new], long=True)),
         )
+        self.assertEqual(kwargs["preset"], "pack_into_existing")
+        self.assertEqual(kwargs["select_objects"], [new])
+        self.assertEqual(kwargs["params"], {"PACK_SPACING": 2})
 
 
 class TestRizomBridgeSendFlow(MayaTkTestCase):

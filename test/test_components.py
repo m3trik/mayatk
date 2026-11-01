@@ -752,6 +752,17 @@ class TestComponents(MayaTkTestCase):
         with self.assertRaises(ValueError):
             Components.transfer_normals([grp1, grp2])
 
+    def test_transfer_normals_of_one_mesh_asks_for_a_source_and_a_target(self):
+        """The panel shows this error as it is: one mesh selected must read as a
+        missing target, not as a mesh that is not polygonal."""
+        cube = cmds.polyCube(name="lone_cube")[0]
+        with self.assertRaises(ValueError) as caught:
+            Components.transfer_normals([cube])
+        self.assertEqual(
+            str(caught.exception),
+            "Transfer needs a source mesh and one or more target meshes.",
+        )
+
     # -------------------------------------------------------------------------
     # Crease
     # -------------------------------------------------------------------------
@@ -1186,6 +1197,335 @@ class TestTransferNormalsPreservesDeformers(MayaTkTestCase):
         cmds.setAttr(f"{joints[1]}.rotateZ", 45)
         after = cmds.xform(f"{mesh}.vtx[*]", query=True, ws=True, t=True)
         self.assertLess(max(abs(a - b) for a, b in zip(before, after)), 1e-5)
+
+
+class TestNormalsOperations(MayaTkTestCase):
+    """The normals operations a panel shared by both hosts calls: each takes
+    objects or components, ``None`` takes the selection, one undo each."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="nrmCube")[0]
+
+    def _hard_edges(self, node):
+        info = cmds.polyInfo(f"{node}.e[*]", edgeToVertex=True) or []
+        return sum("Hard" in line for line in info)
+
+    def test_set_edge_softness_hardens_then_softens(self):
+        Components.set_edge_softness(self.cube, soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+        Components.set_edge_softness(self.cube, soft=True)
+        self.assertEqual(self._hard_edges(self.cube), 0)
+
+    def test_set_edge_softness_acts_on_the_given_edges_only(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        Components.set_edge_softness([f"{self.cube}.e[0]"], soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 1)
+
+    def test_none_takes_the_selection_and_leaves_it(self):
+        cmds.select(self.cube, replace=True)
+        Components.set_edge_softness(None, soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+        self.assertEqual(cmds.ls(sl=True), [self.cube])
+
+    def test_a_keyword_target_is_honored(self):
+        """``objects=`` by keyword: the given nodes, never the selection; a keyword
+        ``None`` takes the selection."""
+        cmds.select(clear=True)
+        Components.set_edge_softness(objects=self.cube, soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+        other = cmds.polyCube(name="nrmOther")[0]
+        Components.set_edge_softness(other, soft=True)
+        cmds.select(other, replace=True)
+        Components.set_edge_softness(objects=self.cube, soft=True)
+        self.assertEqual(self._hard_edges(self.cube), 0)
+        Components.set_edge_softness(objects=None, soft=False)
+        self.assertEqual(self._hard_edges(other), 12)
+
+    def test_set_edge_hardness_takes_the_selection_too(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        cmds.select(self.cube, replace=True)
+        Components.set_edge_hardness(None, 45, upper_hardness=0)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+
+    def test_set_to_face_normals_facets_a_softened_mesh(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        cmds.select(clear=True)
+        Components.set_to_face_normals(self.cube)
+        normals = cmds.polyNormalPerVertex(f"{self.cube}.vtx[0]", q=True, xyz=True)
+        distinct = {tuple(round(v, 3) for v in normals[i : i + 3]) for i in range(0, len(normals), 3)}
+        self.assertEqual(len(distinct), 3, "a cube corner faceted has three normals")
+        self.assertEqual(cmds.ls(sl=True), [], "the selection is left as it was")
+
+    def test_reverse_normals_flips_the_given_face(self):
+        def normal(face):
+            return [float(v) for v in cmds.polyInfo(face, faceNormals=True)[0].split()[2:5]]
+
+        face = f"{self.cube}.f[0]"
+        before = normal(face)
+        Components.reverse_normals([face], mode=0)
+        after = normal(face)
+        # polyInfo's face normal is not unit length: compare it negated.
+        for b, a in zip(before, after):
+            self.assertAlmostEqual(a, -b, places=3)
+
+    def test_toggle_normal_lock_locks_then_unlocks(self):
+        def locked():
+            return all(cmds.polyNormalPerVertex(f"{self.cube}.vtx[*]", q=True, freezeNormal=True))
+
+        self.assertIs(Components.toggle_normal_lock(self.cube), True)
+        self.assertTrue(locked())
+        self.assertIs(Components.toggle_normal_lock(self.cube), False)
+        self.assertFalse(locked())
+
+    def test_toggle_normal_lock_on_nothing_reports_none(self):
+        self.assertIsNone(Components.toggle_normal_lock([]))
+
+    def test_each_operation_is_one_undo(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        cmds.undoInfo(state=True)
+        Components.set_edge_softness(self.cube, soft=False)
+        cmds.undo()
+        self.assertEqual(self._hard_edges(self.cube), 0)
+
+
+class TestCreaseOperations(MayaTkTestCase):
+    """crease_edges / transfer_creased_edges as tentacle's composed crease panel
+    calls them: ``None`` for the selection, ``[]`` back when it is empty."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="crs_cube")[0]
+
+    def _creases(self, node):
+        return cmds.polyCrease(f"{node}.e[*]", query=True, value=True) or []
+
+    def test_none_creases_every_edge_of_a_selected_object(self):
+        cmds.select(self.cube)
+        self.assertEqual(len(Components.crease_edges(None, amount=5)), 12)
+        self.assertEqual(self._creases(self.cube), [5.0] * 12)
+
+    def test_none_creases_only_the_selected_edges(self):
+        cmds.select(f"{self.cube}.e[0:2]")
+        self.assertEqual(len(Components.crease_edges(None, amount=3)), 3)
+        values = self._creases(self.cube)
+        self.assertEqual(values[:3], [3.0] * 3)
+        self.assertTrue(all(v <= 0 for v in values[3:]), values)
+
+    def test_an_explicit_object_takes_all_its_edges(self):
+        self.assertEqual(len(Components.crease_edges(self.cube, amount=2)), 12)
+        self.assertEqual(self._creases(self.cube), [2.0] * 12)
+
+    def test_nothing_selected_returns_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(Components.crease_edges(None, amount=5), [])
+
+    def test_amount_none_leaves_the_crease(self):
+        Components.crease_edges(self.cube, amount=4)
+        Components.crease_edges(self.cube, angle=0)
+        self.assertEqual(self._creases(self.cube), [4.0] * 12)
+
+    def test_crease_is_one_undo(self):
+        cmds.undoInfo(state=True)
+        Components.crease_edges(self.cube, amount=5, angle=30)
+        cmds.undo()
+        self.assertTrue(all(v <= 0 for v in self._creases(self.cube)))
+
+    def test_transfer_from_the_first_selected(self):
+        tgt = cmds.polyCube(name="crs_tgt")[0]
+        cmds.polyCrease(f"{self.cube}.e[0]", value=5.0)
+        cmds.select([self.cube, tgt])
+        self.assertEqual(Components.transfer_creased_edges(None), [tgt])
+        self.assertEqual(self._creases(tgt)[0], 5.0)
+
+    def test_transfer_with_nothing_selected_returns_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(Components.transfer_creased_edges(None), [])
+
+    def test_transfer_of_one_object_asks_for_a_target(self):
+        cmds.select(self.cube)
+        with self.assertRaises(ValueError) as caught:
+            Components.transfer_creased_edges(None)
+        self.assertIn("target", str(caught.exception))
+
+
+class TestTransferMenu(MayaTkTestCase):
+    """``Components.get_transfer_types`` / ``transfer``: the shared Edit panel's
+    Transfer menu; ``_transfer_surfaces`` resolves the selection, source first."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = cmds.polyCube(name="A")[0]
+        self.b = cmds.polySphere(name="B")[0]
+        self.c = cmds.polyCylinder(name="C")[0]
+
+    def test_surfaces_keep_the_selection_order(self):
+        cmds.select([self.c, self.a, self.b], replace=True)
+        self.assertEqual(Components._transfer_surfaces(), ["C", "A", "B"])
+
+    def test_a_component_counts_as_its_surface(self):
+        cmds.select([self.b + ".vtx[0:3]", self.a], replace=True)
+        self.assertEqual(Components._transfer_surfaces(), ["B", "A"])
+
+    def test_surfaces_are_each_listed_once(self):
+        cmds.select([self.a, self.a + ".f[0]"], replace=True)
+        self.assertEqual(Components._transfer_surfaces(), ["A"])
+
+    def test_the_menu_is_mayas_transfer_items(self):
+        self.assertEqual(
+            list(Components.get_transfer_types()),
+            ["Maps", "Attribute Values", "Shading Sets", "Vertex Order"],
+        )
+
+    def test_nothing_selected_is_empty(self):
+        cmds.select(clear=True)
+        self.assertEqual(Components.transfer(None, "Shading Sets"), [])
+
+    def test_one_surface_asks_for_a_target(self):
+        cmds.select(self.a)
+        with self.assertRaises(ValueError) as caught:
+            Components.transfer(None, "Shading Sets")
+        self.assertIn("1 of 2", str(caught.exception))
+
+    def test_shading_sets_reach_the_target(self):
+        shader = cmds.shadingNode("lambert", asShader=True, name="xferLambert")
+        group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="xferSG")
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader")
+        cmds.sets(self.a, edit=True, forceElement=group)
+        cmds.select([self.a, self.b], replace=True)
+        try:
+            got = Components.transfer(None, "Shading Sets")
+        except RuntimeError as error:  # a MEL proc mayapy has not sourced
+            self.skipTest(f"performTransferShadingSets unavailable here: {error}")
+        self.assertEqual(got, ["A", "B"])
+        shapes = cmds.listRelatives(self.b, shapes=True) or []
+        self.assertIn(group, cmds.listConnections(shapes, type="shadingEngine") or [])
+
+
+class TestPolygonOperations(MayaTkTestCase):
+    """The polygon operations tentacle's composed polygons panel calls with
+    ``None``: ``[]`` back when nothing fits, each one undo step."""
+
+    def setUp(self):
+        super().setUp()
+        self.plane = cmds.polyPlane(sx=3, sy=3, name="pg_plane")[0]  # 16 verts
+
+    def _verts(self, node=None):
+        return cmds.polyEvaluate(node or self.plane, vertex=True)
+
+    def _faces(self, node=None):
+        return cmds.polyEvaluate(node or self.plane, face=True)
+
+    def test_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        for op in (
+            Components.extrude,
+            Components.inset_faces,
+            Components.divide_faces,
+            Components.circularize,
+            Components.fill_holes,
+            Components.symmetrize,
+            Components.bridge_edges,
+            Components.poke_faces,
+            Components.offset_edge_loops,
+            Components.edit_edge_flow,
+            Components.toggle_face_holes,
+        ):
+            with self.subTest(op=op.__name__):
+                self.assertEqual(op(None), [])
+        self.assertEqual(Components.collapse_components(None), ([], []))
+
+    def test_an_object_is_no_face(self):
+        cmds.select(self.plane)
+        self.assertEqual(Components.inset_faces(None), [])
+        self.assertEqual(Components.collapse_components(None), ([], []))
+        self.assertEqual(self._verts(), 16)
+
+    def test_extrude_swaps_its_settings_in_and_restores_maya_s(self):
+        names = ("polyExtrudeFaceDivisions", "polyExtrudeFaceThickness")
+        saved = {n: cmds.optionVar(q=n) for n in names if cmds.optionVar(exists=n)}
+        cmds.select(f"{self.plane}.f[4]")
+        Components.extrude(None, keep_faces_together=False, divisions=3, thickness=0.5)
+        node = (cmds.ls(type="polyExtrudeFace") or [None])[0]
+        self.assertIsNotNone(node)
+        self.assertEqual(cmds.getAttr(f"{node}.divisions"), 3)
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.thickness"), 0.5, places=4)
+        self.assertFalse(cmds.getAttr(f"{node}.keepFacesTogether"))
+        for n in names:
+            if n in saved:
+                self.assertEqual(cmds.optionVar(q=n), saved[n], n)
+            else:
+                self.assertFalse(cmds.optionVar(exists=n), n)
+
+    def test_inset_faces_offsets_and_raises_the_region(self):
+        result = Components.inset_faces(f"{self.plane}.f[4]", offset=0.05, depth=0.2)
+        node = cmds.ls(result, type="polyExtrudeFace")[0]
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.offset"), 0.05, places=4)
+        self.assertAlmostEqual(cmds.getAttr(f"{node}.thickness"), 0.2, places=4)
+        self.assertTrue(cmds.getAttr(f"{node}.keepFacesTogether"))
+        Components.inset_faces(f"{self.plane}.f[0]", individual=True)
+        node = cmds.ls(type="polyExtrudeFace")[-1]
+        self.assertFalse(cmds.getAttr(f"{node}.keepFacesTogether"))
+
+    def test_divide_faces_both_ways_makes_four_quads(self):
+        before = self._faces()
+        self.assertEqual(Components.divide_faces(f"{self.plane}.f[4]"), [f"{self.plane}.f[4]"])
+        self.assertEqual(self._faces(), before + 3)
+
+    def test_divide_faces_one_way_splits_in_strips(self):
+        before = self._faces()
+        Components.divide_faces(f"{self.plane}.f[4]", u=True, v=False, cuts=2)
+        self.assertEqual(self._faces(), before + 2)
+
+    def test_collapse_faces_each_to_its_own_point(self):
+        collapsed, skipped = Components.collapse_components(
+            [f"{self.plane}.f[0]", f"{self.plane}.f[8]"]
+        )
+        self.assertEqual(len(collapsed), 2)
+        self.assertEqual(skipped, [])
+        self.assertEqual(self._verts(), 10)
+
+    def test_collapse_names_the_edges_picked_beside_faces(self):
+        collapsed, skipped = Components.collapse_components(
+            [f"{self.plane}.f[0]", f"{self.plane}.e[20]"]
+        )
+        self.assertTrue(collapsed)
+        self.assertTrue(skipped)
+
+    def test_collapse_edges_merge_at_one_center(self):
+        collapsed, _ = Components.collapse_components(f"{self.plane}.e[0]")
+        self.assertTrue(collapsed)
+        self.assertEqual(self._verts(), 15)
+
+    def test_toggle_face_holes_round_trips(self):
+        holes, faces = Components.toggle_face_holes(f"{self.plane}.f[4]")
+        self.assertTrue(holes)
+        self.assertEqual(faces, [f"{self.plane}.f[4]"])
+        self.assertFalse(Components.toggle_face_holes(f"{self.plane}.f[4]")[0])
+
+    def test_distance_of_the_two_selected_vertices(self):
+        cmds.select([f"{self.plane}.vtx[0]", f"{self.plane}.vtx[1]"])
+        a = cmds.pointPosition(f"{self.plane}.vtx[0]", world=True)
+        b = cmds.pointPosition(f"{self.plane}.vtx[1]", world=True)
+        gap = sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
+        got = Components.adjusted_distance_between_vertices(
+            None, None, adjust=0.1, as_percentage=True
+        )
+        self.assertAlmostEqual(got, gap * 1.001, places=5)
+
+    def test_distance_needs_exactly_two_vertices(self):
+        cmds.select(f"{self.plane}.vtx[0]")
+        self.assertIsNone(Components.adjusted_distance_between_vertices(None, None))
+        cmds.select(self.plane)
+        self.assertIsNone(Components.adjusted_distance_between_vertices(None, None))
+
+    def test_poke_is_one_undo(self):
+        cmds.undoInfo(state=True)
+        cmds.select(f"{self.plane}.f[4]")
+        Components.poke_faces(None)
+        self.assertEqual(self._verts(), 17)
+        cmds.undo()
+        self.assertEqual(self._verts(), 16)
 
 
 if __name__ == "__main__":

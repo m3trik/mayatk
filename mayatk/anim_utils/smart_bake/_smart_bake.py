@@ -153,6 +153,12 @@ class BakeResult:
     the manifest persists on the ``data_internal`` node, so restore works
     even after scene save/reopen."""
 
+    restorable: bool = False
+    """Whether :meth:`SmartBake.restore` can fully reverse the session in
+    ``session_id``: ``False`` for a ``delete_inputs`` Base Layer bake, whose
+    session records only what Unbake then reports it cannot rebuild (and the
+    backup)."""
+
     _refused: Set[str] = field(default_factory=set, repr=False)
     """The skipped objects SmartBake declined (see :attr:`declined`)."""
 
@@ -193,6 +199,39 @@ class BakeResult:
     def success(self) -> bool:
         """Return True if any objects were baked."""
         return bool(self.baked)
+
+    def describe(self) -> List[str]:
+        """What the bake did, one line per fact, for a report (the Smart Bake
+        panel's output): each baked object with its channels; what was declined
+        and why -- never what merely had nothing to bake: every already-keyed
+        object is skipped too, and a count of those buried the refusals; the
+        sheared chain nodes flattened; the override layer; the drivers muted or
+        deleted; the backup. The session is the caller's to word
+        (:attr:`session_id`, :attr:`restorable`). Twin of blendertk's.
+
+        Returns:
+            List[str]: The lines, in that order.
+        """
+        lines = [f"{obj}: {', '.join(chans)}" for obj, chans in self.baked.items()]
+        lines.extend(
+            f"Declined {obj}: {reason}" for obj, reason in self.declined.items()
+        )
+        if self.flattened:
+            lines.append(
+                f"Flattened {len(self.flattened)} sheared chain node(s): they "
+                "fold to a sheared local no key can hold, so they were keyed "
+                "exactly under their nearest shear-free ancestor. Unbake returns "
+                "them to their chains."
+            )
+        if self.override_layer:
+            lines.append(f"Override layer: {self.override_layer}")
+        if self.muted_drivers:
+            lines.append(f"Muted {len(self.muted_drivers)} driver(s).")
+        if self.deleted:
+            lines.append(f"Deleted {len(self.deleted)} driver node(s).")
+        if self.backup_path:
+            lines.append(f"Backup saved: {self.backup_path}")
+        return lines
 
 
 class _SmartBakeInternal:
@@ -317,35 +356,31 @@ class _SmartBakeInternal:
                 return "scalar"
         return None
 
-    @staticmethod
-    def _nearest_euler(euler, previous):
-        """*euler* (or its alternate solution), unwrapped to sit nearest *previous*.
+    #: ``MEulerRotation.order`` (the ``rotateOrder`` enum) -> its axes, the
+    #: first applied first: ``ptk.Quaternion``'s spelling of an order.
+    _EULER_ORDERS = ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx")
+
+    @classmethod
+    def _nearest_euler(cls, euler, previous):
+        """*euler* spelled to sit nearest *previous* (``ptk.Quaternion.euler_near``,
+        the rule pythontk's glTF reader keys with too).
 
         The Euler filter a per-frame decomposition needs: each frame's split
-        is independent, so without this a rotation passing 180 degrees flips
-        to the equivalent (x+180, 180-y, z+180) triple and the curve jumps.
+        is independent, so without it a rotation passing 180 degrees flips to
+        its twin triple and the curve jumps, and at gimbal lock
+        ``MEulerRotation`` puts the whole turn on the inner angle, which spiked
+        both curves of a sweep riding the outer one for a frame.
         """
         import maya.api.OpenMaya as om2
 
         if previous is None:
             return euler
-        best = None
-        best_cost = None
-        for candidate in (euler, euler.alternateSolution()):
-            comps = []
-            for value, prior in zip(
-                (candidate.x, candidate.y, candidate.z),
-                (previous.x, previous.y, previous.z),
-            ):
-                value += 2.0 * math.pi * round((prior - value) / (2.0 * math.pi))
-                comps.append(value)
-            cost = sum(
-                abs(v - p) for v, p in zip(comps, (previous.x, previous.y, previous.z))
-            )
-            if best_cost is None or cost < best_cost:
-                best_cost = cost
-                best = om2.MEulerRotation(comps[0], comps[1], comps[2], euler.order)
-        return best
+        near = ptk.Quaternion.euler_near(
+            cls._EULER_ORDERS[euler.order],
+            [math.degrees(v) for v in (euler.x, euler.y, euler.z)],
+            [math.degrees(v) for v in (previous.x, previous.y, previous.z)],
+        )
+        return om2.MEulerRotation([math.radians(v) for v in near], euler.order)
 
     @staticmethod
     def _set_doubles(pairs) -> None:
@@ -3525,6 +3560,7 @@ class SmartBake(_SmartBakeInternal):
                     session["override_layer"] = None  # recorded at creation; gone
                 bake_session.BakeSessionStore.push(session)
                 result.session_id = session["id"]
+                result.restorable = bool(session["restorable"])
             else:
                 # Bake was a no-op — discard any stashes created for it.
                 for record in session["stashed_curves"]:

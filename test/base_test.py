@@ -156,6 +156,18 @@ def make_temp_wav(name: str, duration_sec: float = 0.5, sr: int = 22050) -> str:
     return path
 
 
+def child_python():
+    """The interpreter a test spawns a Python child with.
+
+    Inside a GUI Maya (``--gui``, the Script Editor runner) ``sys.executable``
+    is ``maya.exe``, whose ``-c`` starts another GUI Maya that never exits;
+    the ``mayapy`` beside it runs the child instead.
+    """
+    import pythontk as ptk
+
+    return ptk.AppLauncher.companion_python() or sys.executable
+
+
 def import_without_maya(module_name, null_attrs):
     """Import *module_name* in a subprocess with ``maya`` blocked.
 
@@ -186,7 +198,11 @@ def import_without_maya(module_name, null_attrs):
     ]
     env["PYTHONPATH"] = os.pathsep.join(roots + [env.get("PYTHONPATH", "")])
     return subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, env=env
+        [child_python(), "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
     )
 
 

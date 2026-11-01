@@ -3,12 +3,12 @@
 """Tests for mayatk.edit_utils.curtain (the tool subpackage).
 
 Separation of concerns mirrors the module: :class:`Rail` (rail geometry),
-:class:`CurtainMesh` (the drape/deformation), and :class:`CurtainRig` (the
-wire deformer + cluster rig) are exercised independently.
+:class:`CurtainMesh` (the drape/deformation), :class:`CurtainRig` (the
+wire deformer + cluster rig) and :class:`Curtain` (the tool API tentacle's
+panel calls) are exercised independently.
 """
 
 import statistics
-import types
 import unittest
 from pathlib import Path
 
@@ -24,12 +24,11 @@ import pythontk as ptk
 
 from base_test import MayaTkTestCase
 from mayatk.edit_utils.curtain import (
+    Curtain,
     CurtainMesh,
     Rail,
     CurtainRig,
-    CurtainSlots,
 )
-from mayatk.edit_utils.curtain.curtain_slots import _PRESETS_DIR
 
 
 class CatenaryMathTest(MayaTkTestCase):
@@ -743,9 +742,12 @@ class PresetTest(MayaTkTestCase):
     def test_builtin_presets_load(self):
         import pythontk as ptk
 
-        self.assertTrue(Path(_PRESETS_DIR).is_dir(), "presets dir must exist")
+        self.assertTrue(
+            Path(Curtain.BUILTIN_PRESET_DIR).is_dir(), "presets dir must exist"
+        )
+        self.assertEqual(Curtain.PRESET_DIR, "mayatk/curtain")
         store = ptk.PresetStore(
-            "curtain", package="mayatk", builtin_dir=str(_PRESETS_DIR)
+            "curtain", package="mayatk", builtin_dir=Curtain.BUILTIN_PRESET_DIR
         )
         names = store.list(tier="builtin")
         self.assertEqual(
@@ -759,31 +761,48 @@ class PresetTest(MayaTkTestCase):
             self.assertIn("s004", data)  # gravity
 
 
-class FooterTest(MayaTkTestCase):
-    """The footer reports the result's triangle count, and clears when empty."""
+class CurtainApiTest(MayaTkTestCase):
+    """The tool API tentacle's Curtain panel calls: names in, names out."""
 
-    class _Footer:
-        def __init__(self):
-            self._t = ""
-
-        def setStatusText(self, t):
-            self._t = t
-
-    def test_update_footer_reports_tris(self):
-        curtain = cmds.polyPlane(name="curt_footer", subdivisionsX=4, subdivisionsY=4)[
-            0
-        ]
-        tris = cmds.polyEvaluate(curtain, triangle=True)
-        fake = types.SimpleNamespace(
-            ui=types.SimpleNamespace(footer=self._Footer()), last_curtain=curtain
+    def test_create_returns_the_curtains_name(self):
+        rail, _ = Rail.make()
+        name = Curtain.create(rail, hanging_points=4)
+        self.assertNodeExists(name)
+        self.assertEqual(
+            Curtain.triangle_count(name), cmds.polyEvaluate(name, triangle=True)
         )
-        CurtainSlots._update_footer(fake)
-        self.assertEqual(fake.ui.footer._t, f"{tris:,} tris")
 
-        # No result -> cleared (falls back to the default hint).
-        fake.last_curtain = None
-        CurtainSlots._update_footer(fake)
-        self.assertEqual(fake.ui.footer._t, "")
+    def test_triangle_count_of_nothing_is_none(self):
+        self.assertIsNone(Curtain.triangle_count(None))
+        self.assertIsNone(Curtain.triangle_count("noSuchCurtain"))
+
+    def test_rail_curve_builds_then_reshapes_in_place(self):
+        cvs = Rail.resample(Rail.make(width=6.0)[0], 5)
+        curve = Curtain.rail_curve(cvs, select=True)
+        self.assertEqual(cmds.ls(selection=True), [curve])
+        self.assertEqual(len(cmds.ls(f"{curve}.cv[*]", flatten=True)), 5)
+
+        wide = Rail.resample(Rail.make(width=12.0)[0], 7)
+        self.assertEqual(Curtain.rail_curve(wide, curve=curve), curve, "one node")
+        self.assertEqual(len(cmds.ls(f"{curve}.cv[*]", flatten=True)), 7)
+        bb = cmds.exactWorldBoundingBox(curve)
+        self.assertGreater(bb[3] - bb[0], 9.0)
+
+        Curtain.rail_curve(wide, closed=True, curve=curve)
+        shape = cmds.listRelatives(curve, shapes=True, fullPath=True)[0]
+        self.assertIn(cmds.getAttr(f"{shape}.form"), (1, 2))
+
+    def test_delete_rail_curve(self):
+        curve = Curtain.rail_curve(Rail.resample(Rail.make()[0], 4))
+        Curtain.delete_rail_curve(curve)
+        self.assertFalse(cmds.objExists(curve))
+        Curtain.delete_rail_curve(curve)  # gone: a no-op
+        Curtain.delete_rail_curve(None)
+
+    def test_rail_from_selection_is_the_rails(self):
+        crv = cmds.curve(point=[(0, 5, 0), (2, 5, 1), (4, 5, 0), (6, 5, 1)], degree=3)
+        self.assertEqual(Curtain.rail_from_selection([crv]), Rail.from_selection([crv]))
+        self.assertIsNone(Curtain.rail_from_selection([]))
 
 
 if __name__ == "__main__":

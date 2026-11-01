@@ -126,6 +126,7 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
         selection_type: str,
         objects: List[Union[str, object]] = None,
         mode: str = "replace",
+        scope: str = None,
     ) -> List[object]:
         """Select objects by type with comprehensive type support.
 
@@ -133,12 +134,18 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             selection_type (str): The type of objects to select
             objects (List[Union[str, object]], optional): Objects to filter from. If None, uses current selection or all scene objects
             mode (str): Selection mode - "replace", "add", or "remove"
+            scope (str, optional): With *objects* None: draw them from
+                :meth:`objects_in_scope` (``"all"``, ``"selected"`` or ``"visible"``).
 
         Returns:
             List[object]: Selected objects
         """
         if objects is None:
-            objects = cmds.ls(selection=True) or cmds.ls()
+            objects = (
+                Selection.objects_in_scope(scope)
+                if scope
+                else cmds.ls(selection=True) or cmds.ls()
+            )
 
         if not objects:
             return []
@@ -459,6 +466,434 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             **{flag: mode != "meshes_only" for flag in cls._CONTROL_SELECT_TYPES}
         )
         return locked
+
+    # ------------------------------------------------------------------
+    # The selection panel's operations (twins in blendertk's Selection)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def objects_in_scope(scope: str = "all") -> List[str]:
+        """The objects a selection filter draws from. Twin of blendertk's.
+
+        Parameters:
+            scope (str): ``"all"`` (every node in the scene), ``"selected"`` or
+                ``"visible"``.
+
+        Raises:
+            ValueError: An unknown *scope*.
+        """
+        if scope == "selected":
+            return cmds.ls(selection=True) or []
+        if scope == "visible":
+            return cmds.ls(visible=True) or []
+        if scope == "all":
+            return cmds.ls() or []
+        raise ValueError(
+            f"Unknown scope {scope!r}: use 'all', 'selected' or 'visible'."
+        )
+
+    @staticmethod
+    def reorder_selection(
+        objects=None, method: str = "name", reverse: bool = False
+    ) -> List[str]:
+        """Reselect *objects* in the order *method* sorts them
+        (:meth:`CoreUtils.reorder_objects`), so tools reading the selection
+        order see it. Twin of blendertk's (which records the order on its
+        ``SelectionOrder`` tracker).
+
+        Returns:
+            list: The objects in their new order; ``[]`` with none.
+        """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True, flatten=True) or []
+        )
+        if not nodes:
+            return []
+        reordered = CoreUtils.reorder_objects(nodes, method=method, reverse=reverse)
+        if reordered:
+            cmds.select(reordered, replace=True)
+        return list(reordered or [])
+
+    #: Convert To: conversion name -> the MEL Maya's Select > Convert Selection
+    #: menu runs for it (``None``: Border Edges, from ``Components``).
+    _CONVERSIONS = {
+        "vertices": "PolySelectConvert 3",
+        "vertex_faces": "PolySelectConvert 5",
+        "vertex_perimeter": "ConvertSelectionToVertexPerimeter",
+        "edges": "PolySelectConvert 2",
+        "edge_loop": "SelectEdgeLoopSp",
+        "edge_ring": "SelectEdgeRingSp",
+        "contained_edges": "PolySelectConvert 20",
+        "edge_perimeter": "ConvertSelectionToEdgePerimeter",
+        "border_edges": None,
+        "faces": "PolySelectConvert 1",
+        "face_path": 'polySelectEdges "edgeRing"',
+        "contained_faces": "PolySelectConvert 10",
+        "face_perimeter": "polySelectFacePerimeter",
+        "uvs": "PolySelectConvert 4",
+        "uv_shell": "polySelectBorderShell 0",
+        "uv_shell_border": "polySelectBorderShell 1",
+        "uv_perimeter": "ConvertSelectionToUVPerimeter",
+        "uv_edge_loop": 'polySelectEdges "edgeUVLoopOrBorder"',
+        "shell": "polyConvertToShell",
+        "shell_border": "polyConvertToShellBorder",
+    }
+
+    @classmethod
+    def get_conversion_types(cls) -> List[str]:
+        """The conversions :meth:`convert_selection` knows, in menu order. Twin
+        of blendertk's (which has no vertex-face or UV component)."""
+        return list(cls._CONVERSIONS)
+
+    @classmethod
+    def convert_selection(cls, conversion: str) -> List[str]:
+        """Convert the component selection (Maya's Select > Convert Selection).
+        Twin of blendertk's ``Selection.convert_selection``.
+
+        Parameters:
+            conversion (str): One of :meth:`get_conversion_types`.
+
+        Returns:
+            list: The selection after; ``[]`` with nothing selected.
+
+        Raises:
+            ValueError: An unknown *conversion*, or nothing to take border
+                edges of.
+        """
+        if conversion not in cls._CONVERSIONS:
+            raise ValueError(f"Unknown conversion {conversion!r}.")
+        selection = cmds.ls(selection=True) or []
+        if not selection:
+            return []
+        command = cls._CONVERSIONS[conversion]
+        if command is None:
+            from mayatk.core_utils.components import Components
+
+            edges = Components.get_components(selection, "edges")
+            if not edges:
+                raise ValueError("No edges to take the border of: select a mesh or faces.")
+            cmds.select(Components.get_border_components(edges), replace=True)
+        else:
+            mel.eval(command)
+        return cmds.ls(selection=True) or []
+
+    #: Selection constraints -> the ``polySelectConstraint`` flags each owns.
+    #: Each is its own flag on Maya's one global constraint state (setting one
+    #: leaves the others), so several can be on at once; Border is two flags
+    #: because the Modeling Toolkit sets both.
+    _CONSTRAINT_FLAGS = {
+        "angle": ("anglePropagation",),
+        "border": ("border", "borderPropagation"),
+        "edge_loop": ("loopPropagation",),
+        "edge_ring": ("ringPropagation",),
+        "shell": ("shell",),
+        "uv_edge_loop": ("uvEdgeLoopPropagation",),
+    }
+
+    @classmethod
+    def get_selection_constraints(cls) -> List[str]:
+        """The selection constraints now on: Maya keeps each on, constraining
+        what drag-selection picks up, until it is switched off. Twin of
+        blendertk's (``None`` there: Blender keeps none on)."""
+        return [
+            name
+            for name, flags in cls._CONSTRAINT_FLAGS.items()
+            if cmds.polySelectConstraint(q=True, **{flags[0]: True})
+        ]
+
+    @classmethod
+    def set_selection_constraint(cls, constraint: str, state: bool = True) -> List[str]:
+        """Switch one selection constraint on or off; the others stay as they
+        are. Twin of blendertk's (a one-shot expansion there).
+
+        Parameters:
+            constraint (str): ``"angle"``, ``"border"``, ``"edge_loop"``,
+                ``"edge_ring"``, ``"shell"`` or ``"uv_edge_loop"``.
+            state (bool): On or off.
+
+        Returns:
+            list: The constraints now on.
+
+        Raises:
+            ValueError: An unknown *constraint*.
+        """
+        flags = cls._CONSTRAINT_FLAGS.get(constraint)
+        if flags is None:
+            raise ValueError(f"Unknown selection constraint {constraint!r}.")
+        cmds.polySelectConstraint(**{flag: bool(state) for flag in flags})
+        # Keep the Modeling Toolkit's own constraint field honest when it is
+        # up. The proc exists only once drInit.mel is sourced; probing with
+        # ``exists`` first keeps the script editor quiet (a failing mel.eval
+        # echoes "Error:" there even when Python catches it).
+        if mel.eval('exists "dR_updateSelConstField"'):
+            try:
+                mel.eval("dR_updateSelConstField")
+            except RuntimeError:
+                pass  # its textField torn down since: nothing to refresh
+        return cls.get_selection_constraints()
+
+    #: Select Nth's paths -> ``Components.get_edge_path``'s path types.
+    _EDGE_PATHS = {
+        "edge_ring": "edgeRing",
+        "edge_loop": "edgeLoop",
+        "edge_loop_path": "edgeLoopPath",
+        "shortest_path": None,
+        "border_edges": None,
+    }
+
+    @classmethod
+    def select_edge_path(
+        cls, components=None, path: str = "edge_loop", step: int = 1
+    ) -> List[str]:
+        """Select the edge path through *components*, keeping every *step*-th
+        component. Twin of blendertk's ``Selection.select_edge_path``.
+
+        Parameters:
+            components: Edges or vertices; ``None``: the ordered selection.
+            path (str): ``"edge_ring"``, ``"edge_loop"``, ``"edge_loop_path"``
+                (the loop between two picks), ``"shortest_path"`` (between two
+                picks) or ``"border_edges"``.
+            step (int): Keep every *step*-th component.
+
+        Returns:
+            list: The components selected; ``[]`` with nothing selected.
+
+        Raises:
+            ValueError: An unknown *path*, or a two-pick path without two picks.
+        """
+        from mayatk.core_utils.components import Components
+
+        if path not in cls._EDGE_PATHS:
+            raise ValueError(f"Unknown edge path {path!r}.")
+        nodes = (
+            CoreUtils.as_strings(components)
+            if components is not None
+            # the pick order where Maya tracks it, else the selection
+            else cmds.ls(orderedSelection=True) or cmds.ls(selection=True) or []
+        )
+        if not nodes:
+            return []
+        if path == "shortest_path":
+            result = Components.get_shortest_path(nodes)
+        elif path == "border_edges":
+            result = Components.get_border_components(
+                Components.get_components(nodes, "edges")
+            )
+        else:
+            result = Components.get_edge_path(nodes, cls._EDGE_PATHS[path])
+        result = list(result or [])[:: max(int(step), 1)]
+        if result:
+            cmds.select(result, replace=True)
+        return result
+
+    #: Select Similar's object metrics -> the ``polyEvaluate`` flag each compares.
+    _SIMILAR_METRICS = {
+        "vertex": "vertex",
+        "edge": "edge",
+        "face": "face",
+        "triangle": "triangle",
+        "shell": "shell",
+        "uvcoord": "uvcoord",
+        "area": "area",
+        "world_area": "worldArea",
+        "bounding_box": "boundingBox",
+    }
+
+    @classmethod
+    def select_similar(
+        cls, objects=None, tolerance: float = 0.0, include_original: bool = False, **metrics
+    ):
+        """Select what is similar to the selection. Twin of blendertk's
+        ``Selection.select_similar``.
+
+        * Objects: meshes alike by the checked *metrics*
+          (:meth:`EditUtils.get_similar_mesh`).
+        * A UV / UV-shell selection: the shells of the same topology and shape
+          across the hilited meshes (``UvUtils.get_similar_uv_shells``), what the
+          UV panel's Stack (Similar) stacks; nothing moves.
+        * Other components: Maya's own Select Similar (``doSelectSimilar``).
+
+        Parameters:
+            objects: The reference; ``None``: the selection.
+            tolerance (float): The allowed difference.
+            include_original (bool): Keep the reference selected.
+            **metrics (bool): ``vertex``, ``edge``, ``face``, ``triangle``,
+                ``shell``, ``uvcoord``, ``area``, ``world_area``, ``bounding_box``.
+
+        Returns:
+            tuple: ``(scope, matched)``: scope ``"objects"``, ``"uv_shells"`` or
+                ``"components"``; *matched* what was found beyond the reference
+                (``[]`` for none, and with nothing selected).
+
+        Raises:
+            TypeError: An unknown metric.
+            ValueError: Maya's Select Similar does not take the component type.
+        """
+        unknown = set(metrics) - set(cls._SIMILAR_METRICS)
+        if unknown:
+            raise TypeError(f"Unknown Select Similar metrics: {sorted(unknown)}")
+        selection = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        if not selection:
+            return "objects", []
+        if cmds.filterExpand(selection, selectionMask=35):  # UVs (UV / UV-shell mode)
+            from mayatk.uv_utils._uv_utils import UvUtils
+
+            # The meshes being edited: hilited in component mode; else the
+            # shells' own objects (a UV selection made by script).
+            candidates = cmds.ls(hilite=True) or cmds.ls(selection, objectsOnly=True)
+            shells = UvUtils.get_similar_uv_shells(selection, candidates, tolerance=tolerance)
+            uvs = [uv for shell in shells or () for uv in shell]
+            if uvs:
+                # one mode flag per call: add and replace are mutually exclusive
+                if include_original:
+                    cmds.select(uvs, add=True)
+                else:
+                    cmds.select(uvs, replace=True)
+            return "uv_shells", uvs
+        if cmds.filterExpand(selection, selectionMask=(31, 32, 34, 70)):
+            try:
+                mel.eval(f"doSelectSimilar 1 {{{tolerance}}};")
+            except RuntimeError as error:
+                # doSelectSimilar takes only some component types; it raises
+                # ("Cannot convert data of type float[] ...") on the others.
+                from mayatk.core_utils.components import Components
+
+                kind = Components.get_component_type(selection[0], "plural")
+                raise ValueError(
+                    f"Select Similar does not take {kind or 'this selection'}: "
+                    "select faces or objects."
+                ) from error
+            return "components", cmds.ls(selection=True) or []
+        from mayatk.edit_utils._edit_utils import EditUtils
+
+        transforms = cmds.ls(selection, objectsOnly=True, type="transform") or []
+        if not transforms:
+            return "objects", []
+        flags = {cls._SIMILAR_METRICS[name]: True for name, on in metrics.items() if on}
+        result = EditUtils.get_similar_mesh(
+            transforms, tolerance=tolerance, inc_orig=include_original, select=True, **flags
+        )
+        # Compared against the originals, not the raw return, so a no-match reads
+        # as one whether or not include_original put the reference back in.
+        # Guarded: ``get_similar_mesh`` returns None for one object with no match.
+        found = ptk.make_iterable(result) if result else []
+        originals = set(cmds.ls(transforms, long=True) or [])
+        matched = [
+            node for node in (cmds.ls(found, long=True) or [] if found else [])
+            if node not in originals
+        ]
+        return "objects", matched
+
+    @staticmethod
+    def select_island(
+        faces=None, range_x: float = 0.05, range_y: float = 0.05, range_z: float = 0.05,
+        delimit=None,
+    ) -> List[str]:
+        """Select the contiguous faces, around the selected ones, whose normals
+        are within the ranges of a selected face's normal. Twin of blendertk's
+        ``Selection.select_island``, which also stops at *delimit* boundaries
+        (Blender's Select Linked delimiters); Maya's island has none, so
+        *delimit* is accepted for the shared signature and not used.
+
+        Returns:
+            list: The faces selected; ``[]`` with no face selected.
+        """
+        from mayatk.core_utils.components import Components
+
+        nodes = (
+            CoreUtils.as_strings(faces)
+            if faces is not None
+            else cmds.ls(selection=True) or []
+        )
+        found = (
+            Components.get_components(nodes, component_type="faces", flatten=True)
+            if nodes
+            else []
+        )
+        selected = cmds.ls(found, flatten=True) or [] if found else []
+        if not selected:
+            return []
+        similar = Components.get_faces_with_similar_normals(
+            selected, range_x=range_x, range_y=range_y, range_z=range_z
+        )
+        islands = Components.get_contiguous_islands(similar)
+        seeds = set(selected)
+        island = [face for faces_ in islands if faces_ & seeds for face in faces_]
+        if island:
+            cmds.select(island, replace=True)
+        return island
+
+    #: The display-override attributes Toggle Selectability writes.
+    _SELECTABILITY_ATTRS = (
+        "overrideEnabled",
+        "overrideDisplayType",
+        "useOutlinerColor",
+        "outlinerColor",
+    )
+
+    @classmethod
+    @CoreUtils.undoable
+    def toggle_selectability(cls, objects=None):
+        """Toggle whether *objects* can be picked in the viewport: Maya's
+        reference display (``overrideDisplayType`` 2), with a teal outliner color
+        while unselectable. One state for all: selectable again when every one
+        is unselectable, else unselectable. One undo step. Twin of blendertk's
+        (``hide_select`` there).
+
+        Returns:
+            (tuple/list): ``(selectable, objects)``, the new state; ``[]`` with
+                nothing to toggle (objects whose attributes are locked are
+                skipped).
+        """
+        nodes = (
+            CoreUtils.as_strings(objects)
+            if objects is not None
+            else cmds.ls(selection=True) or []
+        )
+        nodes = cmds.ls(nodes, objectsOnly=True, flatten=True) or [] if nodes else []
+
+        def writable(node, attr):
+            return cmds.attributeQuery(attr, node=node, exists=True) and not cmds.getAttr(
+                f"{node}.{attr}", lock=True
+            )
+
+        nodes = [n for n in nodes if all(writable(n, a) for a in cls._SELECTABILITY_ATTRS)]
+        if not nodes:
+            return []
+        selectable = all(
+            cmds.getAttr(f"{n}.overrideEnabled")
+            and cmds.getAttr(f"{n}.overrideDisplayType") == 2
+            for n in nodes
+        )
+        for n in nodes:
+            if selectable:
+                cmds.setAttr(f"{n}.overrideDisplayType", 0)  # normal
+                cmds.setAttr(f"{n}.useOutlinerColor", 0)
+            else:
+                cmds.setAttr(f"{n}.overrideEnabled", 1)
+                cmds.setAttr(f"{n}.overrideDisplayType", 2)  # reference
+                cmds.setAttr(f"{n}.useOutlinerColor", 1)
+                cmds.setAttr(f"{n}.outlinerColor", 0.3, 0.6, 0.6, type="double3")
+        return selectable, nodes
+
+    @staticmethod
+    def get_ignore_backfacing() -> bool:
+        """True while viewport picks skip what faces away from the camera
+        (Maya's camera-based selection, ``selectPref -useDepth``). Twin of
+        blendertk's (X-ray off there)."""
+        return bool(cmds.selectPref(q=True, useDepth=True))
+
+    @staticmethod
+    def set_ignore_backfacing(state: bool = True) -> bool:
+        """Turn camera-based selection on or off; returns the state set."""
+        cmds.selectPref(useDepth=bool(state))
+        return bool(state)
 
     @staticmethod
     def get_available_selection_types() -> List[str]:

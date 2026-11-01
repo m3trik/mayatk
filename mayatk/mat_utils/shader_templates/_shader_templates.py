@@ -561,6 +561,25 @@ class ShaderTemplates:
         dump=lambda data: yaml.dump(data, default_flow_style=False),
     )
 
+    #: The node types Save Template leaves out of a captured network: the scene
+    #: around the material (its shading group, the objects it is on), not the
+    #: material. blendertk's twin excludes none (a material's tree holds shader
+    #: nodes only).
+    EXCLUDE_TYPES: tuple = (
+        "shadingEngine",
+        "transform",
+        "mesh",
+        "nurbsCurve",
+        "camera",
+        "light",
+    )
+
+    #: Plug-ins whose node types a template may use (ShaderFX's StingrayPBS,
+    #: Arnold's ``ai*`` shaders). :meth:`restore_template` loads them only when a
+    #: template names a type Maya does not know yet: mtoa boots the whole Arnold
+    #: renderer.
+    SHADER_PLUGINS: tuple = ("shaderFXPlugin", "mtoa")
+
     @classmethod
     def store(cls) -> "ptk.PresetStore":
         """The template store: shipped templates read-only, the user's in
@@ -616,6 +635,15 @@ class ShaderTemplates:
         return moved
 
     @staticmethod
+    def suggested_name(nodes) -> str:
+        """The name Save Template offers for *nodes*: the first node's leaf name,
+        its namespace colons made underscores (a template name is a file name);
+        ``""`` for none. Twin of blendertk's, which offers the captured material's.
+        """
+        nodes = [nodes] if isinstance(nodes, str) else list(nodes or [])
+        return CoreUtils.leaf_name(nodes[0]).replace(":", "_") if nodes else ""
+
+    @staticmethod
     def save_template(nodes, file_path, exclude_types=None, logger=None):
         """
         Save the specified nodes as a shader template.
@@ -623,21 +651,25 @@ class ShaderTemplates:
         Args:
             nodes (list): List of Maya nodes to save.
             file_path (str): Path to the output YAML file.
-            exclude_types (list, optional): List of node types to exclude.
+            exclude_types (list, optional): List of node types to exclude
+                (:attr:`EXCLUDE_TYPES`: what the panel leaves out).
             logger (logging.Logger, optional): Destination for progress and
                 error messages (e.g. a panel-redirected logger).
         """
         saver = GraphSaver(logger=logger)
         saver.save_graph(nodes, file_path, exclude_types=exclude_types)
 
-    @staticmethod
-    @CoreUtils.undoable
-    def restore_template(file_path, texture_paths=None, name=None, logger=None):
+    @classmethod
+    def restore_template(cls, file_path, texture_paths=None, name=None, logger=None):
         """
         Restore a shader template from a file.
 
-        Runs in one undo chunk — it creates a whole node network, so a
-        partial failure must not leave half-built nodes needing N undos.
+        Loads the plug-ins its node types need first (:attr:`SHADER_PLUGINS`, only
+        for a type Maya lacks, never fatally), then rebuilds the network in ONE
+        undo chunk -- a partial failure must not leave half-built nodes needing N
+        undos -- and announces the result on *logger*: the node count and the
+        surface shader, a link that selects it where the logger renders links
+        (as ``GraphSaver.save_graph`` announces a save).
 
         Args:
             file_path (str): Path to the YAML template file.
@@ -649,11 +681,70 @@ class ShaderTemplates:
         Returns:
             dict: Mapping of placeholder names to created Maya nodes.
         """
-        if texture_paths is None:
-            texture_paths = []
-        restorer = GraphRestorer(file_path, texture_paths, name, logger=logger)
-        restorer.restore_graph()
+        restorer = GraphRestorer(file_path, texture_paths or [], name, logger=logger)
+        # Outside the undo chunk: a plug-in load is no undoable edit.
+        cls._load_plugins_for(restorer.graph_config, restorer.logger)
+        cls._restore(restorer)
+        cls._announce_restore(restorer.nodes, restorer.logger)
         return restorer.nodes
+
+    @staticmethod
+    @CoreUtils.undoable
+    def _restore(restorer: "GraphRestorer") -> None:
+        """Rebuild *restorer*'s network as one undo chunk."""
+        restorer.restore_graph()
+
+    @classmethod
+    def _load_plugins_for(cls, graph_config: dict, logger) -> None:
+        """Load :attr:`SHADER_PLUGINS` when *graph_config* names a node type Maya
+        does not know yet. A plug-in that fails to load is logged, never raised: a
+        template that doesn't use its types still restores, and one that does
+        reports the nodes it cannot make."""
+        wanted = {
+            info.get("type")
+            for info in (graph_config or {}).values()
+            if isinstance(info, dict) and info.get("type")
+        }
+        if not wanted or wanted <= set(cmds.allNodeTypes() or []):
+            return
+        for plugin in cls.SHADER_PLUGINS:
+            try:
+                Plugins.load(plugin)
+            except Plugins.LoadError as e:
+                logger.debug(str(e))
+
+    @staticmethod
+    def _announce_restore(nodes: dict, logger) -> None:
+        """The ONE announcement of a restore: the node count and the surface
+        shader, as a link that selects it on a logger that renders links. A
+        quiet logger (below INFO) gets nothing."""
+        if not logger.isEnabledFor(logging.INFO):
+            return
+        shader = None
+        for node in nodes.values():
+            # Never let the summary raise: nodeType() throws on a name the
+            # restore renamed or failed to create.
+            try:
+                if node and cmds.objExists(node):
+                    classes = cmds.getClassification(cmds.nodeType(node)) or []
+                    if any("shader/surface" in c for c in classes):
+                        shader = node
+                        break
+            except Exception:  # noqa: BLE001 - a cosmetic lookup only
+                continue
+        lines = [f"Nodes created : {len(nodes)}"]
+        if shader:
+            label = CoreUtils.short_name(shader)
+            if hasattr(logger, "log_link"):
+                label = logger.log_link(label, "select", node=str(shader))
+            lines.append(f"Shader        : {label}")
+        if hasattr(logger, "log_box"):
+            logger.log_box("NETWORK CREATED", lines, level="SUCCESS")
+        else:
+            logger.info(
+                "Network created: "
+                + "; ".join(" ".join(line.split()) for line in lines)
+            )
 
 
 # -----------------------------------------------------------------------------

@@ -11,7 +11,9 @@ Tests for ShaderTemplates functionality including:
 - Attribute filtering and type conversion
 """
 
+import logging
 import unittest
+from unittest import mock
 import os
 import tempfile
 import shutil
@@ -25,24 +27,6 @@ from mayatk.mat_utils.shader_templates._shader_templates import (
     ShaderTemplates,
 )
 from mayatk.node_utils.attributes._attributes import Attributes
-
-
-class TestPanelTextureFolder(unittest.TestCase):
-    """The panel's Browse opens in the scene project's texture folder, not a
-    CWD-relative ``<project name>/sourceimages``. Added: 2026-10-13"""
-
-    def test_browse_starts_in_the_scene_projects_texture_folder(self):
-        from mayatk.node_utils.data_nodes import DataNodes
-        from mayatk.mat_utils.shader_templates.shader_templates_slots import (
-            ShaderTemplatesSlots,
-        )
-
-        folder = ShaderTemplatesSlots.source_images_dir.fget(None)
-        self.assertTrue(os.path.isabs(folder), folder)
-        self.assertEqual(
-            os.path.normcase(folder),
-            os.path.normcase(DataNodes.scene_source_images_dir()),
-        )
 
 
 class TestTemplateStore(unittest.TestCase):
@@ -103,51 +87,58 @@ class TestTemplateStore(unittest.TestCase):
         self.assertEqual(ShaderTemplates.migrate_package_templates(store), [])
 
 
-class TestPanelRename(unittest.TestCase):
-    """The panel renames a template through its store (``PresetStore.rename``):
-    a raw ``os.rename`` moved the file alone, so its sidecar (the id a
-    collection finds it by) and the active pointer kept the old name.
-    Added: 2026-10-13 (pre-release review)."""
+class TestShaderTemplatesApi(unittest.TestCase):
+    """What tentacle's Shader Templates panel asks of ``ShaderTemplates`` beyond
+    save / restore: the name it offers, what a capture leaves out, and the
+    plug-ins a restore loads. (The panel's own cases moved with it to tentacle's
+    ``test_shader_templates_panel.py``.) Added: 2026-10-28"""
 
-    def test_a_rename_takes_the_sidecar_and_the_active_pointer(self):
-        import logging
+    _MOD = "mayatk.mat_utils.shader_templates._shader_templates"
 
-        import pythontk as ptk
-        from mayatk.mat_utils.shader_templates.shader_templates_slots import (
-            ShaderTemplatesSlots,
+    def test_the_suggested_name_is_the_first_nodes_leaf(self):
+        """Namespace colons become underscores: a template name is a file name."""
+        self.assertEqual(
+            ShaderTemplates.suggested_name(["|grp|ns:brick_MAT", "other"]),
+            "ns_brick_MAT",
+        )
+        self.assertEqual(ShaderTemplates.suggested_name("lambert2"), "lambert2")
+        self.assertEqual(ShaderTemplates.suggested_name([]), "")
+
+    def test_a_capture_leaves_the_scene_around_the_material_out(self):
+        self.assertIn("shadingEngine", ShaderTemplates.EXCLUDE_TYPES)
+        self.assertIn("mesh", ShaderTemplates.EXCLUDE_TYPES)
+        self.assertNotIn("file", ShaderTemplates.EXCLUDE_TYPES)
+
+    def test_plugins_load_only_for_a_type_maya_lacks(self):
+        """mtoa boots the whole Arnold renderer: a template of known types must
+        not load it (the old panel loaded both plug-ins on every Create)."""
+        logger = logging.getLogger("test_shader_templates_plugins")
+        with mock.patch(
+            f"{self._MOD}.cmds.allNodeTypes", return_value=["lambert", "file"]
+        ), mock.patch(f"{self._MOD}.Plugins.load") as load:
+            ShaderTemplates._load_plugins_for(
+                {"<shader>": {"type": "lambert"}, "<file>": {"type": "file"}}, logger
+            )
+            load.assert_not_called()
+            ShaderTemplates._load_plugins_for(
+                {"<shader>": {"type": "aiStandardSurface"}}, logger
+            )
+        self.assertEqual(
+            [c.args[0] for c in load.call_args_list],
+            list(ShaderTemplates.SHADER_PLUGINS),
         )
 
-        tmp = tempfile.mkdtemp(prefix="shader_tpl_rename_")
-        self.addCleanup(shutil.rmtree, tmp, True)
-        store = ptk.PresetStore(
-            "shader_templates",
-            builtin_dir=os.path.join(tmp, "builtin"),
-            user_dir=os.path.join(tmp, "user"),
-            codec=ShaderTemplates.YAML_CODEC,
-        )
-        store.save("Mine", {"node": {}})
-        store.active = "Mine"
-        identity = store.info("Mine").get("id")
+    def test_a_plugin_that_fails_to_load_is_not_fatal(self):
+        from mayatk.core_utils.plugins._plugins import Plugins
 
-        class _Combo:
-            def currentText(self):
-                return "Mine"
-
-            def currentData(self):
-                return str(store.path("Mine", "user"))
-
-            def init_slot(self):
-                pass
-
-        slots = ShaderTemplatesSlots.__new__(ShaderTemplatesSlots)
-        slots._store = store
-        slots.logger = logging.getLogger("test_panel_rename")
-        slots.rename_template_safe(_Combo(), "Ours")
-
-        self.assertEqual(store.source("Ours"), "user")
-        self.assertIsNone(store.source("Mine"))
-        self.assertEqual(store.info("Ours").get("id"), identity)
-        self.assertEqual(store.active, "Ours")
+        with mock.patch(f"{self._MOD}.cmds.allNodeTypes", return_value=[]), mock.patch(
+            f"{self._MOD}.Plugins.load", side_effect=Plugins.LoadError("no mtoa")
+        ) as load:
+            ShaderTemplates._load_plugins_for(
+                {"<shader>": {"type": "aiStandardSurface"}},
+                logging.getLogger("test_shader_templates_plugins"),
+            )
+        self.assertEqual(load.call_count, len(ShaderTemplates.SHADER_PLUGINS))
 
 
 class TestShaderTemplates(MayaTkTestCase):
@@ -608,6 +599,45 @@ class TestShaderTemplates(MayaTkTestCase):
             )
         finally:
             logger.removeHandler(handler)
+
+    def test_a_restore_announces_what_it_built(self):
+        """The ONE announcement of a restore, as of a save: the node count and the
+        surface shader (the summary the panel used to build). Added: 2026-10-28"""
+        shader = cmds.shadingNode("lambert", asShader=True, name="announce_lambert")
+        self.nodes_to_delete.append(shader)
+        ShaderTemplates.save_template([shader], self.template_path)
+
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        logger = logging.getLogger("test_shader_templates_announce")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        handler = _Capture()
+        logger.addHandler(handler)
+        try:
+            restored = ShaderTemplates.restore_template(self.template_path, logger=logger)
+            self.nodes_to_delete.extend(restored.values())
+        finally:
+            logger.removeHandler(handler)
+        summary = [m for m in records if m.startswith("Network created")]
+        self.assertEqual(len(summary), 1, records)
+        self.assertIn(f"Nodes created : {len(restored)}", summary[0])
+        self.assertIn("Shader : ", summary[0])
+
+        # A quiet logger gets no summary.
+        records.clear()
+        logger.setLevel(logging.WARNING)
+        logger.addHandler(handler)
+        try:
+            restored = ShaderTemplates.restore_template(self.template_path, logger=logger)
+            self.nodes_to_delete.extend(restored.values())
+        finally:
+            logger.removeHandler(handler)
+        self.assertFalse([m for m in records if m.startswith("Network created")])
 
     def test_full_restoration_with_maps(self):
         """

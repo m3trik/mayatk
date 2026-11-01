@@ -24,54 +24,8 @@ except ImportError as error:
 
 import mayatk as mtk
 from mayatk.mat_utils._mat_utils import MatUtils
-from mayatk.mat_utils.arnold_bridge import ArnoldBridgeSlots
 
 ArnoldBridge = mtk.ArnoldBridge
-
-
-# --- Stubs to drive ArnoldBridgeSlots headlessly ---------------------------
-# The offscreen QPA platform can't load the real Switchboard panel, so the slot
-# logic is exercised against real Maya geometry through minimal widget stubs.
-class _StubFooter:
-    def __init__(self):
-        self.text = ""
-
-    def setText(self, t):
-        self.text = t
-
-    def progress(self, text=""):
-        import contextlib
-
-        self.text = text
-        return contextlib.nullcontext()
-
-
-class _StubCombo:
-    def __init__(self, text):
-        self._text = text
-
-    def currentText(self):
-        return self._text
-
-
-class _StubCheck:
-    def __init__(self, checked):
-        self._checked = checked
-
-    def isChecked(self):
-        return self._checked
-
-
-class _StubUi:
-    def __init__(self, scope, force):
-        self.cmb000 = _StubCombo(scope)
-        self.chk000 = _StubCheck(force)
-        self.footer = _StubFooter()
-
-
-class _StubSb:
-    def __init__(self, ui):
-        self.loaded_ui = type("LoadedUi", (), {"arnold_bridge": ui})()
 
 
 def _mtoa_available() -> bool:
@@ -1032,8 +986,9 @@ class EmissiveIntensityTest(unittest.TestCase):
         self.assertEqual(authored(f"{ai}.emission"), f"{ai}.emission")
 
 
-class ArnoldBridgeSlotsTest(unittest.TestCase):
-    """ArnoldBridgeSlots driven through stubbed widgets against real geometry."""
+class SceneScopeTest(unittest.TestCase):
+    """The scene-wide verbs the Arnold Preview Shader panel calls: the base
+    materials a bridge can serve, and selecting the bridged ones."""
 
     @classmethod
     def setUpClass(cls):
@@ -1044,10 +999,7 @@ class ArnoldBridgeSlotsTest(unittest.TestCase):
         cmds.file(new=True, force=True)
 
     @staticmethod
-    def _slots(scope="Selected Objects", force=False):
-        return ArnoldBridgeSlots(_StubSb(_StubUi(scope, force)))
-
-    def _textured_cube(self, name):
+    def _textured_cube(name):
         """A standardSurface (with one texture) assigned to a new cube."""
         shader = cmds.shadingNode("standardSurface", asShader=True, name=name)
         sg = cmds.sets(
@@ -1061,61 +1013,30 @@ class ArnoldBridgeSlotsTest(unittest.TestCase):
         cmds.sets(cube, edit=True, forceElement=sg)
         return shader, cube
 
-    def test_add_remove_selected_scope(self):
-        shader, cube = self._textured_cube("matSel")
-        slots = self._slots(scope="Selected Objects")
-        cmds.select(cube, replace=True)
+    def test_base_materials_leave_out_the_bridge_shaders(self):
+        shader, _cube = self._textured_cube("matA")
+        network = ArnoldBridge().add(materials=shader)[0]
+        materials = ArnoldBridge.base_materials()
+        self.assertIn(shader, materials)
+        self.assertNotIn(network, materials)
 
-        slots.b000()  # Add
-        self.assertTrue(slots._bridge.has_bridge(shader))
-        self.assertIn("Added 1", slots.ui.footer.text)
-
-        slots.b001()  # Remove
-        self.assertFalse(slots._bridge.has_bridge(shader))
-        self.assertIn("Removed 1", slots.ui.footer.text)
-
-    def test_add_empty_selection_warns_no_bridge(self):
-        shader, _ = self._textured_cube("matSel")
-        slots = self._slots(scope="Selected Objects")
+    def test_select_bridged_selects_the_material_not_its_network(self):
+        shader, _cube = self._textured_cube("matA")
+        plain, _ = self._textured_cube("matB")
+        bridge = ArnoldBridge()
+        network = bridge.add(materials=shader)[0]
         cmds.select(clear=True)
+        self.assertEqual(bridge.select_bridged(), [shader])
+        selection = cmds.ls(selection=True) or []
+        self.assertIn(shader, selection)
+        self.assertNotIn(plain, selection)
+        self.assertNotIn(network, selection)
 
-        slots.b000()
-        self.assertFalse(slots._bridge.has_bridge(shader))
-        self.assertIn("Select object", slots.ui.footer.text)
-
-    def test_add_all_scene_scope(self):
-        shader_a, _ = self._textured_cube("matA")
-        shader_b, _ = self._textured_cube("matB")
-        slots = self._slots(scope="All Scene Materials")
-        # Selection is irrelevant for the All Scene Materials scope.
-
-        slots.b000()
-        self.assertTrue(slots._bridge.has_bridge(shader_a))
-        self.assertTrue(slots._bridge.has_bridge(shader_b))
-
-    def test_force_rebuilds(self):
-        shader, cube = self._textured_cube("matSel")
+    def test_select_bridged_with_none_keeps_the_selection(self):
+        _shader, cube = self._textured_cube("matA")
         cmds.select(cube, replace=True)
-        self._slots().b000()  # initial add (no force)
-        first_uuid = cmds.ls(ArnoldBridge().get_bridge(shader), uuid=True)[0]
-
-        self._slots(force=True).b000()  # force → rebuild
-        second_uuid = cmds.ls(ArnoldBridge().get_bridge(shader), uuid=True)[0]
-        self.assertNotEqual(first_uuid, second_uuid)
-
-    def test_select_bridged(self):
-        shader, cube = self._textured_cube("matSel")
-        cmds.select(cube, replace=True)
-        slots = self._slots()
-        slots.b000()
-        bridge_shader = ArnoldBridge().get_bridge(shader)
-        cmds.select(clear=True)
-
-        slots.select_bridged()
-        sel = cmds.ls(selection=True) or []
-        self.assertIn(shader, sel)
-        # The aiStandardSurface bridge shader itself must not be selected.
-        self.assertNotIn(bridge_shader, sel)
+        self.assertEqual(ArnoldBridge().select_bridged(), [])
+        self.assertEqual(cmds.ls(selection=True), [cube])
 
 
 if __name__ == "__main__":

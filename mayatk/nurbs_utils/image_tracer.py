@@ -29,6 +29,12 @@ from mayatk.display_utils._display_utils import DisplayUtils
 class BluePencilMixin(object):
     """Mixin for handling Blue Pencil operations."""
 
+    @staticmethod
+    def open_blue_pencil() -> None:
+        """Open Maya's Blue Pencil tool, whose strokes ``use_blue_pencil``
+        traces (the Image Tracer panel's Open Blue Pencil)."""
+        mel.eval("OpenBluePencil")
+
     def get_blue_pencil_curves(self):
         """Converts active Blue Pencil strokes to NURBS curves."""
         if cmds is None:
@@ -409,143 +415,3 @@ class ImageTracer(BluePencilMixin):
         # Ungrouped, the projection plane stays at the world root -- add it too.
         DisplayUtils.add_to_isolation_set([plane] + projected_curves)
         return projected_curves
-
-
-class ImageTracerSlots:
-    """UI slots for the Image Tracer tool."""
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.image_tracer
-        # Sync UI state after initialization/restore
-        try:
-            from qtpy import QtCore
-
-            QtCore.QTimer.singleShot(200, self._sync_ui)
-        except ImportError:
-            pass
-
-    def _sync_ui(self):
-        """Synchronize UI state."""
-        try:
-            from qtpy import QtCore
-
-            chk000 = self.ui.findChild(QtCore.QObject, "chk000")
-            if chk000:
-                self.chk000(chk000.isChecked())
-        except Exception:
-            pass
-
-    def header_init(self, widget):
-        """Initialize the header widget."""
-        widget.menu.add(
-            "QCheckBox",
-            setText="Use Blue Pencil",
-            setObjectName="chk000",
-            setChecked=False,
-            setToolTip="Use Blue Pencil strokes instead of an image.",
-        )
-        widget.menu.add(
-            "QPushButton",
-            setText="Open Blue Pencil",
-            setObjectName="blue_pencil_button",
-            setToolTip="Open the Blue Pencil tool in Maya.",
-            clicked=lambda: mel.eval("OpenBluePencil"),
-        )
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Image Tracer",
-                body="Trace contours from a raster image (or Blue Pencil "
-                "strokes) into editable NURBS curves.",
-                steps=[
-                    "Browse (▸) to an image file, or check <b>Use Blue Pencil</b> "
-                    "in the header menu to trace Blue Pencil strokes "
-                    "(<b>Open Blue Pencil</b> launches the Maya tool).",
-                    "Adjust the tracing parameters (threshold, smoothness, "
-                    "min-area, etc.) for the desired level of detail.",
-                    "Press <b>Trace</b> to generate NURBS curves.",
-                ],
-                notes=[
-                    "Curves are created at the world origin and can be "
-                    "extruded, lofted, or used as construction history "
-                    "drivers like any other NURBS curve.",
-                ],
-            )
-        )
-
-    def txt000_init(self, widget):
-        # Configure option box for file browsing
-        widget.option_box.browse(
-            file_types="Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
-            title="Select Image",
-        )
-
-    def browse_image(self):
-        file_path = self.sb.file_dialog(
-            title="Select Image",
-            file_types=["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tif", "*.tiff"],
-            filter_description="Images",
-            allow_multiple=False,
-        )
-        if file_path:
-            self.ui.txt000.setText(file_path)
-
-    def _get_tracer(self):
-        use_bp = self.ui.chk000.isChecked()
-        image_path = self.ui.txt000.text()
-
-        if not use_bp and not image_path:
-            cmds.warning("Please select an image first.")
-            return None
-
-        scale = self.ui.s000.value()
-        simplify_epsilon = self.ui.s001.value()
-        simplify = simplify_epsilon if simplify_epsilon > 0 else None
-
-        try:
-            return ImageTracer(
-                image_path,
-                scale=scale,
-                simplify=simplify,
-                use_blue_pencil=use_bp,
-            )
-        except Exception as e:
-            cmds.error("Error initializing ImageTracer: {}".format(e))
-            return None
-
-    def chk000(self, state):
-        """Use Blue Pencil"""
-        self.ui.txt000.setEnabled(not state)
-
-    def b002(self):
-        """Trace the source image into curves."""
-        tracer = self._get_tracer()
-        if tracer:
-            tracer.trace_curves()
-
-    def b003(self):
-        """Build a mesh from the traced curves."""
-        tracer = self._get_tracer()
-        if tracer:
-            tracer.create_mesh()
-
-    def b004(self):
-        """Build a mesh from the traced negative space."""
-        tracer = self._get_tracer()
-        if tracer:
-            tracer.create_negative_space_mesh()
-
-    def b005(self):
-        """Project the traced result onto a plane."""
-        tracer = self._get_tracer()
-        if tracer:
-            tracer.project_on_plane()
-
-
-if __name__ == "__main__":
-    tracer = ImageTracer(
-        image_path="O:\\Cloud\\Code\\_scripts\\mayatk\\test\\test_assets\\prod_AO.png",
-        scale=0.1,
-        simplify=2.0,
-        use_blue_pencil=False,
-    )

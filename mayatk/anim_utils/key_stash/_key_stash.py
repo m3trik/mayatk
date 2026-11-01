@@ -22,6 +22,12 @@ lifetime is the preview's.
 beside the shot store's channel.  Copy-before-cut: the manifest and the stash
 nodes exist before a single live key is removed.
 
+**Host.** The store is pythontk's, written once; :class:`MayaKeyStashHost` is
+what it asks of Maya (a :class:`pythontk.KeyStashHost`: the persistence, the
+scene clock, the deferred flush, the undo chunk and the in-chunk write, the
+reconcile, the script jobs).  :class:`KeyStash` binds it and adds the scene
+operations; it overrides nothing.
+
 **Retrieve.** Curve-first: keys paste back onto the very curve node they left
 (a layered curve that still exists needs no special casing); if that curve is
 gone (Maya deletes an animCurve that loses its last key) they paste into the
@@ -32,24 +38,18 @@ rename in between is harmless; a deleted object keeps the record so the clip
 can later be retrieved onto another target.
 """
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, ContextManager, Dict, List, Optional, Sequence, Tuple
 
 try:
     import maya.cmds as cmds
-    import maya.mel as mel
 except Exception:
-    cmds = mel = None
+    cmds = None
 
 import pythontk as ptk
-from pythontk.core_utils.engines.key_stash.key_stash_model import (
-    KeyStash as _KeyStashCore,
-    StashChanged,
-    StashedClip,
-)
 
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.anim_utils.shots._detection import Detection
-from mayatk.anim_utils.shots._shots import MayaScenePersistence
+from mayatk.anim_utils.shots._shots import MayaScenePersistence, MayaShotsHost
 from mayatk.anim_utils.smart_bake.bake_session import (
     BakeSessionStore,
     _BakeSessionStoreInternal,
@@ -233,11 +233,98 @@ class _KeyStashInternal(object):
         if rng and len(rng) == 2:
             cmds.playbackOptions(minTime=rng[0], maxTime=rng[1])
 
+    @classmethod
+    def _end_scene_preview(cls, payload: Dict[str, Any]) -> None:
+        """Tear down the scene side of a preview whose record held *payload*:
+        its override layer, and the time slider it clamped."""
+        AnimUtils.remove_preview_layer(
+            BakeSessionStore.resolve_ref(payload.get("layer"))
+        )
+        cls._restore_playback(payload)
 
-class KeyStash(_KeyStashCore, _KeyStashInternal):
-    """:class:`pythontk.KeyStash` with the scene side bound to Maya.
 
-    ``KeyStash.active()`` auto-installs :class:`MayaScenePersistence` on the
+class MayaKeyStashHost(object):
+    """Maya's half of the key stash: the :class:`pythontk.KeyStashHost` the one
+    :class:`pythontk.KeyStash` asks about the scene (:attr:`KeyStash.HOST`).
+    Each member answers the pure default outside Maya (``maya.cmds`` absent).
+    blendertk's ``BlenderKeyStashHost`` is its twin.
+    """
+
+    #: Maya keys keep real time when the scene's rate changes (curve keys live
+    #: in ticks), so the stashed times rescale to follow them.
+    keys_keep_time = True
+
+    @staticmethod
+    def persistence(store_cls: type) -> Optional[MayaScenePersistence]:
+        """A :class:`MayaScenePersistence` on *store_cls*'s ``data_internal``
+        channel, or ``None`` outside Maya."""
+        if cmds is None:
+            return None
+        return MayaScenePersistence(attr_name=store_cls.ATTR_NAME, store_cls=store_cls)
+
+    @staticmethod
+    def store_state() -> None:
+        """Nothing kept per store: ``evalDeferred`` coalesces Maya's writes."""
+        return None
+
+    @staticmethod
+    def scene_fps() -> float:
+        """The scene's frame rate (the shot store's reading; 24.0 outside Maya)."""
+        return MayaShotsHost.scene_fps()
+
+    @staticmethod
+    def schedule_flush(store) -> None:
+        """Coalesce rapid mutations into one deferred write (the shot store's)."""
+        MayaShotsHost.schedule_flush(store)
+
+    @staticmethod
+    def undo_chunk(name: str) -> ContextManager[Any]:
+        """One Maya undo chunk (:meth:`CoreUtils.undo_chunk`)."""
+        return CoreUtils.undo_chunk(name)
+
+    @staticmethod
+    def save_in_step(backend, data: Dict[str, Any]) -> bool:
+        """Write the record INTO the open undo chunk.
+
+        ``MayaScenePersistence.save`` writes outside the undo queue unless told
+        otherwise, and a record written there stayed behind: an undone Retrieve
+        left its keys in a stash node the record no longer named (measured
+        2026-09-15).  Another backend saves as usual (``False``).
+        """
+        if not isinstance(backend, MayaScenePersistence):
+            return False
+        backend.save(data, undoable=True)
+        return True
+
+    @staticmethod
+    def reconcile(store) -> List[int]:
+        """Drop the clips none of whose stash nodes still exist (an undone
+        stash, a manual delete) and end a recorded preview's layer
+        (``KeyStash.reconcile``); nothing outside Maya."""
+        if cmds is None:
+            return []
+        # A scene saved before the registries left data_internal still parks
+        # its clips there; the first reconcile moves them (a no-op after that).
+        _BakeSessionStoreInternal._migrate_stash_registries()
+        return store._reconcile_with(
+            lambda rec: BakeSessionStore.resolve_ref(rec.get("stash")),
+            _KeyStashInternal._end_scene_preview,
+        )
+
+    @staticmethod
+    def script_jobs():
+        """Maya's ``ScriptJobManager`` (``KeyStash.watch_undo`` subscribes
+        through it)."""
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        return ScriptJobManager.instance()
+
+
+class KeyStash(ptk.KeyStash, _KeyStashInternal):
+    """:class:`pythontk.KeyStash` bound to Maya (:class:`MayaKeyStashHost`),
+    plus Maya's scene operations.
+
+    ``KeyStash.active()`` installs :class:`MayaScenePersistence` on the
     ``key_stash`` channel, loads any clips saved in the scene, prunes records
     whose stash nodes are gone and tears down a preview left over from a save
     made mid-preview.
@@ -248,99 +335,11 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
     scene edit it describes, and :meth:`active` re-reads a record it moved.
     """
 
-    ATTR_NAME = "key_stash"
-
-    # ---- singleton / hooks ---------------------------------------------
-
-    @classmethod
-    def active(cls) -> "KeyStash":
-        """The active store, auto-installing the Maya backend once."""
-        if cls._active is None and cls._persistence is None and cmds is not None:
-            cls.set_persistence(
-                MayaScenePersistence(attr_name=cls.ATTR_NAME, store_cls=cls)
-            )
-        return super().active()  # type: ignore[return-value]
-
-    def _scene_fps(self) -> float:
-        if cmds is None:
-            return 24.0
-        try:
-            return float(mel.eval("currentTimeUnitToFPS"))
-        except Exception:
-            return 24.0
-
-    def _schedule_flush(self) -> None:
-        """Coalesce rapid mutations into one deferred write (mirror of ShotStore)."""
-        if cmds is None:
-            self._flush_dirty()
-            return
-        cmds.evalDeferred(self._flush_dirty, lowestPriority=True)
-
-    def _undo_chunk(self, name: str):
-        """One Maya undo chunk (:meth:`CoreUtils.undo_chunk`)."""
-        return CoreUtils.undo_chunk(name)
-
-    def _save_in_step(self) -> None:
-        """Write the record INTO the open undo chunk.
-
-        ``MayaScenePersistence.save`` writes outside the undo queue unless told
-        otherwise, and a record written there stayed behind: an undone Retrieve
-        left its keys in a stash node the record no longer named (measured
-        2026-09-15).
-        """
-        backend = type(self)._persistence
-        if not isinstance(backend, MayaScenePersistence):
-            self.save()
-            return
-        backend.save(self.to_dict(), undoable=True)
-        self._dirty = False
-
-    def _on_activated(self) -> None:
-        self.reconcile()
-
-    def reconcile(self) -> List[int]:
-        """Bring the record in line with the scene.
-
-        Drops every clip none of whose stash nodes still exist (an undone
-        stash, a manual delete) and ends a preview the record says is active
-        (a scene saved mid-preview must not reopen silently overridden).
-
-        Returns:
-            The ids of the pruned clips.
-        """
-        if cmds is None:
-            return []
-        # A scene saved before the registries left data_internal still parks
-        # its clips there; the first reconcile moves them (a no-op after that).
-        _BakeSessionStoreInternal._migrate_stash_registries()
-        gone: List[int] = []
-        for clip in list(self.clips):
-            if not any(
-                BakeSessionStore.resolve_ref(rec.get("stash")) for rec in clip.curves
-            ):
-                self.clips.remove(clip)
-                gone.append(clip.clip_id)
-        changed = bool(gone)
-        if self.active_preview:
-            AnimUtils.remove_preview_layer(
-                BakeSessionStore.resolve_ref(self.active_preview.get("layer"))
-            )
-            self._restore_playback(self.active_preview)
-            self.active_preview = None
-            changed = True
-        if changed:
-            self.mark_dirty()
-            self._notify(StashChanged("reloaded"))
-        return gone
+    HOST = MayaKeyStashHost()
+    #: The sources :meth:`stash_from` reads (the Key Stash panel's Source combo).
+    STASH_SOURCES = ("selected_keys", "timeline_selection", "playback_range")
 
     # ---- scene-record crossings (``DataNodes.OWNERS``) -----------------
-
-    @classmethod
-    def merge_carrier(cls, carriers, other, ctx) -> None:
-        """Another scene's parked clips merged into the record: reload the
-        active stash from it (their curves came along with the import)."""
-        if ptk.SceneRecords.KEY_STASH in other:
-            cls.invalidate()
 
     @classmethod
     def discard_carrier(cls, carriers, other, ctx) -> None:
@@ -375,7 +374,7 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         source_shot_id: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
         targets: Optional[Sequence[Tuple[str, Any, float, float]]] = None,
-    ) -> Optional[StashedClip]:
+    ) -> Optional[ptk.StashedClip]:
         """Move keys off the working animation into a stored clip.
 
         Three selection sources, all of which produce exactly ONE clip:
@@ -581,6 +580,61 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
                 self._delete_stash(rec)
             self.remove_clip(clip_id, kind="dropped")
 
+    def stash_from(self, source: str) -> Optional[ptk.StashedClip]:
+        """:meth:`stash` the keys one of :attr:`STASH_SOURCES` names, read
+        from the scene as it stands (the Key Stash panel's Store Keys).
+
+        * ``"selected_keys"`` -- the Graph Editor key selection.
+        * ``"timeline_selection"`` -- the selected objects' keys inside the
+          time slider's drag-selected range.
+        * ``"playback_range"`` -- theirs inside the playback range.
+
+        Blender's twin reads the two ranges as its preview range and scene
+        frame range.
+
+        Returns:
+            The new clip, or ``None`` when the source held no keys.
+
+        Raises:
+            ValueError: An unknown *source*, or one the scene can't answer yet
+                (nothing selected, no drag-selected range), worded for the user.
+        """
+        if source not in self.STASH_SOURCES:
+            raise ValueError(
+                f"stash_from: source must be one of {self.STASH_SOURCES}, got {source!r}"
+            )
+        if source == "selected_keys":
+            return self.stash(selected_keys=True)
+        objects = cmds.ls(selection=True, long=True)
+        if not objects:
+            raise ValueError("Select the object(s) whose keys to store.")
+        if source == "timeline_selection":
+            time_range = AnimUtils.get_timeline_selection()
+            if time_range is None:
+                raise ValueError("Drag-select a range on the time slider first.")
+        else:
+            time_range = tuple(self._capture_playback())
+        return self.stash(objects=objects, time_range=time_range)
+
+    def select_clip_objects(self, clip_id: int) -> List[str]:
+        """Select a stored clip's objects that still exist, replacing the
+        selection (the Key Stash panel's double-click on a clip).
+
+        Returns:
+            The objects selected; empty, and the selection untouched, when
+            none of them exists.
+
+        Raises:
+            KeyError: Unknown *clip_id*.
+        """
+        clip = self.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(f"no stashed clip {clip_id}")
+        present = [o for o in clip.objects if cmds.objExists(o)]
+        if present:
+            cmds.select(present, replace=True)
+        return present
+
     # ---- preview -------------------------------------------------------
 
     def preview(
@@ -646,9 +700,5 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
         if not self.active_preview:
             return False
         with self._undo_step("End Stored Keys Preview"):
-            payload = self.clear_preview()
-            AnimUtils.remove_preview_layer(
-                BakeSessionStore.resolve_ref(payload.get("layer"))
-            )
-            self._restore_playback(payload)
+            self._end_scene_preview(self.clear_preview())
         return True

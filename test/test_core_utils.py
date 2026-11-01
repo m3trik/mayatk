@@ -848,5 +848,89 @@ class TestXformBoundingBoxDelegation(MayaTkTestCase):
             self.assertAlmostEqual(got[axis], expected[axis], places=5)
 
 
+class TestSelectionLeadAndModes(MayaTkTestCase):
+    """``selected_objects`` filters, ``active_object`` and the component /
+    object mode pair: what a Slots class shared by both hosts calls through
+    ``self.tk`` (blendertk's twins answer the same in Blender)."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = cmds.polyCube(name="leadA")[0]
+        self.b = cmds.polyCube(name="leadB")[0]
+        self.crv = cmds.curve(name="leadCrv", degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        self._fresh()
+
+    def tearDown(self):
+        cmds.selectMode(object=True)
+        super().tearDown()
+
+    @staticmethod
+    def _fresh(*nodes):
+        """Object mode, nothing hilited, *nodes* selected in this order."""
+        cmds.selectMode(object=True)
+        hilited = cmds.ls(hilite=True)
+        if hilited:
+            cmds.hilite(hilited, unHilite=True)
+        if nodes:
+            cmds.select(list(nodes), replace=True)
+        else:
+            cmds.select(clear=True)
+
+    def test_selected_objects_forwards_ls_filters(self):
+        cmds.select(f"{self.a}.vtx[0]")
+        self.assertEqual(CoreUtils.selected_objects(), [f"{self.a}.vtx[0]"])
+        self.assertEqual(
+            CoreUtils.selected_objects(objectsOnly=True),
+            cmds.listRelatives(self.a, shapes=True),
+        )
+        self._fresh()
+        self.assertEqual(CoreUtils.selected_objects(objectsOnly=True), [])
+
+    def test_active_object_is_the_last_selected(self):
+        self.assertIsNone(CoreUtils.active_object())
+        self._fresh(self.a, self.b)
+        self.assertEqual(CoreUtils.active_object(), self.b)
+        self._fresh(self.b, self.a)
+        self.assertEqual(CoreUtils.active_object(), self.a)
+
+    def test_a_selected_component_leads_as_its_transform(self):
+        cmds.select(f"{self.b}.f[0]")
+        self.assertEqual(CoreUtils.active_object(), self.b)
+
+    def test_component_mode_returns_the_lead_object_of_the_type(self):
+        self._fresh(self.a, self.b, self.crv)
+        self.assertEqual(CoreUtils.ensure_component_mode("mesh"), self.b)
+        self._fresh(self.a, self.b, self.crv)
+        self.assertEqual(CoreUtils.ensure_component_mode("curve"), self.crv)
+        self._fresh(self.b, self.a)
+        self.assertEqual(CoreUtils.ensure_component_mode("MESH", "edge"), self.a)
+
+    def test_no_object_of_the_type_is_none(self):
+        self._fresh(self.crv)
+        self.assertIsNone(CoreUtils.ensure_component_mode("mesh"))
+        self._fresh()
+        self.assertIsNone(CoreUtils.ensure_component_mode("mesh"))
+
+    def test_object_mode_is_true(self):
+        self._fresh(self.a)
+        CoreUtils.ensure_component_mode("mesh")
+        self.assertIs(CoreUtils.ensure_object_mode(), True)
+
+    @unittest.skipIf(
+        cmds.about(batch=True),
+        "hilite and selectMode queries read false in batch (see test_macros.py)",
+    )
+    def test_the_modes_and_the_hilited_lead(self):
+        self._fresh(self.a, self.b, self.crv)
+        CoreUtils.ensure_component_mode("mesh", "face")
+        self.assertTrue(cmds.selectMode(query=True, component=True))
+        self.assertTrue(cmds.selectType(query=True, facet=True))
+        self.assertEqual(sorted(cmds.ls(hilite=True)), sorted([self.a, self.b]))
+        cmds.select(clear=True)  # component mode, nothing selected: a hilited lead
+        self.assertIn(CoreUtils.active_object(), (self.a, self.b))
+        CoreUtils.ensure_object_mode()
+        self.assertTrue(cmds.selectMode(query=True, object=True))
+
+
 if __name__ == "__main__":
     unittest.main()

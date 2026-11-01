@@ -379,15 +379,12 @@ class TestPackageRoot(unittest.TestCase):
         Fixed: 2026-10-25."""
         from unittest import mock
 
+        from base_test import child_python
         from pythontk.core_utils.module_resolver import import_footprint
 
         # import_footprint spawns sys.executable, which is maya.exe inside a GUI
-        # Maya (--gui, the Script Editor runner) and dies there; mayapy ships
-        # beside it.
-        exe = Path(sys.executable)
-        if exe.stem.lower() == "maya":
-            exe = exe.with_name("mayapy.exe" if os.name == "nt" else "mayapy")
-        with mock.patch.object(sys, "executable", str(exe)):
+        # Maya (--gui, the Script Editor runner).
+        with mock.patch.object(sys, "executable", child_python()):
             footprint = import_footprint("mayatk")
         self.assertEqual(footprint, {"modules": [], "third_party": []})
 

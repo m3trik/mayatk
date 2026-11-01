@@ -11,14 +11,13 @@ import unittest
 import maya.cmds as cmds
 
 from base_test import MayaTkTestCase
-from mayatk.anim_utils.blendshape_animator.applicator import Applicator
+from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
 from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
     BlendshapeAnimator,
 )
-from mayatk.anim_utils.blendshape_animator.creator import Creator
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.recovery import Recovery
-from mayatk.anim_utils.blendshape_animator.target import Target, Targets
+from mayatk.anim_utils.blendshape_animator.target import Targets
 from pythontk import Weights
 
 
@@ -197,7 +196,7 @@ class TestBlendshapeAnimatorBugs(MayaTkTestCase):
         for _, modname, _ in pkgutil.iter_modules(pkg.__path__):
             # Skip Designer-generated UI compilation output (depends on Qt at
             # module load and contains no logic the bug 7 rule applies to).
-            if modname.endswith("_ui") or modname.endswith("_slots"):
+            if modname.endswith("_ui"):
                 continue
             mod = importlib.import_module(f"{pkg.__name__}.{modname}")
             src = inspect.getsource(mod)
@@ -726,76 +725,6 @@ class TestRecoveryRefusesMultiTarget(MayaTkTestCase):
         )
 
 
-class TestSetStatusFooter(unittest.TestCase):
-    """_set_status must call uitk Footer's real API (setText) with a valid
-    level, and must not swallow a wrong-API AttributeError."""
-
-    class _RecordingFooter:
-        def __init__(self):
-            self.calls = []
-
-        def setText(self, text, level=None):
-            self.calls.append((text, level))
-
-    def _make_host(self, footer):
-        import types
-        from unittest import mock
-        from mayatk.anim_utils.blendshape_animator.blendshape_animator_slots import (
-            BlendshapeAnimatorSlots,
-        )
-
-        host = types.SimpleNamespace(
-            ui=types.SimpleNamespace(footer=footer), logger=mock.MagicMock()
-        )
-        return BlendshapeAnimatorSlots, host
-
-    def test_set_status_calls_settext_with_valid_level(self):
-        from uitk.widgets.footer import Footer
-
-        cls, host = self._make_host(self._RecordingFooter())
-        cls._set_status(host, "hello")
-        self.assertEqual(len(host.ui.footer.calls), 1)
-        text, level = host.ui.footer.calls[0]
-        self.assertEqual(text, "hello")
-        self.assertIn(level, Footer.LEVEL_COLORS)
-
-    def test_set_status_forwards_level(self):
-        cls, host = self._make_host(self._RecordingFooter())
-        cls._set_status(host, "boom", level="error")
-        self.assertEqual(host.ui.footer.calls, [("boom", "error")])
-
-    def test_wrong_api_attributeerror_not_swallowed(self):
-        class _NoSetText:
-            pass
-
-        cls, host = self._make_host(_NoSetText())
-        with self.assertRaises(AttributeError):
-            cls._set_status(host, "lost")
-
-    def test_deleted_widget_runtimeerror_falls_back_to_logger(self):
-        class _Dead:
-            def setText(self, text, level=None):
-                raise RuntimeError("Internal C++ object already deleted.")
-
-        cls, host = self._make_host(_Dead())
-        cls._set_status(host, "teardown")
-        host.logger.info.assert_called_once_with("teardown")
-
-    def test_call_site_levels_are_footer_vocabulary(self):
-        import inspect
-        import re
-
-        from uitk.widgets.footer import Footer
-        from mayatk.anim_utils.blendshape_animator import blendshape_animator_slots
-
-        src = inspect.getsource(blendshape_animator_slots)
-        levels = set(re.findall(r'level="(\w+)"', src))
-        self.assertTrue(
-            levels.issubset(set(Footer.LEVEL_COLORS)),
-            f"unknown footer levels: {levels - set(Footer.LEVEL_COLORS)}",
-        )
-
-
 class TestKeyframesPlayheadUntouched(MayaTkTestCase):
     """create_keyframes passes explicit time= to both setKeyframe calls —
     it must not move the playhead as a side effect."""
@@ -823,6 +752,88 @@ class TestKeyframesPlayheadUntouched(MayaTkTestCase):
         )
         times = cmds.keyframe(f"{bs}.weight[0]", query=True, timeChange=True)
         self.assertEqual((min(times), max(times)), (1.0, 10.0))
+
+
+
+class TestPanelApi(MayaTkTestCase):
+    """What tentacle's shared Blendshape Animator panel reads through mtk:
+    ``has_setup``, ``selected_base``, ``tween_topology``, ``apply_tweens``,
+    ``delete_tweens``, ``select_tweens`` and ``TWEEN_GROUP``. The panel itself
+    is tentacle's ``test/test_blendshape_animator_panel.py``."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        _init_maya_standalone()
+
+    def _animator(self):
+        base = cmds.polySphere(name="pa_base")[0]
+        target = cmds.polySphere(name="pa_target")[0]
+        cmds.move(2, 0, 0, target)
+        animator = BlendshapeAnimator()
+        ok = animator.create(
+            base_mesh=base,
+            target_mesh=target,
+            start_frame=1,
+            end_frame=10,
+            name="pa",
+            test_setup=False,
+        )
+        self.assertTrue(ok, "setup precondition failed")
+        return animator
+
+    def test_has_setup_follows_the_bound_nodes(self):
+        self.assertFalse(BlendshapeAnimator().has_setup())
+        animator = self._animator()
+        self.assertTrue(animator.has_setup())
+        cmds.delete(animator.blendshape)
+        self.assertFalse(animator.has_setup())
+
+    def test_selected_base_skips_tween_meshes(self):
+        animator = self._animator()
+        tween = animator.edit_weight_based(weights=[0.5])[0]
+        cmds.select(tween.mesh)
+        self.assertIsNone(BlendshapeAnimator.selected_base())
+        cmds.select(tween.mesh, animator.base_mesh)
+        self.assertEqual(BlendshapeAnimator.selected_base(), animator.base_mesh)
+        cmds.select(clear=True)
+        self.assertIsNone(BlendshapeAnimator.selected_base())
+
+    def test_tween_topology_reports_each_tweens_vertex_count(self):
+        self.assertEqual(BlendshapeAnimator().tween_topology(), (None, []))
+        animator = self._animator()
+        animator.edit_weight_based(weights=[0.25, 0.75])
+        base_count, rows = animator.tween_topology()
+        self.assertEqual(base_count, cmds.polyEvaluate(animator.base_mesh, vertex=True))
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(count == base_count for _, count in rows))
+
+    def test_apply_reports_each_tween_and_delete_is_one_undo_step(self):
+        cmds.undoInfo(state=True, infinity=True)
+        animator = self._animator()
+        tweens = animator.edit_weight_based(weights=[0.5])
+        results = animator.apply_tweens(tweens)
+        self.assertEqual(len(results), 1)
+        self.assertIn(
+            results[0][1], (ApplyStatus.APPLIED, ApplyStatus.SKIPPED_DUPLICATE)
+        )
+
+        mesh = tweens[0].mesh
+        self.assertEqual(animator.delete_tweens(tweens), [mesh])
+        self.assertFalse(cmds.objExists(mesh))
+        self.assertFalse(cmds.objExists(BlendshapeAnimator.TWEEN_GROUP))  # left empty
+        cmds.undo()
+        self.assertTrue(cmds.objExists(mesh), "one undo brings the tween back")
+
+    def test_select_tweens_selects_the_live_meshes(self):
+        animator = self._animator()
+        tweens = animator.edit_weight_based(weights=[0.25, 0.75])
+        selected = BlendshapeAnimator.select_tweens(tweens)
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(
+            sorted(cmds.ls(selection=True, long=True)),
+            sorted(cmds.ls(selected, long=True)),
+        )
 
 
 if __name__ == "__main__":

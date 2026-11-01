@@ -1,12 +1,24 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
-import maya.mel as mel
 from typing import Optional
+
 from qtpy import QtWidgets, QtGui, QtCore
-from maya.OpenMayaUI import MQtUtil
-from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
 from shiboken6 import wrapInstance
+
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+    from maya.OpenMayaUI import MQtUtil
+    from maya.app.general.mayaMixin import MayaQWidgetDockableMixin
+except Exception:
+    cmds = mel = MQtUtil = None
+
+    class MayaQWidgetDockableMixin:
+        """Outside Maya: a stand-in base, so the module (and ``mtk.ScriptConsole``)
+        resolves for the registry, docs tooling and mock tests. The console
+        itself mirrors Maya's Script Editor and only runs inside Maya."""
+
+
 from mayatk.env_utils.maya_connection import MayaConnection
 from uitk import ScriptOutput
 
@@ -123,15 +135,6 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         except Exception:
             pass
 
-    @classmethod
-    def _delete_existing_workspace_control(cls):
-        ws_name = "ScriptConsoleWorkspaceControl"
-        if cmds.workspaceControl(ws_name, exists=True):
-            try:
-                cmds.deleteUI(ws_name)
-            except Exception:
-                pass
-
     def _mirror_script_editor_output(self):
         # Ensure Script Editor is initialized
         was_open = self._ensure_script_editor_initialized()
@@ -175,6 +178,11 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
     # — the widget's own visibility path is silently replaced by a workspace-control
     # facade. The procedural entry points are the collision-free ``show_console`` and
     # ``toggle`` (``toggle`` is not a QWidget method, so it is safe as a classmethod).
+    #: The layout a bare :meth:`toggle` creates the console in: docked above the
+    #: Time Slider, tabbed on the right, 50 px tall (the editors panel's Script
+    #: Output button, which calls it bare in both hosts, as blendertk's twin).
+    TOGGLE_DEFAULTS = {"dock": ("TimeSlider", "top"), "tab_position": "right", "height": 50}
+
     @classmethod
     def toggle(cls, *args, **kwargs):
         """Toggle the Script Output panel.
@@ -188,6 +196,8 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
             visible = cmds.workspaceControl(ws, query=True, visible=True)
             cmds.workspaceControl(ws, edit=True, visible=not visible)
             return
+        if not args:  # keywords given override the defaults one by one
+            kwargs = {**cls.TOGGLE_DEFAULTS, **kwargs}
         return cls.show_console(*args, **kwargs)
 
     @classmethod

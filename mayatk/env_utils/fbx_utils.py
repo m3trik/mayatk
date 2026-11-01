@@ -359,8 +359,45 @@ class FbxUtils(ptk.HelpMixin):
         shipped = None if selection_only else cmds.ls(assemblies=True, long=True) or []
         with cls.embed_media_write_cwd(), cls.offsets_folded(shipped, plan):
             cmds.file(file_path, **kwargs)
+        cls.finish_write(file_path)
         logger.info(f"Exported FBX: {file_path}")
         return file_path
+
+    @staticmethod
+    def finish_write(
+        file_path: str, logger: Optional[logging.Logger] = None
+    ) -> Dict[str, int]:
+        """The repair every Maya FBX write takes before anything reads the file.
+
+        Maya writes a ``(0, 0, 0)`` normal, binormal and tangent for each corner
+        of a zero-area face (an extrude never moved), and a reader that checks --
+        Substance Painter's (Assimp) -- then drops that mesh's whole normal
+        layer, every hard edge with it. :meth:`ptk.FbxMedia.repair_null_normals`
+        fills them in the written file; the scene is never touched. Run by
+        :meth:`export` and the Scene Exporter's write, before the GLB build or a
+        bridge reads the file.
+
+        Parameters:
+            file_path: The FBX just written.
+            logger: Where a repair is reported; this module's otherwise.
+
+        Returns:
+            ``{mesh: vectors filled}``; ``{}`` when nothing needed it or the
+            file is not a binary FBX.
+        """
+        log = logger or logging.getLogger(__name__)
+        try:
+            filled = ptk.FbxMedia.repair_null_normals(file_path)
+        except ValueError:  # not a binary FBX (an ASCII write): nothing to read
+            return {}
+        if filled:
+            log.warning(
+                "Zero-area faces wrote null normals; filled so FBX readers keep "
+                "the mesh's normals (Maya's Mesh > Cleanup, Faces with zero "
+                "geometry area, fixes the mesh itself): "
+                + ", ".join(f"{mesh} ({count})" for mesh, count in sorted(filled.items()))
+            )
+        return filled
 
     @staticmethod
     def drop_rig_apparatus(
@@ -445,9 +482,10 @@ class FbxUtils(ptk.HelpMixin):
 
         The records name their files by file name -- ``lightmaps`` its
         maps and reflection probe, ``shadows`` its silhouette, atlas
-        and horizon maps -- and a lighting-only bake binds its maps to no
-        material, so the FBX carried none of them and every consumer had them
-        copied in beside it. ``ptk.FbxMedia.embed_dependencies`` puts each
+        and horizon maps, ``materials`` each material's maps -- and a
+        lighting-only bake binds its maps to no material (nor can an
+        openPBRSurface's slots carry its own), so the FBX carried none of
+        them and every consumer had them copied in beside it. ``ptk.FbxMedia.embed_dependencies`` puts each
         inside the file under its name, the form Unity's importer extracts,
         resolved where this scene keeps it: *search_dirs*, else
         :meth:`LightmapRecords.search_dirs` -- the folders the GLB build joins
@@ -2128,54 +2166,39 @@ class FbxUtils(ptk.HelpMixin):
         class does not have resolves to ``None`` with a WARNING: that is a
         misspelt row, and skipping it quietly would stop a record shipping (or
         a stager finishing) with no sign of why.  A column the row leaves
-        ``None`` resolves to ``None`` quietly: a declared one-way stage.
+        ``None`` resolves to ``None`` quietly: a declared one-way stage. The
+        rule is ``ptk.SceneRecords.resolve_row``, logged here.
         """
-        import importlib
-
-        try:
-            owner = getattr(importlib.import_module(module_path), cls_name)
-        except Exception:  # an uninstalled subsystem is fine
-            logger.debug("%s unavailable; skipped.", label, exc_info=True)
-            return None
-        resolved = []
-        for method in methods:
-            if not method:  # a column the row leaves empty: a one-way stage
-                resolved.append(None)
-                continue
-            fn = getattr(owner, method, None)
-            if fn is None:
-                logger.warning(
-                    "%s names %s.%s.%s, which does not exist; skipped.",
-                    label,
-                    module_path,
-                    cls_name,
-                    method,
-                )
-            resolved.append(fn)
-        return tuple(resolved)
+        return ptk.SceneRecords.resolve_row(
+            label, module_path, cls_name, *methods, log=logger
+        )
 
     @classmethod
     def producers(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]:
         """:attr:`PRODUCERS` resolved to callables, unimportable ones skipped;
         *only* (specs or keys) narrows the table."""
-        wanted = (
-            None if only is None else {ptk.SceneRecords.resolve(k).key for k in only}
+        return ptk.SceneRecords.resolved_producers(
+            cls.PRODUCERS, cls.HOST, only, log=logger
         )
-        table: Dict[Any, Callable] = {}
-        for spec, row in ptk.SceneRecords.producer_rows(cls.PRODUCERS, cls.HOST).items():
-            if wanted is not None and spec.key not in wanted:
-                continue
-            resolved = cls._resolve_row(f"Producer for {spec.key!r}", *row)
-            if resolved and resolved[0] is not None:
-                table[spec] = resolved[0]
-        return table
 
     @classmethod
     def export_context(
-        cls, mode: str = ptk.ExportContext.PIPELINE, **decisions
+        cls,
+        mode: str = ptk.ExportContext.PIPELINE,
+        writer: str = "fbx",
+        writer_options: Optional[Dict[str, Any]] = None,
+        **decisions,
     ) -> ptk.ExportContext:
         """A context for this scene: provenance filled in, *decisions*
-        (``clip_mode``, ``clip_span``, ``rendering``, ``scope``) as given."""
+        (``clip_mode``, ``clip_span``, ``rendering``, ``scope``) as given.
+
+        A *scope* names the nodes the write ships as well (``nodes``: every
+        DAG node under its roots, :meth:`_shipped_nodes`), what the snapshot
+        narrows each export-scoped record by -- once, here, so no producer
+        walks the export set again. The *writer* (``"fbx"``, ``"usd"``) and
+        its *writer_options* state the unit every record is labelled with
+        (``unit_scale``: ``ptk.ExportContext.WRITER_UNITS``), so no producer
+        reads the scene's unit for it."""
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}
@@ -2187,7 +2210,40 @@ class FbxUtils(ptk.HelpMixin):
             )
         except Exception:  # noqa: BLE001 - provenance never costs an export
             pass
+        if decisions.get("scope") is not None and "nodes" not in decisions:
+            decisions["nodes"] = cls._shipped_nodes(decisions["scope"])
+        if "unit_scale" not in decisions:
+            decisions["unit_scale"] = cls._writer_unit(writer, writer_options)
         return ptk.ExportContext(mode=mode, source=source, **decisions)
+
+    @classmethod
+    def _writer_unit(
+        cls, writer: str, options: Optional[Dict[str, Any]] = None
+    ) -> Optional[float]:
+        """The metres one working unit is in the file Maya's *writer* writes
+        (``ptk.ExportContext.writer_unit``); ``None`` outside Maya, where the
+        scene states no unit."""
+        from mayatk.core_utils.units import Units
+
+        if cmds is None:
+            return None
+        return ptk.ExportContext.writer_unit(
+            cls.HOST, writer, Units.metres_per("working"), options
+        )
+
+    @staticmethod
+    def _shipped_nodes(roots: Iterable[str]) -> Optional[frozenset]:
+        """The name of every DAG node a write of *roots* ships, as the file
+        names it: each root and everything under it, shapes included, by its
+        leaf (namespace kept -- Maya writes ``NS:leaf`` as the FBX Model
+        name); ``None`` outside Maya, where no node can be named."""
+        if cmds is None:
+            return None
+        roots = [str(root) for root in roots or ()]
+        if not roots:
+            return frozenset()
+        nodes = cmds.ls(roots, dag=True, long=True) or []
+        return frozenset(node.rsplit("|", 1)[-1] for node in nodes)
 
     @classmethod
     def publish(
@@ -2283,13 +2339,7 @@ class FbxUtils(ptk.HelpMixin):
         them; ``None`` = all) resolved to callables, then every session stager
         -- those always run, a preview that must detach before the write is
         one."""
-        table: Dict[str, Tuple[Optional[Callable], Optional[Callable]]] = {}
-        for name, row in ptk.SceneRecords.stager_rows(cls.STAGERS, cls.HOST).items():
-            if names is not None and name not in names:
-                continue
-            resolved = cls._resolve_row(f"Stager {name!r}", *row)
-            if resolved is not None:
-                table[name] = resolved
+        table = ptk.SceneRecords.resolved_stagers(cls.STAGERS, cls.HOST, names, log=logger)
         table.update(cls._session_stagers)
         return table
 
@@ -2543,8 +2593,13 @@ class FbxUtils(ptk.HelpMixin):
         """Publish the opted-in records (the session stagers stage first,
         inside :meth:`publish`), then realize the declared takes.  Always
         publishes, even with no producer opted in: the commit restamps the
-        handoff block, so an FBX written by File > Export or the Game Exporter
-        describes exactly the channels it carries.  Stands down while a
+        handoff block, so an FBX written by File > Export (any ``cmds.file``
+        write) describes exactly the channels it carries.  The FBX plug-in's
+        own ``FBXExport`` command -- the Game Exporter's write -- fires no
+        scene event, so it never reaches this hook (measured 2026-10-31).
+        An Export Selection is
+        scoped to what it writes (:meth:`_raw_export_scope`), so the file
+        ships the records of the selection alone.  Stands down while a
         bracket is open -- the bracket already did all of it.
 
         A write that splits takes also stages the curve-proxy transport, as
@@ -2556,13 +2611,27 @@ class FbxUtils(ptk.HelpMixin):
         if FbxUtils._export_depth:
             return
         FbxUtils._bracket_state()["hook_snapshot"] = FbxUtils.publish(
-            only=sorted(FbxUtils._session_producers)
+            FbxUtils.export_context(scope=FbxUtils._raw_export_scope()),
+            only=sorted(FbxUtils._session_producers),
         )
         FbxUtils._warn_ascii_carrier()
         if FbxUtils.apply_takes_from_node():
             FbxUtils._bracket_state()["hook_stagers"] = FbxUtils.stage(
                 ("render_effects",)
             )
+
+    @staticmethod
+    def _raw_export_scope() -> Optional[Tuple[str, ...]]:
+        """The roots the write this hook fires for ships: the selection of an
+        Export Selection, ``None`` (the whole scene) for any other write.
+
+        ``MFileIO.exportType`` says which (1 for ``file -exportSelected``, 0
+        for ``-exportAll``; measured 2026-10-31); API 2.0 has no binding."""
+        import maya.OpenMaya as om1
+
+        if om1.MFileIO.exportType() != om1.MFileIO.kExportTypeSelected:
+            return None
+        return tuple(cmds.ls(selection=True, long=True) or ())
 
     @staticmethod
     def _warn_ascii_carrier() -> None:

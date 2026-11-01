@@ -7,12 +7,9 @@ except ImportError:
 
 import os
 import logging
-from functools import partial
-from qtpy import QtCore
-from typing import List, Dict, Any, Optional, Union, Callable
+from typing import List, Dict, Any, Optional, Union, Callable, Tuple
 
 import pythontk as ptk
-from uitk.switchboard import Cancelable
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
@@ -80,6 +77,13 @@ class MatUpdater(ptk.LoggingMixin):
     #: Environment maps a material's slots carry (the StingrayPBS IBL cubes and
     #: LUT) that are no part of its texture set -- never a map to rebuild.
     IGNORED_ENV_SETS = frozenset({"ibl_brdf_lut", "diffuse_cube", "specular_cube"})
+
+    #: The ``config["transfer_mode"]`` values a run applies once
+    #: ``move_to_folder`` is set -- what becomes of a material's SOURCE maps:
+    #: ``"copy"``: copied there (generated maps move), ``"move"``: moved there.
+    #: Leaving them where they are is no mode: pass no ``move_to_folder``.
+    #: Twin of blendertk's, which has no such step (empty).
+    TRANSFER_MODES = ("copy", "move")
 
     @classmethod
     @CoreUtils.undoable
@@ -158,7 +162,7 @@ class MatUpdater(ptk.LoggingMixin):
             if move_to_folder:
                 try:
                     resolved = ptk.FileUtils.resolve_output_dir(
-                        move_to_folder, EnvUtils.get_env_info("sourceimages")
+                        move_to_folder, cls.texture_root()
                     )
                 except Exception as e:
                     cls.logger.warning(f"Could not resolve sourceimages path: {e}")
@@ -174,7 +178,7 @@ class MatUpdater(ptk.LoggingMixin):
                 "discover_dir"
             ):
                 try:
-                    source_images = EnvUtils.get_env_info("sourceimages")
+                    source_images = cls.texture_root()
                     if source_images:
                         cfg_kwargs["discover_dir"] = source_images
                     else:
@@ -214,7 +218,8 @@ class MatUpdater(ptk.LoggingMixin):
             # by then the textures have already been processed and -- with an
             # output folder set -- MOVED, out from under file nodes this tool
             # will never repath. Caller-supplied materials are the path that
-            # reaches here unfiltered (the panel filters its own selection).
+            # reaches here unfiltered (``selected_materials`` and
+            # ``materials_using_textures`` filter their own).
             wireable, unwireable = [], []
             for m in materials:
                 bucket = wireable if cmds.nodeType(m) in cls.CONNECTORS else unwireable
@@ -987,430 +992,99 @@ class MatUpdater(ptk.LoggingMixin):
 
         return connected
 
+    @staticmethod
+    def shader_type_choices() -> List[Tuple[str, str]]:
+        """The retype targets ``update_materials(shader_type=...)`` takes.
 
-class MatUpdaterSlots(MatUpdater):
-    msg_intro = "Reconfigure existing materials for a target workflow preset."
-    # SUPPORTED_MAT_TYPES is inherited -- derived from MatUpdater.CONNECTORS so
-    # the panel's filter cannot drift from what update_network can actually wire.
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.mat_updater
-        self._pending = None  # the live call an armed Apply button would make
-        self._committing = None  # that call, handed to b001 for one dispatch
-        # Built here rather than at the end of init: ``_disarm_apply`` is a
-        # signal handler (the selection-mode combo restores its state during
-        # header init) and reads this, so it must already be bound.
-        self._apply_btn = self._add_apply_button()
-
-        # Setup logging
-        self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
-        self.logger.setup_logging_redirect(self.ui.txt001)
-
-        # Connect clickable log links (action:// URIs in QTextBrowser)
-        if hasattr(self.ui.txt001, "anchorClicked"):
-            self.ui.txt001.anchorClicked.connect(self._on_log_link_clicked)
-
-        try:
-            sourceimages = EnvUtils.get_env_info("sourceimages")
-            info = ptk.truncate(
-                f"<br><font color='#888'>Source Images: {sourceimages}</font><br>",
-                mode="middle",
-            )
-            self.ui.txt001.setText(self.msg_intro + info)
-        except Exception:
-            self.ui.txt001.setText(self.msg_intro)
-
-    def _on_log_link_clicked(self, url) -> None:
-        """Dispatch clickable ``action://`` links from the log panel."""
-        from mayatk.ui_utils._ui_utils import UiUtils
-
-        UiUtils.dispatch_log_link(url, self.logger)
-
-    # ------------------------------------------------------------------
-    # Dry run / Apply
-    # ------------------------------------------------------------------
-
-    def _add_apply_button(self):
-        """The footer button that commits the last dry run; hidden until one is armed."""
-        footer = getattr(self.ui, "footer", None)
-        if footer is None or not hasattr(footer, "add_action_button"):
-            return None
-        button = footer.add_action_button(
-            text="Apply",
-            icon_name="check",
-            tooltip="Apply the update the last dry run previewed.",
-            callback=self._apply_dry_run,
-        )
-        button.setVisible(False)
-        return button
-
-    def _arm_apply(self, commit) -> None:
-        """Hold *commit* -- the identical live call -- for the Apply button."""
-        self._pending = commit
-        if self._apply_btn is not None:
-            self._apply_btn.setVisible(True)
-            self.ui.footer.setText("Dry run — Apply to commit", level="warning")
-
-    def _disarm_apply(self, *_args) -> None:
-        """Drop any armed preview and hide the Apply button.
-
-        Gated on having been armed, not on ``isVisible()`` -- a child of an
-        unshown window reads as invisible however it was set, which would leave
-        the footer note behind.
+        Returns:
+            ``(label, shader_type)`` pairs in :attr:`ShaderConverter.TARGETS`
+            order (a panel's combo saves its INDEX: a target added there lands
+            at the END). Twin of blendertk's, which has none.
         """
-        was_armed = self._pending is not None
-        self._pending = None
-        if was_armed and self._apply_btn is not None:
-            self._apply_btn.setVisible(False)
-            self.ui.footer.setText("")
-
-    def _apply_dry_run(self) -> None:
-        """Commit the plan the last dry run previewed.
-
-        Routed back through the Update button rather than called straight,
-        because the commit is the run that actually writes: going through the
-        dispatcher is what gives it the same ``@Cancelable`` treatment the
-        preview got -- an activated cancel scope (so ``sb.progress``'s Esc and
-        the stall dialog's Cancel are the same cancel), the "still running"
-        dialog and the spinner. ``b001`` consumes ``_committing`` and calls
-        ``_begin``, which is what disarms this button.
-        """
-        commit = self._pending
-        if commit is None:
-            return
-        self._committing = commit
-        try:
-            self.ui.b001.click()
-        finally:
-            # Never leave the carrier set: a dispatch that did not reach b001
-            # would otherwise make the NEXT Update press commit a stale plan.
-            self._committing = None
-
-    def _report_failure(self, error) -> None:
-        """Report a failed run -- shared by the preview and the commit.
-
-        Through the logger, not txt001.append: the handler is already pointed
-        at txt001, so this lands in the same place *and* picks up ERROR
-        colouring plus any file/ring sink the session attached. Message and
-        traceback go out as ONE record -- a formatted traceback is already a
-        single multi-line string, and the widget handler renders it with
-        ``white-space:pre-wrap``, so it needs no ``log_group`` to avoid
-        per-frame paragraphs. Plain ``error`` also keeps the whole thing
-        level-filtered, which ``log_group`` (via ``log_raw``) would not be.
-        """
-        import traceback
-
-        self.logger.error(f"Material update failed: {error}\n{traceback.format_exc()}")
-
-    def _begin(self) -> None:
-        """Start a new run: clear the report and drop any pending preview.
-
-        One rule in one place -- a new run always supersedes the last dry run's
-        plan, including when it goes on to abort with nothing in scope.
-        """
-        self.ui.txt001.clear()
-        self._disarm_apply()
-
-    def header_init(self, widget):
-        """Format global options in the header menu."""
-        # Selection Mode
-        cmb_mode = widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_selection_mode",
-            addItems=["Selected Objects", "All Scene Materials", "Browse..."],
-            setToolTip=(
-                "Choose the texture/material source:\n"
-                "• Selected Objects — materials on the current selection; "
-                "material nodes selected directly (Hypershade, Outliner) count too.\n"
-                "• All Scene Materials — every supported material in the scene.\n"
-                "• Browse… — pick texture files; updates materials that reference them."
-            ),
-        )
-        # A new mode stales any armed preview: the plan on screen was built
-        # over the old mode's material set, and committing it under a mode the
-        # panel no longer shows is exactly the surprise Apply exists to avoid.
-        cmb_mode.currentTextChanged.connect(self._disarm_apply)
-        # Dry Run — kept at the top so it's the first thing reached under the
-        # selection mode; simulate the run without writing files or editing nodes.
-        widget.menu.add(
-            "QCheckBox",
-            setObjectName="chk_dry_run",
-            setText="Dry Run",
-            setToolTip=(
-                "Simulate the process without making changes.\n"
-                "A preview arms Apply in the footer: it commits the exact plan "
-                "you are looking at, even if the options or the selection have "
-                "moved on since."
-            ),
-        )
-        # Shader Type — the material's NODE type, retyped before the textures
-        # are wired (``update_materials(shader_type=...)`` -> ShaderConverter).
-        # Items are built from the converter's own TARGETS so a target added
-        # there appears here without a second list to keep in step; the labels
-        # are this panel's business. "Keep Current Type" leads and the targets
-        # follow in TARGETS order — combo state persists by INDEX, so new
-        # targets must land at the END.
-        cmb_shader = widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_shader_type",
-            setToolTip=(
-                "Retype the materials before their textures are wired.\n"
-                "Keep Current Type (default): only the textures change.\n"
-                "A target type: each material is rebuilt on that shader — its "
-                "textures, constants and geometry assignments carry across — "
-                "then updated as usual. This is also what brings a legacy "
-                "blinn/lambert/phong into the run at all: those have no "
-                "connector, so without a retype they are skipped."
-            ),
-        )
-        # addItem, not ``add(prefix=...)``: that helper rewrites a None data
-        # value to the item's label (and title-cases the text), which would
-        # hand "Keep Current Type" to the engine as a shader-type name.
-        cmb_shader.addItem("Shader: Keep Current Type", None)
-        for name, node_type in ShaderConverter.TARGETS.items():
-            cmb_shader.addItem(
-                f"Shader: {ShaderConverter.TARGET_LABELS.get(name, node_type)}", name
-            )
-        # Reconfiguration only — file format, max size, mask/secondary scale
-        # and bit depth are NOT offered here. They duplicate the Map Converter's
-        # Optimize tool, which owns image optimization for the whole pipeline;
-        # this panel decides *which* maps a material gets and wires them up.
-        widget.menu.add("Separator", setTitle="Processing")
-        # Missing Maps — the policy for a packed map (ORM / MSAO) the preset
-        # calls for whose source channels aren't all resolvable. Same three
-        # rules, wording and prefixed-combo presentation as the Map Packer's
-        # control, so one vocabulary covers both ends of the pipeline.
-        cmb_missing = widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_missing_maps",
-            setToolTip=(
-                "What to do when a packed map (ORM, MSAO) the preset calls for "
-                "is missing one or more of its source maps (and it can't be "
-                "derived from the maps that are present).\n"
-                "Skip Map (default): the packed map isn't written. A gap whose "
-                "fill is harmless still packs - an absent AO fills white - so "
-                "this is about the ones that would bake in a wrong value, like "
-                "black roughness or white (mirror) smoothness.\n"
-                "Pack If 2+ Maps: pack once at least two source channels "
-                "resolved - enough that the result is still a useful packed map "
-                "rather than a single map wearing a packed name.\n"
-                "Pack Anyway: always pack; missing channels are filled with "
-                "their default value."
-            ),
-        )
-        cmb_missing.add(
-            [
-                ("Skip Map", ptk.MapRegistry.MISSING_SKIP),
-                ("Pack If 2+ Maps", ptk.MapRegistry.MISSING_MULTI),
-                ("Pack Anyway", ptk.MapRegistry.MISSING_FORCE),
-            ],
-            prefix="Missing Maps:",
-        )
-        # Use Input Fallbacks
-        widget.menu.add(
-            "QCheckBox",
-            setObjectName="chk_input_fallbacks",
-            setText="Use Input Fallbacks",
-            setChecked=True,
-            setToolTip="Allow generating maps from alternative inputs (e.g. create Base Color from Existing Diffuse).",
-        )
-        # Use Output Fallbacks
-        widget.menu.add(
-            "QCheckBox",
-            setObjectName="chk_output_fallbacks",
-            setText="Use Output Fallbacks",
-            setChecked=True,
-            setToolTip="Allow substituting missing output maps with alternatives (e.g. use AO map alone if Mask Map cannot be generated). Ignored when Missing Maps is set to Pack Anyway.",
-        )
-
-        # Output fallbacks only have something to do while a packed map can
-        # still fail to be written: 'Pack Anyway' always emits one, so there is
-        # never a missing output left to substitute for.
-        def _update_output_fallbacks_state():
-            widget.menu.chk_output_fallbacks.setDisabled(
-                cmb_missing.currentData() == ptk.MapRegistry.MISSING_FORCE
-            )
-
-        cmb_missing.currentIndexChanged.connect(
-            lambda *_: _update_output_fallbacks_state()
-        )
-        _update_output_fallbacks_state()
-        # Discover Maps in sourceimages
-        widget.menu.add(
-            "QCheckBox",
-            setObjectName="chk_discover_sourceimages",
-            setText="Discover Maps in sourceimages",
-            setChecked=True,
-            setToolTip=(
-                "Pull in same-base-name textures found in the project's "
-                "sourceimages folder that aren't wired into the material "
-                "(e.g. a Normal sitting on disk but never connected).\n"
-                "Only map types missing from the material are added; "
-                "connected textures are never replaced."
-            ),
-        )
-        widget.menu.add("Separator", setTitle="File Management")
-        # File Transfer Mode
-        cmb_transfer = widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_transfer_mode",
-            setToolTip="How to handle files when an Output Folder is specified.",
-        )
-        cmb_transfer.addItem("Copy All to Output", "copy")
-        cmb_transfer.addItem("Move All to Output", "move")
-        cmb_transfer.addItem("Use Existing Folders", "none")
-
-        # Output Folder
-        widget.menu.add(
-            "QLineEdit",
-            setObjectName="txt_move_to",
-            setPlaceholderText="Output Folder (Optional)",
-            setToolTip="Folder to move/copy processed files to.",
-        )
-
-        # Disable Move To field when "Use Existing" is selected
-        def _update_move_to_state():
-            mode = cmb_transfer.currentData()
-            widget.menu.txt_move_to.setEnabled(mode != "none")
-
-        cmb_transfer.currentIndexChanged.connect(_update_move_to_state)
-        # Initialize state
-        _update_move_to_state()
-
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Material Updater",
-                body="Reconfigure scene materials for a target workflow — "
-                "resolve each material's texture set, generate the packed maps "
-                "the preset calls for (ORM / MSAO), and rewire the shading "
-                "network to the result.<br>"
-                "A preset that wants LOOSE maps goes the other way too: a packed map it does not call for is unpacked into the channels it carries and retired — a loose map already on disk (or discovered in sourceimages) always wins over an extracted one, and a packing whose channels cannot be recovered is kept rather than lost.<br>"
-                "Image <i>optimization</i> — file format, resolution clamp, "
-                "secondary scale, bit depth, archiving originals — is not done "
-                "here: run the <b>Map Converter</b>'s <b>Optimize</b> tool for that.",
-                steps=[
-                    "Pick a <b>Selection Mode</b> (Selected materials / All "
-                    "scene materials).",
-                    "Open the header menu (▸) and configure the processing "
-                    "and file-management options below.",
-                    "Press <b>Update</b> to run.",
-                ],
-                sections=[
-                    (
-                        "Processing options",
-                        [
-                            "<b>Missing Maps</b> — what an ORM / MSAO does when a "
-                            "source channel can't be resolved: <i>Skip Map</i> "
-                            "writes nothing unless the gap is harmless (an absent "
-                            "AO fills white), <i>Pack If 2+ Maps</i> packs once at "
-                            "least two channels resolved, <i>Pack Anyway</i> packs "
-                            "regardless (absent channels take their default fill).",
-                            "<b>Use Input Fallbacks</b> — generate missing inputs "
-                            "from related ones (e.g. Base Color from Diffuse).",
-                            "<b>Use Output Fallbacks</b> — substitute missing "
-                            "outputs (e.g. AO alone for Mask Map). Disabled when "
-                            "Missing Maps is set to Pack Anyway.",
-                            "<b>Discover Maps in sourceimages</b> — gap-fill each "
-                            "material with same-base-name textures sitting in "
-                            "sourceimages that were never connected. Only missing "
-                            "map types are added; connected textures are kept.",
-                            "<b>Shader Type</b> — retype each material before "
-                            "its textures are wired (textures, constants and "
-                            "geometry assignments carry across). Leave on "
-                            "<i>Keep Current Type</i> to change textures only; "
-                            "pick a target to bring legacy blinn / lambert / "
-                            "phong materials into the run, which are otherwise "
-                            "skipped for having no connector.",
-                            "<b>Dry Run</b> — preview the plan without writing "
-                            "files. <b>Apply</b> then appears in the footer to "
-                            "commit the preview.",
-                        ],
-                    ),
-                    (
-                        "File management",
-                        [
-                            "<b>Transfer Mode</b> — Copy / Move / Use Existing.",
-                            "<b>Output Folder</b> — destination (disabled when "
-                            "Use Existing is selected).",
-                        ],
-                    ),
-                ],
-            )
-        )
-
-    @property
-    def selection_mode(self):
-        return self.ui.cmb_selection_mode.currentText()
-
-    @property
-    def move_to_folder(self):
-        return self.ui.txt_move_to.text() or None
-
-    @property
-    def shader_type(self):
-        """The selected retype target, or None for "keep the current type"."""
-        return self.ui.header.menu.cmb_shader_type.currentData()
-
-    @property
-    def acceptable_types(self):
-        """Node types this run can act on -- what it can wire, plus what it can retype.
-
-        A legacy blinn has no connector, so the plain run drops it; with a
-        Shader Type selected the retype gives it one, and refusing it here
-        would refuse exactly the material that option exists for.
-        """
-        types = set(self.SUPPORTED_MAT_TYPES)
-        if self.shader_type:
-            types |= set(ShaderConverter.CONVERTIBLE)
-        return tuple(sorted(types))
-
-    def cmb001_init(self, widget):
-        """Initialize Presets.
-
-        Names and tooltips both come from the ``OutputTemplates`` SSoT (shared
-        with game_shader / the converter / compositor / scene exporter). The
-        tooltip is the profile's full outline rather than its one-paragraph
-        description: "which preset is right for me" is answered by the target
-        engine, but the question a preset combo is actually asked here is *what
-        will I get* — so each item names the files the profile writes and what
-        each one carries.
-
-        ``delivery=False`` because this panel does not hand the profile to the
-        writer as ``output_profile``: it reconfigures and rewires, leaving each
-        map in the container it was authored in (the Map Converter's Optimize
-        tool owns format changes). Naming TGA under Unreal here would be a
-        promise the run does not keep.
-        """
-        if not widget.is_initialized:
-            widget.restore_state = True
-            widget.clear()
-            for name, outline in ptk.OutputTemplates.profile_outlines(delivery=False):
-                widget.addItem(name)
-                widget.setItemData(
-                    widget.count() - 1,
-                    self.sb.tooltip.fmt(**outline),
-                    QtCore.Qt.ToolTipRole,
-                )
+        return [
+            (ShaderConverter.TARGET_LABELS.get(name, node_type), name)
+            for name, node_type in ShaderConverter.TARGETS.items()
+        ]
 
     @staticmethod
-    def _normalize_path(p):
-        """Normalize for case-insensitive comparison on case-insensitive filesystems."""
-        return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+    def texture_root() -> str:
+        """Where a run resolves a relative ``move_to_folder`` and discovers
+        sibling maps (``discover_sourceimages``): the project's sourceimages.
+        Twin of blendertk's (its current workspace).
 
-    def _filter_supported(self, materials):
-        """Drop materials this run cannot act on (see :attr:`acceptable_types`)."""
-        types = self.acceptable_types  # once, not per material: it rebuilds a set
-        return [m for m in materials if cmds.nodeType(m) in types]
+        Returns:
+            The folder, or '' when the scene has none.
+        """
+        return EnvUtils.get_env_info("sourceimages") or ""
 
-    def _materials_from_texture_paths(self, paths):
-        """Find scene materials that reference any of the given texture paths."""
+    @classmethod
+    def selected_materials(cls, shader_type: Optional[str] = None) -> List[str]:
+        """The materials a run over the selection acts on.
+
+        The materials on the selected geometry (groups descend) and any
+        material node selected directly (Hypershade, Outliner), kept to the
+        types the run can act on. The Material Updater panel's *Selected
+        Objects* scope. Twin of blendertk's.
+
+        Parameters:
+            shader_type: The run's retype target (see :meth:`update_materials`).
+                With one, the legacy types the converter reads count too: the
+                retype is what brings them into the run.
+
+        Returns:
+            The materials, or ``[]`` with a warning naming the fix: nothing
+            selected, nothing resolved from it, or only unsupported types.
+        """
+        sel = cmds.ls(selection=True, long=True) or []
+        if not sel:
+            cls.logger.warning("Nothing selected.")
+            return []
+        # get_mats passes selected material nodes straight through, so a
+        # Hypershade/Outliner selection works as well as geometry, and it
+        # descends into groups.
+        resolved = MatUtils.get_mats(sel) or []
+        materials = cls._filter_supported(resolved, shader_type)
+        if materials:
+            return materials
+        # Name what WAS resolved. "No supported materials found" reads as a
+        # tool failure when the scene visibly has a Stingray material -- the
+        # two cases (selection resolved nothing at all vs. resolved only
+        # unsupported shaders) need different fixes from the artist, so they
+        # get different messages.
+        if resolved:
+            found = ", ".join(
+                sorted(
+                    f"{CoreUtils.short_name(m)} ({cmds.nodeType(m)})" for m in resolved
+                )
+            )
+            cls.logger.warning(
+                f"Selection resolved {len(resolved)} material(s), none of a "
+                f"supported type ({', '.join(cls._acceptable_types(shader_type))}): "
+                f"{found}"
+            )
+        else:
+            cls.logger.warning(
+                "No materials could be resolved from the selection "
+                f"({len(sel)} node(s)). Select geometry, a group "
+                "containing geometry, or the material itself."
+            )
+        return []
+
+    @classmethod
+    def materials_using_textures(
+        cls, paths: List[str], shader_type: Optional[str] = None
+    ) -> List[str]:
+        """The scene materials whose file nodes read any of *paths*, kept to the
+        types the run can act on (see :meth:`selected_materials`).
+
+        The Material Updater panel's *Browse...* scope. Twin of blendertk's.
+        """
         if not paths:
             return []
         target = set()
         for p in paths:
             try:
-                target.add(self._normalize_path(p))
+                target.add(cls._normalize_path(p))
             except Exception:
                 continue
 
@@ -1422,163 +1096,35 @@ class MatUpdaterSlots(MatUpdater):
                 )
             except Exception:
                 continue
-            if resolved and self._normalize_path(resolved) in target:
+            if resolved and cls._normalize_path(resolved) in target:
                 matching_nodes.append(node)
 
         if not matching_nodes:
             return []
-        return self._filter_supported(MatUtils.get_connected_shaders(matching_nodes))
+        return cls._filter_supported(
+            MatUtils.get_connected_shaders(matching_nodes), shader_type
+        )
 
-    @Cancelable(300)
-    def b001(self, widget):
-        """Update Materials"""
-        # An armed plan, handed over by the footer's Apply button, IS the run:
-        # it is the preview's own call with dry_run off, over the material set
-        # and options as they were previewed.
-        # Consumed on READ, not just in ``_apply_dry_run``'s finally: the
-        # commit pumps the event loop (the progress bar, the stall dialog), so
-        # a second press during it re-enters here -- and a carrier still set
-        # would commit the same plan again instead of running a fresh update.
-        commit, self._committing = self._committing, None
-        # Before the scope resolves: an abort ("Nothing selected.") is a new
-        # run too, so it must not land under the previous run's report, and it
-        # must supersede any plan the Apply button still holds.
-        self._begin()
-        if commit is not None:
-            try:
-                commit()
-            except Exception as e:
-                self._report_failure(e)
-            return
+    @staticmethod
+    def _normalize_path(p):
+        """Normalize for case-insensitive comparison on case-insensitive filesystems."""
+        return os.path.normcase(os.path.normpath(os.path.abspath(p)))
 
-        config_name = self.ui.cmb001.currentText()
+    @classmethod
+    def _acceptable_types(cls, shader_type: Optional[str] = None) -> Tuple[str, ...]:
+        """Node types a run can act on -- what it can wire, plus what it can retype.
 
-        menu = self.ui.header.menu
-        dry_run = menu.chk_dry_run.isChecked()
-        shader_type = self.shader_type
-        transfer_mode = menu.cmb_transfer_mode.currentData()
-        missing_map_rule = menu.cmb_missing_maps.currentData()
-        use_input_fallbacks = menu.chk_input_fallbacks.isChecked()
-        use_output_fallbacks = menu.chk_output_fallbacks.isChecked()
-        discover_sourceimages = menu.chk_discover_sourceimages.isChecked()
+        A legacy blinn has no connector, so the plain run drops it; with a
+        *shader_type* the retype gives it one, and refusing it here would
+        refuse exactly the material that option exists for.
+        """
+        types = set(cls.SUPPORTED_MAT_TYPES)
+        if shader_type:
+            types |= set(ShaderConverter.CONVERTIBLE)
+        return tuple(sorted(types))
 
-        # Resolve target materials from the header selection mode.
-        # `None` means "let update_materials default to all scene materials".
-        mode = self.selection_mode
-        materials = None
-
-        if mode == "Selected Objects":
-            sel = cmds.ls(selection=True, long=True) or []
-            if not sel:
-                self.logger.warning("Nothing selected.")
-                return
-            # get_mats passes selected material nodes straight through, so a
-            # Hypershade/Outliner selection works as well as geometry, and it
-            # descends into groups.
-            resolved = MatUtils.get_mats(sel) or []
-            materials = self._filter_supported(resolved)
-            if not materials:
-                # Name what WAS resolved. "No supported materials found" reads
-                # as a tool failure when the scene visibly has a Stingray
-                # material -- the two cases (selection resolved nothing at all
-                # vs. resolved only unsupported shaders) need different fixes
-                # from the artist, so they get different messages.
-                if resolved:
-                    found = ", ".join(
-                        sorted(
-                            f"{CoreUtils.short_name(m)} ({cmds.nodeType(m)})"
-                            for m in resolved
-                        )
-                    )
-                    self.logger.warning(
-                        f"Selection resolved {len(resolved)} material(s), none of a "
-                        f"supported type ({', '.join(self.acceptable_types)}): "
-                        f"{found}"
-                    )
-                else:
-                    self.logger.warning(
-                        "No materials could be resolved from the selection "
-                        f"({len(sel)} node(s)). Select geometry, a group "
-                        "containing geometry, or the material itself."
-                    )
-                return
-        elif mode == "Browse...":
-            try:
-                start_dir = EnvUtils.get_env_info("sourceimages") or ""
-            except Exception:
-                start_dir = ""
-            paths = self.sb.file_dialog(
-                file_types=[f"*.{ext}" for ext in ptk.ImgUtils.texture_file_types],
-                title="Select textures whose materials should be updated:",
-                start_dir=start_dir,
-                allow_multiple=True,
-            )
-            if not paths:
-                return
-            materials = self._materials_from_texture_paths(paths)
-            if not materials:
-                self.logger.warning(
-                    "No supported materials reference the selected textures."
-                )
-                return
-
-        try:
-            # Reconfiguration keys only. Image-optimization keys (max_size,
-            # mask_map_scale, output_extension, old_files_folder) are
-            # deliberately absent — the factory then leaves resolution, format
-            # and bit depth alone, and the Map Converter's Optimize tool owns
-            # that pass. ``update_materials`` still accepts them, so a script
-            # can drive both in one call; the panel does not offer them.
-            config = {
-                "preset": config_name,
-                "move_to_folder": (
-                    self.move_to_folder if transfer_mode != "none" else None
-                ),
-                "transfer_mode": transfer_mode,
-                "missing_map_rule": missing_map_rule,
-                "use_input_fallbacks": use_input_fallbacks,
-                "use_output_fallbacks": use_output_fallbacks,
-                "discover_sourceimages": discover_sourceimages,
-            }
-
-            # The run as a closure over the frozen plan, so Apply commits
-            # what the report on screen describes even if the preset, the
-            # header options or the selection have moved on since. Only
-            # ``dry_run`` differs between the two calls.
-            #
-            # No ``total=`` needed — :meth:`Switchboard.progress_adapter`
-            # auto-syncs the bar from ``update_materials``'s callback total
-            # on the first tick. Also avoids ``len(None)`` when materials
-            # defaults to "all scene materials".
-            def run(plan, mats):
-                with self.sb.progress(text="Updating Materials") as update:
-                    return self.update_materials(
-                        materials=mats,
-                        config=dict(config, dry_run=plan),
-                        verbose=True,
-                        progress_callback=self.sb.progress_adapter(update),
-                        shader_type=shader_type,
-                    )
-
-            run(dry_run, materials)
-            # No completion line appended here — update_materials closes the
-            # run with its own summary box (mirrors the scene exporter).
-
-            # Arm only once the preview has actually reported: a run that
-            # raised must not leave a button offering to commit it. ``None``
-            # is frozen as-is — "All Scene Materials" is a standing query, and
-            # re-resolving it at Apply is what that mode means; a resolved
-            # list is copied so a later selection change cannot rewrite it.
-            if dry_run:
-                self._arm_apply(
-                    partial(run, False, None if materials is None else list(materials))
-                )
-        except Exception as e:
-            self._report_failure(e)
-
-
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("material_updater", reload=True)
-    ui.show(pos="screen", app_exec=True)
+    @classmethod
+    def _filter_supported(cls, materials, shader_type: Optional[str] = None):
+        """Drop materials a run cannot act on (see :meth:`_acceptable_types`)."""
+        types = cls._acceptable_types(shader_type)  # once, not per material
+        return [m for m in materials if cmds.nodeType(m) in types]

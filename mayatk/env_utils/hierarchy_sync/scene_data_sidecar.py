@@ -1,57 +1,33 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Scene-data sidecar -- Maya's scene hooks over ``ptk.SceneDataSidecarBase``.
+"""Scene-data sidecar -- Maya's host adapter for ``ptk.SceneDataSidecarBase``.
 
 The sidecar's file format, naming, migration, manifest I/O, diff report and
 comparison are pythontk's (``core_utils/engines/scene_export/
 scene_data_sidecar.py``), shared with blendertk; see that module for the v3
-format.  What stays here is what reaches the Maya scene or spells its paths:
+format.  What stays here is what reaches the Maya scene or spells its paths,
+as :class:`MayaSidecarHost` (a :class:`pythontk.SidecarHost`):
 
-- :meth:`SceneDataSidecar.expand_to_descendants` -- ``cmds.listRelatives``
-  (``allDescendents``), the scope ``cmds.file(exportSelected=True)`` writes;
-- :meth:`SceneDataSidecar.drop_intermediate` -- intermediate shapes FBX never
-  ships;
-- :meth:`SceneDataSidecar.build_clean_path_set` -- DAG long paths with the
-  leading ``|`` and namespaces stripped, closed under ancestors;
-- :meth:`SceneDataSidecar._close` -- a recorded set closed under ancestors on
-  comparison (:meth:`~pythontk.SceneDataSidecarBase.with_ancestors`): Maya's
-  ``exportSelected`` ships every node's parent chain.
+- ``expand_to_descendants`` -- ``cmds.listRelatives`` (``allDescendents``),
+  the scope ``cmds.file(exportSelected=True)`` writes;
+- ``drop_intermediate`` -- intermediate shapes FBX never ships;
+- ``clean_path`` -- a DAG long path with the leading ``|`` and namespaces
+  stripped;
+- ``ships_parent_chain`` -- true: Maya's ``exportSelected`` ships every node's
+  parent chain, so a recorded set is closed under ancestors
+  (:meth:`~pythontk.SceneDataSidecarBase.with_ancestors`) when built and on
+  comparison.
+
+:class:`SceneDataSidecar` is the shared class bound to it: configuration only.
 """
 
 import pythontk as ptk
 
 
-class SceneDataSidecar(ptk.SceneDataSidecarBase):
-    """The scene-data sidecar stored alongside Maya exports.
+class MayaSidecarHost:
+    """What the scene-data sidecar asks of Maya (:class:`pythontk.SidecarHost`)."""
 
-    Everything but the scene hooks is :class:`pythontk.SceneDataSidecarBase`
-    (one sidecar per export stem, ``base_stem=True`` for a versioned series).
-    """
-
-    @classmethod
-    def _close(cls, paths) -> set:
-        """Both sides of a comparison closed under ancestors (see
-        :meth:`with_ancestors`): manifests written before the rule carry
-        leaves + shapes only, and a caller may hand over a raw set -- either
-        way the ancestors shipped.
-        """
-        return cls.with_ancestors(paths)
-
-    @classmethod
-    def build_clean_path_set(cls, objects) -> set:
-        """Build a set of namespace-stripped hierarchy paths from DAG long paths.
-
-        Strips leading ``|`` and namespace prefixes from each component, then
-        closes the set under ancestors (see :meth:`with_ancestors`) so the
-        recorded hierarchy is the one that ships.
-        """
-        paths = set()
-        for obj in objects:
-            path = obj.lstrip("|")
-            if ":" in path:
-                path = "|".join(p.split(":")[-1] for p in path.split("|"))
-            paths.add(path)
-        return cls.with_ancestors(paths)
+    ships_parent_chain = True
 
     @staticmethod
     def expand_to_descendants(objects) -> list:
@@ -93,3 +69,22 @@ class SceneDataSidecar(ptk.SceneDataSidecarBase):
         # ls(noIntermediate=True) filters shapes only; transforms are kept.
         # Order is irrelevant downstream (the result feeds a set).
         return cmds.ls(nodes, noIntermediate=True, long=True) or []
+
+    @staticmethod
+    def clean_path(path: str) -> str:
+        """A DAG long path in the recorded spelling: the leading ``|`` and
+        each component's namespace prefix stripped."""
+        path = path.lstrip("|")
+        if ":" in path:
+            path = "|".join(p.split(":")[-1] for p in path.split("|"))
+        return path
+
+
+class SceneDataSidecar(ptk.SceneDataSidecarBase):
+    """The scene-data sidecar stored alongside Maya exports.
+
+    :class:`pythontk.SceneDataSidecarBase` bound to :class:`MayaSidecarHost`
+    (one sidecar per export stem, ``base_stem=True`` for a versioned series).
+    """
+
+    HOST = MayaSidecarHost()

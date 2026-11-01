@@ -15,7 +15,7 @@ import unittest
 import maya.cmds as cmds
 import pythontk as ptk
 
-from mayatk.mat_utils.mat_updater import MatUpdater, MatUpdaterSlots
+from mayatk.mat_utils.mat_updater import MatUpdater
 from mayatk.mat_utils.game_shader import GameShader
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.shader_converter import ShaderConverter
@@ -355,191 +355,36 @@ class TestUpdateNetworkKeepsOpacity(MayaTkTestCase):
         self.assertEqual(connected.get("Base_Color"), base)
 
 
-class _FakeCombo:
-    def __init__(self, data):
-        self._data = data
+class TestRunScopeAcceptsWhatItCanRetype(MayaTkTestCase):
+    """The run's scope is filtered BEFORE ``update_materials`` sees it.
 
-    def currentData(self):
-        return self._data
-
-
-class _FakeUi:
-    pass
-
-
-class TestPanelAcceptsWhatItCanRetype(MayaTkTestCase):
-    """``MatUpdaterSlots`` filters the selection BEFORE the engine sees it.
-
-    So the panel's own notion of "supported" has to widen with the Shader Type
-    or the option is unreachable for every material it exists for.
+    So what counts as supported has to widen with the Shader Type, or the
+    option is unreachable for every material it exists for.
     """
-
-    def _slots(self, shader_type):
-        instance = MatUpdaterSlots.__new__(MatUpdaterSlots)
-        ui = _FakeUi()
-        ui.header = _FakeUi()
-        ui.header.menu = _FakeUi()
-        ui.header.menu.cmb_shader_type = _FakeCombo(shader_type)
-        instance.ui = ui
-        return instance
 
     def test_keep_current_type_accepts_only_the_wireable_types(self):
-        instance = self._slots(None)
         self.assertEqual(
-            instance.acceptable_types, tuple(sorted(MatUpdater.SUPPORTED_MAT_TYPES))
+            MatUpdater._acceptable_types(), tuple(sorted(MatUpdater.SUPPORTED_MAT_TYPES))
         )
         blinn = cmds.shadingNode("blinn", asShader=True)
-        self.assertEqual(instance._filter_supported([blinn]), [])
+        self.assertEqual(MatUpdater._filter_supported([blinn]), [])
 
     def test_a_retype_target_accepts_what_the_converter_can_read(self):
-        instance = self._slots("stingray")
-        self.assertIn("blinn", instance.acceptable_types)
+        types = MatUpdater._acceptable_types("stingray")
+        self.assertIn("blinn", types)
         for node_type in ShaderConverter.CONVERTIBLE:
-            self.assertIn(node_type, instance.acceptable_types)
+            self.assertIn(node_type, types)
         blinn = cmds.shadingNode("blinn", asShader=True)
-        self.assertEqual(instance._filter_supported([blinn]), [blinn])
+        self.assertEqual(MatUpdater._filter_supported([blinn], "stingray"), [blinn])
 
 
-class _FakeButton:
-    """Enough QPushButton for the footer's Apply affordance."""
-
-    def __init__(self):
-        self._visible = True
-        self.callback = None
-
-    def setVisible(self, state):
-        self._visible = bool(state)
-
-    def isVisible(self):
-        return self._visible
-
-    def click(self):
-        if self.callback is not None:
-            self.callback()
-
-
-class _FakeFooter:
-    def __init__(self):
-        self.button = None
-        self.status = None
-
-    def add_action_button(self, text="", icon_name=None, tooltip="", callback=None):
-        self.button = _FakeButton()
-        self.button.callback = callback
-        return self.button
-
-    def setText(self, text, level=None):
-        self.status = (text, level)
-
-
-class _FakeCheck:
-    def __init__(self, state):
-        self._state = bool(state)
-
-    def isChecked(self):
-        return self._state
-
-
-class _FakeTextCombo(_FakeCombo):
-    """A combo the panel reads by text (preset, selection mode)."""
-
-    def __init__(self, text, data=None):
-        super().__init__(data)
-        self._text = text
-
-    def currentText(self):
-        return self._text
-
-    def setCurrentText(self, text):
-        self._text = text
-
-
-class _FakeLineEdit:
-    def __init__(self, text=""):
-        self._text = text
-
-    def text(self):
-        return self._text
-
-
-class _FakeOutput:
-    def __init__(self):
-        self.cleared = 0
-
-    def clear(self):
-        self.cleared += 1
-
-
-class _FakeProgress:
-    def __enter__(self):
-        return lambda *args, **kwargs: True
-
-    def __exit__(self, *exc):
-        return False
-
-
-class _FakeSwitchboard:
-    def progress(self, **kwargs):
-        return _FakeProgress()
-
-    def progress_adapter(self, update):
-        return None
-
-
-class TestDryRunArmsApply(MayaTkTestCase):
-    """The footer's Apply button: what arms it, and what it commits.
-
-    The value the button carries is that the applied run is the *preview's own
-    call* with ``dry_run`` off -- same materials, same options -- so what the
-    report on screen describes is what gets written. These pin that, plus the
-    three ways a plan must go stale: a failed preview, a new run, and a change
-    of selection mode.
-    """
-
-    def _slots(self, mode="All Scene Materials", dry_run=True, raises=False):
-        instance = MatUpdaterSlots.__new__(MatUpdaterSlots)
-        instance.sb = _FakeSwitchboard()
-        instance._pending = None
-        instance._committing = None
-
-        ui = _FakeUi()
-        ui.txt001 = _FakeOutput()
-        ui.cmb001 = _FakeTextCombo("PBR Metallic/Roughness")
-        ui.cmb_selection_mode = _FakeTextCombo(mode)
-        ui.txt_move_to = _FakeLineEdit("")
-        ui.footer = _FakeFooter()
-        ui.b001 = _FakeButton()
-        ui.b001.callback = lambda: instance.b001(None)
-
-        menu = _FakeUi()
-        menu.chk_dry_run = _FakeCheck(dry_run)
-        menu.cmb_shader_type = _FakeCombo(None)
-        menu.cmb_transfer_mode = _FakeCombo("none")
-        menu.cmb_missing_maps = _FakeCombo(ptk.MapRegistry.MISSING_SKIP)
-        menu.chk_input_fallbacks = _FakeCheck(True)
-        menu.chk_output_fallbacks = _FakeCheck(True)
-        menu.chk_discover_sourceimages = _FakeCheck(False)
-        ui.header = _FakeUi()
-        ui.header.menu = menu
-
-        instance.ui = ui
-        instance._apply_btn = instance._add_apply_button()
-
-        instance.calls = []
-
-        def _update(**kwargs):
-            instance.calls.append(kwargs)
-            if raises:
-                raise RuntimeError("boom")
-            return {}
-
-        instance.update_materials = _update
-        return instance
+class TestSelectedMaterials(MayaTkTestCase):
+    """``MatUpdater.selected_materials``: the panel's Selected Objects scope."""
 
     @staticmethod
-    def _assigned_standard_surface(name):
-        """A standardSurface on its own plane -- a material the panel accepts."""
-        mat = cmds.shadingNode("standardSurface", asShader=True, name=name)
+    def _assigned(node_type, name):
+        """A *node_type* material on its own plane."""
+        mat = cmds.shadingNode(node_type, asShader=True, name=name)
         sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
         )
@@ -548,146 +393,80 @@ class TestDryRunArmsApply(MayaTkTestCase):
         cmds.sets(plane, edit=True, forceElement=sg)
         return mat, plane
 
-    def test_a_dry_run_arms_the_footer_button(self):
-        slots = self._slots(dry_run=True)
-        slots.b001(None)
+    def test_the_selected_geometrys_material(self):
+        mat, plane = self._assigned("standardSurface", "sel_ss")
+        cmds.select(plane, replace=True)
+        self.assertEqual(MatUpdater.selected_materials(), [mat])
 
-        self.assertEqual(len(slots.calls), 1)
-        self.assertIs(slots.calls[0]["config"]["dry_run"], True)
-        self.assertTrue(slots._apply_btn.isVisible())
-        self.assertIsNotNone(slots._pending)
-        self.assertEqual(slots.ui.footer.status[1], "warning")
+    def test_a_material_node_selected_directly_counts_too(self):
+        mat, _plane = self._assigned("standardSurface", "sel_node")
+        cmds.select(mat, replace=True)
+        self.assertEqual(MatUpdater.selected_materials(), [mat])
 
-    def test_a_live_run_never_arms(self):
-        slots = self._slots(dry_run=False)
-        slots.b001(None)
-
-        self.assertEqual(len(slots.calls), 1)
-        self.assertIs(slots.calls[0]["config"]["dry_run"], False)
-        self.assertFalse(slots._apply_btn.isVisible())
-        self.assertIsNone(slots._pending)
-
-    def test_apply_commits_the_previewed_call_with_dry_run_off(self):
-        slots = self._slots(dry_run=True)
-        slots.b001(None)
-        slots._apply_dry_run()
-
-        self.assertEqual(len(slots.calls), 2)
-        preview, commit = slots.calls
-        self.assertIs(preview["config"]["dry_run"], True)
-        self.assertIs(commit["config"]["dry_run"], False)
-        # Everything BUT dry_run is the preview's, so the commit is the plan
-        # that was reported rather than a fresh read of the panel.
-        self.assertEqual(
-            {k: v for k, v in preview["config"].items() if k != "dry_run"},
-            {k: v for k, v in commit["config"].items() if k != "dry_run"},
-        )
-        self.assertEqual(preview["materials"], commit["materials"])
-        # And it disarms: the plan has been spent.
-        self.assertFalse(slots._apply_btn.isVisible())
-        self.assertIsNone(slots._pending)
-        self.assertIsNone(slots._committing)
-        self.assertEqual(slots.ui.footer.status, ("", None))
-
-    def test_a_press_during_the_commit_starts_a_new_run(self):
-        """The commit pumps the event loop, so a second press re-enters b001.
-
-        ``_apply_dry_run`` clears the carrier in a ``finally`` that has not run
-        while the commit is in flight, so the carrier has to be consumed where
-        ``b001`` READS it -- otherwise the re-entrant press replays the plan
-        that is already running instead of starting a run of its own.
-        """
-        slots = self._slots(dry_run=True)
-        slots.b001(None)  # arm
-
-        reentered = []
-
-        def _reenter(**kwargs):
-            slots.calls.append(kwargs)
-            if len(slots.calls) == 2:  # we are inside the commit
-                reentered.append(True)
-                slots.b001(None)
-            return {}
-
-        slots.update_materials = _reenter
-        slots._apply_dry_run()
-
-        self.assertTrue(reentered, "the probe never re-entered b001")
-        self.assertEqual(len(slots.calls), 3, "expected preview, commit, new run")
-        self.assertIs(slots.calls[1]["config"]["dry_run"], False, "the commit")
-        # Dry Run is still ticked, so a FRESH read of the panel previews again.
-        # A replay of the committed plan would read False here.
-        self.assertIs(slots.calls[2]["config"]["dry_run"], True, "a new preview")
-
-    def test_apply_commits_the_selection_as_it_was_previewed(self):
-        """The frozen list, not a re-read -- the selection may have moved on."""
-        first, first_geo = self._assigned_standard_surface("previewed_mat")
-        second, second_geo = self._assigned_standard_surface("other_mat")
-
-        slots = self._slots(mode="Selected Objects", dry_run=True)
-        cmds.select(first_geo, replace=True)
-        slots.b001(None)
-        previewed = list(slots.calls[0]["materials"])
-        self.assertEqual(previewed, [first])
-
-        cmds.select(second_geo, replace=True)  # the artist moves on
-        slots._apply_dry_run()
-
-        self.assertEqual(slots.calls[1]["materials"], previewed)
-        self.assertNotIn(second, slots.calls[1]["materials"])
-
-    def test_a_failed_preview_leaves_the_button_disarmed(self):
-        """A run that raised must not offer to commit itself."""
-        slots = self._slots(dry_run=True, raises=True)
-        slots.b001(None)  # the panel reports the failure; it must not propagate
-
-        self.assertEqual(len(slots.calls), 1)
-        self.assertFalse(slots._apply_btn.isVisible())
-        self.assertIsNone(slots._pending)
-
-    def test_a_new_run_supersedes_the_armed_plan(self):
-        slots = self._slots(dry_run=True)
-        slots.b001(None)
-        self.assertTrue(slots._apply_btn.isVisible())
-
-        slots.ui.header.menu.chk_dry_run = _FakeCheck(False)
-        slots.b001(None)  # a live run of its own, not the armed plan
-
-        self.assertEqual(len(slots.calls), 2)
-        self.assertIs(slots.calls[1]["config"]["dry_run"], False)
-        self.assertFalse(slots._apply_btn.isVisible())
-        self.assertIsNone(slots._pending)
-
-    def test_an_aborted_run_clears_the_report_and_the_plan(self):
-        """ "Nothing selected." is a new run: it supersedes the last preview."""
-        slots = self._slots(dry_run=True)
-        slots.b001(None)
-        cleared_after_preview = slots.ui.txt001.cleared
-
-        slots.ui.cmb_selection_mode.setCurrentText("Selected Objects")
+    def test_nothing_selected_is_said(self):
         cmds.select(clear=True)
-        slots.b001(None)  # aborts before the engine is reached
+        with self.assertLogs(MatUpdater.logger, level="WARNING") as logs:
+            self.assertEqual(MatUpdater.selected_materials(), [])
+        self.assertIn("Nothing selected", logs.output[0])
 
-        self.assertEqual(len(slots.calls), 1)  # nothing ran
-        self.assertGreater(slots.ui.txt001.cleared, cleared_after_preview)
-        self.assertFalse(slots._apply_btn.isVisible())
-        self.assertIsNone(slots._pending)
+    def test_an_unsupported_type_is_named_and_a_retype_brings_it_in(self):
+        blinn, plane = self._assigned("blinn", "sel_blinn")
+        cmds.select(plane, replace=True)
+        with self.assertLogs(MatUpdater.logger, level="WARNING") as logs:
+            self.assertEqual(MatUpdater.selected_materials(), [])
+        self.assertIn("sel_blinn (blinn)", logs.output[0])
+        self.assertEqual(MatUpdater.selected_materials(shader_type="stingray"), [blinn])
 
-    def test_changing_the_selection_mode_disarms(self):
-        """The plan was built over the old mode's material set."""
-        slots = self._slots(dry_run=True)
-        slots.b001(None)
-        self.assertTrue(slots._apply_btn.isVisible())
 
-        slots._disarm_apply("Selected Objects")  # what the combo's signal calls
+class TestMaterialsUsingTextures(MayaTkTestCase, _MaterialSceneMixin):
+    """``MatUpdater.materials_using_textures``: the panel's Browse... scope."""
 
-        self.assertFalse(slots._apply_btn.isVisible())
-        self.assertIsNone(slots._pending)
+    def setUp(self):
+        super().setUp()
+        self.mat = self.build_blinn()
 
-    def test_apply_without_a_plan_is_a_no_op(self):
-        slots = self._slots(dry_run=True)
-        slots._apply_dry_run()
-        self.assertEqual(slots.calls, [])
+    def tearDown(self):
+        self.artifacts.cleanup()
+        super().tearDown()
+
+    def test_the_material_reading_a_picked_texture_once_the_run_can_act_on_it(self):
+        # A blinn has no connector: only a retype brings it into the run.
+        self.assertEqual(MatUpdater.materials_using_textures([self.base_map]), [])
+        self.assertEqual(
+            MatUpdater.materials_using_textures([self.base_map], shader_type="stingray"),
+            [self.mat],
+        )
+
+    def test_unreferenced_or_no_paths_find_nothing(self):
+        ghost = os.path.join(self.artifacts.dir_path(), "ghost_Base_Color.png")
+        self.assertEqual(MatUpdater.materials_using_textures([ghost], "stingray"), [])
+        self.assertEqual(MatUpdater.materials_using_textures([], "stingray"), [])
+
+
+class TestWhatThePanelOffers(unittest.TestCase):
+    """The choices the shared Material Updater panel builds its options from."""
+
+    def test_shader_type_choices_are_the_converters_targets_in_order(self):
+        """The panel's Shader Type combo saves its INDEX: TARGETS order rules."""
+        choices = MatUpdater.shader_type_choices()
+        self.assertEqual([key for _, key in choices], list(ShaderConverter.TARGETS))
+        self.assertEqual(
+            [label for label, _ in choices],
+            [ShaderConverter.TARGET_LABELS[key] for key in ShaderConverter.TARGETS],
+        )
+
+    def test_transfer_modes_are_the_ones_the_run_applies(self):
+        self.assertEqual(MatUpdater.TRANSFER_MODES, ("copy", "move"))
+
+    def test_texture_root_is_the_projects_sourceimages(self):
+        from unittest.mock import patch
+
+        with patch(
+            "mayatk.mat_utils.mat_updater.EnvUtils.get_env_info",
+            return_value="C:/project/sourceimages",
+        ) as env:
+            self.assertEqual(MatUpdater.texture_root(), "C:/project/sourceimages")
+        env.assert_called_once_with("sourceimages")
 
 
 if __name__ == "__main__":
