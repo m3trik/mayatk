@@ -1255,13 +1255,15 @@ class MatUtils(_MatUtilsInternal):
                 - ``"copy"`` (default) — consolidate it into sourceimages
                   (the asset-consolidation behavior), then store the relative
                   form.
-                - ``"move"`` — as ``"copy"``, but the external original (each
-                  tile of a token set) is removed once its staged twin is in
-                  place — including when an identical-content resident made
-                  the copy itself unnecessary. A later node in the batch
-                  storing the SAME path rebinds to that staged twin (the
-                  source is gone by then, and "shared" must not read as
-                  "missing").
+                - ``"move"`` — as ``"copy"``, then, once the batch is
+                  repointed, the external originals (each tile of a token set)
+                  go through ``ptk.FileCollect.finish_move``: only once the
+                  staged twin holds the whole bytes (an identical-content
+                  resident included), never when the twin IS the original
+                  however spelled, and never while any texture reader still
+                  reads it -- one outside the batch, or one whose plug refused
+                  the repath (warned). Nodes of the batch storing the same
+                  path all rebind to the one staged twin.
                 - ``"skip"`` — the node keeps its absolute path and is
                   reported ``skipped:external``, so a deliberate link to a
                   shared library is neither relocated nor rewritten.

@@ -593,10 +593,11 @@ class TestNormalizeToRelative(MayaTkTestCase):
         with open(os.path.join(self.si_dir, "wall.tga"), "rb") as fh:
             self.assertIn(b"OLD PAINT", fh.read(), "the resident was overwritten")
 
-    @unittest.expectedFailure  # BACKLOG 2026-10-31: Normalize Paths' move keeps no outside reader's file
     def test_move_leaves_a_file_a_node_outside_the_batch_reads(self):
-        """Set Directory and Find & Copy copy a file a node outside the batch
-        still reads; Normalize Paths' move takes it away under that node."""
+        """A node outside the batch (an unselected row) reading the same
+        external file was left on a deleted path: the move removed the
+        original as soon as the batch's node was staged. Set Directory and
+        Find & Copy already kept it; Normalize Paths' move keeps it too."""
         ext_dir = tempfile.mkdtemp(prefix="external_textures_")
         self.addCleanup(shutil.rmtree, ext_dir, ignore_errors=True)
         ext_file = os.path.join(ext_dir, "shared_out.png").replace("\\", "/")
@@ -608,6 +609,31 @@ class TestNormalizeToRelative(MayaTkTestCase):
         self.editor.normalize_paths([moved], external_mode="move")
 
         self.assertTrue(os.path.isfile(ext_file), "the outside node was stranded")
+        self.assertEqual(
+            cmds.getAttr(f"{moved}.fileTextureName"), "sourceimages/shared_out.png"
+        )
+        with open(os.path.join(self.si_dir, "shared_out.png"), "rb") as fh:
+            self.assertEqual(fh.read(), b"SHARED")
+
+    def test_move_leaves_a_file_a_node_whose_repath_failed_reads(self):
+        """A node the engine staged but could not repoint (a locked plug) still
+        reads the external file: the move removed it under that node."""
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        self.addCleanup(shutil.rmtree, ext_dir, ignore_errors=True)
+        ext_file = os.path.join(ext_dir, "locked.png").replace("\\", "/")
+        with open(ext_file, "wb") as fh:
+            fh.write(b"LOCKED")
+        node = self._make_file_node("tex_norm_locked", ext_file)
+        cmds.setAttr(f"{node}.fileTextureName", lock=True)
+        self.addCleanup(
+            lambda: cmds.objExists(node)
+            and cmds.setAttr(f"{node}.fileTextureName", lock=False)
+        )
+
+        self.editor.normalize_paths([node], external_mode="move")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), ext_file)
+        self.assertTrue(os.path.isfile(ext_file), "the locked node was stranded")
 
     def test_move_collision_with_different_content_stages_a_variant(self):
         """Move + same-name-same-SIZE collision: the engine hashes content, so

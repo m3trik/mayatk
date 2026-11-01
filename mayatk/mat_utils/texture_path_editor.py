@@ -475,7 +475,9 @@ class TexturePathEditor:
           - absolute inside the project, file missing -> left untouched.
           - absolute outside the project, by mode: ``"rewrite"`` left untouched;
             ``"copy"`` staged into sourceimages (a token set stages every tile),
-            then rebound relative; ``"move"`` as copy, the original removed.
+            then rebound relative; ``"move"`` as copy, the original removed
+            once no texture reader reads it (``ptk.FileCollect.finish_move``:
+            one outside the batch keeps it).
           - absolute outside the project, file missing -> left untouched.
 
         Collision policy (the engine's): a same-named sourceimages resident is
@@ -896,34 +898,14 @@ class TexturePathEditor:
             progress=progress,
         )
 
-    #: The texture readers a Move must leave their files to, by node type: its
-    #: path attribute. Every one in the scene counts, in the table's scope or
-    #: not (a row selection, Exclude Arnold Nodes), Arnold's own image node too.
-    _TEXTURE_READERS = {"file": "fileTextureName", "aiImage": "filename"}
-
     def read_elsewhere(self, nodes):
         """The files the scene reads through texture readers other than *nodes*
-        (``ptk.CollectHost``): every node of :attr:`_TEXTURE_READERS`' types,
-        absolute. A Move copies these instead of taking them away -- moved, an
-        Arnold-only file node or an unselected row reading the same file was
-        left on a deleted path."""
-        names = [str(n) for n in nodes]
-        held = set(cmds.ls(names, uuid=True) or []) if names else set()
-        roots = self._project_roots()
-        files = []
-        for node_type, attr in self._TEXTURE_READERS.items():
-            try:
-                readers = cmds.ls(type=node_type) or []
-            except RuntimeError:  # the type's plug-in is not loaded
-                continue
-            uuids = (cmds.ls(readers, uuid=True) or []) if readers else []
-            for node, uuid in zip(readers, uuids):
-                if uuid in held:
-                    continue
-                path = cmds.getAttr(f"{node}.{attr}") or ""
-                if path:
-                    files.append(MatUtils.to_absolute(path, *roots))
-        return files
+        (``ptk.CollectHost``): every ``file`` and ``aiImage`` node in the scene,
+        in the table's scope or not, absolute (``MatUtils._texture_reader_paths``,
+        which Normalize Paths' move keeps by too). A Move copies these instead
+        of taking them away -- moved, an Arnold-only file node or an unselected
+        row reading the same file was left on a deleted path."""
+        return MatUtils._texture_reader_paths(nodes, *self._project_roots())
 
     def stored_form(self, path: str, file_node=None) -> str:
         """The path a file node stores for the absolute *path*: project-relative

@@ -32,6 +32,43 @@ from mayatk.core_utils._core_utils import CoreUtils
 class _TextureFilesInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
+    #: The texture readers a move must leave their files to, by node type: its
+    #: path attribute. Every one in the scene counts, in a command's scope or
+    #: not (a row selection, Exclude Arnold Nodes), Arnold's own image node too.
+    _TEXTURE_READERS = {"file": "fileTextureName", "aiImage": "filename"}
+
+    @classmethod
+    def _texture_reader_paths(
+        cls, exclude=(), workspace: Optional[str] = None, sourceimages=None
+    ) -> List[str]:
+        """The files the scene's texture readers read, absolute -- every node
+        of :attr:`_TEXTURE_READERS`' types but *exclude*. What a move keeps:
+        the Texture Path Editor's ``read_elsewhere`` (the readers outside a
+        Collect) and Normalize Paths' move (every reader once repointed).
+
+        Parameters:
+            exclude: Nodes not to count (by identity: a renamed or namespaced
+                spelling of one counts as it).
+            workspace / sourceimages: The roots a stored path resolves against
+                (``to_absolute``'s; looked up when ``None``).
+        """
+        names = [str(n) for n in exclude]
+        held = set(cmds.ls(names, uuid=True) or []) if names else set()
+        files = []
+        for node_type, attr in cls._TEXTURE_READERS.items():
+            try:
+                readers = cmds.ls(type=node_type) or []
+            except RuntimeError:  # the type's plug-in is not loaded
+                continue
+            uuids = (cmds.ls(readers, uuid=True) or []) if readers else []
+            for node, uuid in zip(readers, uuids):
+                if uuid in held:
+                    continue
+                path = cmds.getAttr(f"{node}.{attr}") or ""
+                if path:
+                    files.append(cls.to_absolute(path, workspace, sourceimages))
+        return files
+
     @classmethod
     def _texture_content_id(cls, path: str) -> Optional[tuple]:
         """(size, partial-hash) identity of the file behind *path*.
@@ -313,13 +350,12 @@ class _TextureFilesInternal:
         # never pays for the scan.
         scene_refs: Optional[set] = None
 
-        #: Stored path -> staged relative form, MOVE mode only. A second node
-        #: storing the SAME external path is routine (duplicated file nodes),
-        #: and after the first node's move the source is gone -- re-checking
-        #: the disk would misread "shared" as "missing" and strand the second
-        #: node absolute on a deleted file. It rebinds to the twin the first
-        #: move staged instead.
-        moved_this_run: Dict[str, str] = {}
+        #: ``(external, staged)`` per tile, MOVE mode: the originals go only
+        #: after every node is repointed (``ptk.FileCollect.finish_move``), so a
+        #: second node storing the same external path (duplicated file nodes)
+        #: still finds it, and a reader outside the batch -- or one whose plug
+        #: refused the repath -- keeps it.
+        staged_pairs: List[Tuple[str, str]] = []
 
         def _unread_by_scene(path: str) -> bool:
             """True when no ``file`` node in the scene reads *path*.
@@ -454,11 +490,6 @@ class _TextureFilesInternal:
             sources = cls.texture_tiles(norm)
 
             if not sources:
-                moved_rel = moved_this_run.get(os.path.normcase(norm))
-                if moved_rel is not None:
-                    _store_relative(node, moved_rel)
-                    results[node] = "moved+relativized"
-                    continue
                 results[node] = "skipped:missing-source"
                 continue
 
@@ -497,25 +528,10 @@ class _TextureFilesInternal:
                 continue
 
             if external_mode == "move":
-                # Every tile's staged twin is in place, so the external
-                # original is redundant — including when an identical-content
-                # resident made the copy itself unnecessary. A removal failure
-                # downgrades the move to a copy, loudly, and never blocks the
-                # rebind: the staged file is what the node reads from here on.
-                for src in sources:
-                    dst = _dst_for(src, index)
-                    if ptk.FileUtils.is_same_file(src, dst):
-                        # The "twin" IS the source, however spelled (an
-                        # external path through a junction, a subst or a
-                        # mapped drive naming sourceimages): the only copy.
-                        continue
-                    try:
-                        os.remove(src)
-                    except OSError as e:
-                        cmds.warning(
-                            f"Move: staged copy of '{src}' is in place but the "
-                            f"original could not be removed (kept): {e}"
-                        )
+                # Every tile's staged twin is in place -- or an identical
+                # resident made the copy unnecessary; the original goes once
+                # the batch is repointed (below).
+                staged_pairs.extend((src, _dst_for(src, index)) for src in sources)
 
             staged = _variant_name(basename, index)
             if index:
@@ -555,8 +571,6 @@ class _TextureFilesInternal:
                 os.path.join(src_dir, staged), workspace, src_dir
             )
             _store_relative(node, rel_form)
-            if external_mode == "move":
-                moved_this_run[os.path.normcase(norm)] = rel_form
             if index:
                 results[node] = "variant+relativized"
             else:
@@ -566,6 +580,21 @@ class _TextureFilesInternal:
                     else "copied+relativized"
                 )
 
+        if staged_pairs:
+            # A move takes an original away only once its staged copy holds
+            # its whole bytes, never when the "twin" IS it however spelled (an
+            # external path through a junction or mapped drive naming
+            # sourceimages), and never while any texture reader still reads it
+            # -- one outside the batch, or one whose plug refused the repath.
+            _taken, kept = ptk.FileCollect.finish_move(
+                staged_pairs, keep=cls._texture_reader_paths((), workspace, src_dir)
+            )
+            if kept:
+                cmds.warning(
+                    f"Move: {len(kept)} original(s) left in place -- other "
+                    f"texture readers still read them: {', '.join(kept[:5])}"
+                    f"{', ...' if len(kept) > 5 else ''}"
+                )
         return results
 
     @classmethod
