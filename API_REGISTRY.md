@@ -195,6 +195,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`ui_utils/cancel_provider.py`](#ui_utils--cancel_provider) — Maya's answers to uitk's cancellation contract.
 - [`ui_utils/channel_box.py`](#ui_utils--channel_box) — Programmatic access to Maya's Channel Box.
 - [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk ShortcutEditor.
+- [`ui_utils/maya_marking_menu_host.py`](#ui_utils--maya_marking_menu_host) — What a uitk marking menu needs from Maya: :class:`MayaMarkingMenuHost`.
 - [`ui_utils/maya_native_menus.py`](#ui_utils--maya_native_menus)
 - [`ui_utils/maya_ui_handler.py`](#ui_utils--maya_ui_handler)
 - [`ui_utils/node_icons.py`](#ui_utils--node_icons) — Reusable helper for resolving Maya node icons at runtime.
@@ -217,7 +218,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L267) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L270) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -1321,7 +1322,7 @@ Centralized Maya event subscription manager.
 
 Put OpenMaya edits on Maya's undo queue, as one ordinary undo step.
 
-- **[`class UndoRecorder`](mayatk/mayatk/core_utils/undo_recorder.py#L221)** — Record OpenMaya edits as one undo step (see the module docstring).
+- **[`class UndoRecorder`](mayatk/mayatk/core_utils/undo_recorder.py#L229)** — Record OpenMaya edits as one undo step (see the module docstring).
   - `UndoRecorder.record(cls) -> Iterator[_Recorder]` *(class)* — Collect a block's OpenMaya undo objects and commit them as ONE undo step.
 
 <a id="core_utils--units"></a>
@@ -4222,6 +4223,18 @@ Maya hotkey collision checker for the uitk ShortcutEditor.
   - `HotkeyCollisions.live_hotkey_map() -> dict` *(static)* — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
   - `HotkeyCollisions.ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str` *(static)* — Make the *current* hotkey set editable;
   - `HotkeyCollisions.maya_collision_checker(sequence, scope, ui_name, method_name, ignore=None)` *(static)* — Check a proposed binding against Maya's active hotkey set.
+
+<a id="ui_utils--maya_marking_menu_host"></a>
+### `ui_utils/maya_marking_menu_host.py`
+
+What a uitk marking menu needs from Maya: :class:`MayaMarkingMenuHost`.
+
+- **[`class MayaMarkingMenuHost(PureMarkingMenuHost)`](mayatk/mayatk/ui_utils/maya_marking_menu_host.py#L28)** — Maya's answers to ``uitk.MarkingMenuHost`` (see the module docstring).
+  - `MayaMarkingMenuHost.ui_handler(self)` *(property)* — ``MayaUiHandler``: wraps Maya's native menus, shows the tool windows.
+  - `MayaMarkingMenuHost.is_batch() -> bool` *(static)* — True under ``maya -batch`` / ``maya.standalone`` (no GUI, no real Qt).
+  - `MayaMarkingMenuHost.defer(self, fn)` — Run *fn* on Maya's idle queue — ``userSetup.py`` runs before the UI exists.
+  - `MayaMarkingMenuHost.main_window(self)` — Maya's main window (a ``QMainWindow``), or None (the menu logs a failure).
+  - `MayaMarkingMenuHost.attach(self, menu) -> None` — Register Maya's hotkey-collision checker on the bundled shortcut editors
 
 <a id="ui_utils--maya_native_menus"></a>
 ### `ui_utils/maya_native_menus.py`

@@ -989,6 +989,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class HotkeyCollisions(_HotkeyCollisionsInternal)`
   - methods: parse_qt_sequence, keystring_to_token, live_hotkey_map, ensure_editable_hotkey_set, maya_collision_checker
 
+### `ui_utils/maya_marking_menu_host.py` — What a uitk marking menu needs from Maya: :class:`MayaMarkingMenuHost`.
+- `class MayaMarkingMenuHost(PureMarkingMenuHost)`
+  - methods: ui_handler, is_batch, defer, main_window, attach
+
 ### `ui_utils/maya_native_menus.py`
 - `class MayaNativeMenus(pythontk.LoggingMixin)`
   - methods: get_menu, display_menu

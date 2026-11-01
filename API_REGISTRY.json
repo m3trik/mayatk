@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 267,
+          "line": 270,
           "deprecated": false
         }
       ]
@@ -7487,7 +7487,7 @@
         {
           "name": "UndoRecorder",
           "summary": "Record OpenMaya edits as one undo step (see the module docstring).",
-          "line": 221,
+          "line": 229,
           "bases": [],
           "members": [
             {
@@ -7496,7 +7496,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Iterator[_Recorder]",
               "summary": "Collect a block's OpenMaya undo objects and commit them as ONE undo step.",
-              "line": 238,
+              "line": 246,
               "deprecated": false
             }
           ]
@@ -12851,7 +12851,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str, glb: Optional[str] = None, search_dirs: Optional[Iterable[str]] = None, logger: Optional[logging.Logger] = None, walk_root: Optional[str] = None, files: Optional[Iterable[Any]] = None) -> Optional[Dict[str, Any]]",
               "summary": "The passes a written FBX deliverable takes, in place.",
-              "line": 536,
+              "line": 537,
               "deprecated": false
             },
             {
@@ -12860,7 +12860,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True, *, stash: bool = True, file_options: Optional[Dict[str, Any]] = None, logger: Optional[logging.Logger] = None) -> List[str]",
               "summary": "Import an FBX file -- ALL of its animation -- optionally into a namespace.",
-              "line": 644,
+              "line": 645,
               "deprecated": false
             },
             {
@@ -12869,7 +12869,7 @@
               "kind": "staticmethod",
               "signature": "() -> Tuple[float, float]",
               "summary": "Point the bake range at the scene's ANIMATION range.",
-              "line": 1384,
+              "line": 1385,
               "deprecated": false
             },
             {
@@ -12878,7 +12878,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether the next write will BAKE complex animation.",
-              "line": 1411,
+              "line": 1412,
               "deprecated": false
             },
             {
@@ -12887,7 +12887,7 @@
               "kind": "staticmethod",
               "signature": "(command: str) -> bool",
               "summary": "An ``FBXExport*`` switch's current value, read the one safe way.",
-              "line": 1426,
+              "line": 1427,
               "deprecated": false
             },
             {
@@ -12896,7 +12896,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The ``(start, end)`` frames the next write will actually BAKE.",
-              "line": 1445,
+              "line": 1446,
               "deprecated": false
             },
             {
@@ -12905,7 +12905,7 @@
               "kind": "staticmethod",
               "signature": "(bakes: Optional[bool] = None, reason: str = '', takes: Optional[Tuple[float, float]] = None, span: Optional[Tuple[float, float]] = None, resample_all: Optional[bool] = None) -> 'FbxUtils.WritePlan'",
               "summary": "THE plan of one FBX write: whether it bakes, why, over what, resampled.",
-              "line": 1499,
+              "line": 1500,
               "deprecated": false
             },
             {
@@ -12914,7 +12914,7 @@
               "kind": "staticmethod",
               "signature": "(plan: 'FbxUtils.WritePlan') -> None",
               "summary": "Put *plan* into the FBX settings: the bake flag FIRST, then its range.",
-              "line": 1559,
+              "line": 1560,
               "deprecated": false
             },
             {
@@ -12923,7 +12923,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The range the write in progress bakes over: the open bracket's plan's",
-              "line": 1582,
+              "line": 1583,
               "deprecated": false
             },
             {
@@ -12932,7 +12932,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None, logger: Optional[logging.Logger] = None)",
               "summary": "Around ONE FBX write: ship every node where Maya draws it.",
-              "line": 1597,
+              "line": 1598,
               "deprecated": false
             },
             {
@@ -12941,7 +12941,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether this export will carry animation at all.",
-              "line": 1783,
+              "line": 1784,
               "deprecated": false
             },
             {
@@ -12950,7 +12950,7 @@
               "kind": "staticmethod",
               "signature": "(enabled: bool) -> None",
               "summary": "Turn the Animation include group on or off (see :attr:`ANIMATION_INCLUDE_PROPERTY`).",
-              "line": 1803,
+              "line": 1804,
               "deprecated": false
             },
             {
@@ -12959,7 +12959,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear FBX take definitions and restore pre-takes bake-complex state.",
-              "line": 1810,
+              "line": 1811,
               "deprecated": false
             },
             {
@@ -12968,7 +12968,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any], resample: bool = True) -> int",
               "summary": "Configure FBX export to emit one AnimStack (Unity clip) per take.",
-              "line": 1846,
+              "line": 1847,
               "deprecated": false
             },
             {
@@ -12977,7 +12977,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any]) -> Optional[Tuple[int, int]]",
               "summary": "The ``(start, end)`` union of *takes* -- the bake range",
-              "line": 1971,
+              "line": 1972,
               "deprecated": false
             },
             {
@@ -12986,7 +12986,7 @@
               "kind": "staticmethod",
               "signature": "() -> list",
               "summary": "The takes the scene's records declare -- each clip's range in",
-              "line": 1984,
+              "line": 1985,
               "deprecated": false
             },
             {
@@ -12995,7 +12995,7 @@
               "kind": "staticmethod",
               "signature": "(node: Optional[str] = None, attr: Optional[str] = None, resample: bool = True) -> int",
               "summary": "Realize the takes the scene declares into FBX export state.",
-              "line": 2000,
+              "line": 2001,
               "deprecated": false
             },
             {
@@ -13004,7 +13004,7 @@
               "kind": "classmethod",
               "signature": "(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]",
               "summary": ":attr:`PRODUCERS` resolved to callables, unimportable ones skipped;",
-              "line": 2176,
+              "line": 2177,
               "deprecated": false
             },
             {
@@ -13013,7 +13013,7 @@
               "kind": "classmethod",
               "signature": "(cls, mode: str = ptk.ExportContext.PIPELINE, writer: str = 'fbx', writer_options: Optional[Dict[str, Any]] = None, **decisions) -> ptk.ExportContext",
               "summary": "A context for this scene: provenance filled in, *decisions*",
-              "line": 2184,
+              "line": 2185,
               "deprecated": false
             },
             {
@@ -13022,7 +13022,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None) -> ptk.ExportSnapshot",
               "summary": "Assemble every producer's record and commit the carrier ONCE.",
-              "line": 2248,
+              "line": 2249,
               "deprecated": false
             },
             {
@@ -13031,7 +13031,7 @@
               "kind": "classmethod",
               "signature": "(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot",
               "summary": "Commit a tool's own records at AUTHORING time, with this scene's",
-              "line": 2311,
+              "line": 2312,
               "deprecated": false
             },
             {
@@ -13040,7 +13040,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "The stager table for a bracket: the known stagers (*names* narrows",
-              "line": 2334,
+              "line": 2335,
               "deprecated": false
             },
             {
@@ -13049,7 +13049,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "Run every stager's ``prepare`` now and return the table that ran.",
-              "line": 2346,
+              "line": 2347,
               "deprecated": false
             },
             {
@@ -13058,7 +13058,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None) -> Optional[ptk.ExportSnapshot]",
               "summary": "Open an export bracket (outermost only): stage the scene, then --",
-              "line": 2391,
+              "line": 2392,
               "deprecated": false
             },
             {
@@ -13067,7 +13067,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Close an export bracket (outermost only): put back the scene's own",
-              "line": 2446,
+              "line": 2447,
               "deprecated": false
             },
             {
@@ -13076,7 +13076,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None)",
               "summary": "Stage the scene (and publish, given a *ctx* or *only* -- see",
-              "line": 2476,
+              "line": 2477,
               "deprecated": false
             },
             {
@@ -13085,7 +13085,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Bracket for a THROWAWAY FBX write: the session hooks stand down.",
-              "line": 2497,
+              "line": 2498,
               "deprecated": false
             },
             {
@@ -13094,7 +13094,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Run *spec*'s producer before every FBX export this session",
-              "line": 2519,
+              "line": 2520,
               "deprecated": false
             },
             {
@@ -13103,7 +13103,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Opt *spec* out of the session hook;",
-              "line": 2527,
+              "line": 2528,
               "deprecated": false
             },
             {
@@ -13112,7 +13112,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, prepare: Optional[Callable[[], Any]] = None, finish: Optional[Callable[[], Any]] = None) -> None",
               "summary": "Run *prepare* before and *finish* after every FBX export this",
-              "line": 2534,
+              "line": 2535,
               "deprecated": false
             },
             {
@@ -13121,7 +13121,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> None",
               "summary": "",
-              "line": 2551,
+              "line": 2552,
               "deprecated": false
             },
             {
@@ -13130,7 +13130,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export -- shot-agnostic.",
-              "line": 2556,
+              "line": 2557,
               "deprecated": false
             },
             {
@@ -13139,7 +13139,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 2569,
+              "line": 2570,
               "deprecated": false
             },
             {
@@ -13148,7 +13148,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 2803,
+              "line": 2804,
               "deprecated": false
             }
           ]
@@ -17643,7 +17643,7 @@
               "kind": "classmethod",
               "signature": "(cls, path: str, new_name: str, file_nodes: Optional[List[str]] = None) -> Dict[str, Any]",
               "summary": "Rename a texture file on disk and repoint every file node reading it.",
-              "line": 1310,
+              "line": 1312,
               "deprecated": false
             },
             {
@@ -17652,7 +17652,7 @@
               "kind": "classmethod",
               "signature": "(cls, material: Optional[str], base: str, material_affix: Tuple[str, str] = ('', ''), file_node_affix: Tuple[str, str] = ('', ''), file_nodes: Optional[List[str]] = None, dry_run: bool = False, lightmaps: Any = None) -> Dict[str, Any]",
               "summary": "Name a material, its texture set, lightmap and nodes for ONE base.",
-              "line": 1348,
+              "line": 1350,
               "deprecated": false
             },
             {
@@ -17661,7 +17661,7 @@
               "kind": "staticmethod",
               "signature": "(material1: str, material2: str) -> bool",
               "summary": "Check if two materials are duplicates based on their textures.",
-              "line": 1416,
+              "line": 1418,
               "deprecated": false
             },
             {
@@ -17670,7 +17670,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, strict: bool = False, verify: bool = True) -> Dict[str, List[str]]",
               "summary": "Find duplicate materials based on their texture file names or full paths.",
-              "line": 1421,
+              "line": 1423,
               "deprecated": false
             },
             {
@@ -17679,7 +17679,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False, verify: bool = True) -> None",
               "summary": "Find duplicate materials, remove duplicates, and reassign them to the original material.",
-              "line": 1456,
+              "line": 1458,
               "deprecated": false
             },
             {
@@ -17688,7 +17688,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials=None) -> Dict[str, str]",
               "summary": "``{duplicate: original}``: each verified duplicate among *materials*",
-              "line": 1476,
+              "line": 1478,
               "deprecated": false
             },
             {
@@ -17697,7 +17697,7 @@
               "kind": "classmethod",
               "signature": "(cls, pairs: Dict[str, str]) -> int",
               "summary": "Merge each ``{duplicate: original}`` pair into its original",
-              "line": 1486,
+              "line": 1488,
               "deprecated": false
             },
             {
@@ -17706,7 +17706,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Delete what nothing uses, Maya's way (the Hypershade's Delete Unused",
-              "line": 1499,
+              "line": 1501,
               "deprecated": false
             },
             {
@@ -17715,7 +17715,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], *, include_displacement: bool = False) -> List[str]",
               "summary": "Filter materials assigned to the given objects.",
-              "line": 1510,
+              "line": 1512,
               "deprecated": false
             },
             {
@@ -17724,7 +17724,7 @@
               "kind": "staticmethod",
               "signature": "(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None, reset_viewport: bool = False)",
               "summary": "Reloads textures connected to specified materials with inclusion/exclusion filters.",
-              "line": 1522,
+              "line": 1524,
               "deprecated": false
             },
             {
@@ -17733,7 +17733,7 @@
               "kind": "classmethod",
               "signature": "(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]",
               "summary": "Move or copy found texture files to a new directory.",
-              "line": 1554,
+              "line": 1556,
               "deprecated": false
             },
             {
@@ -17742,7 +17742,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, materials: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, sourceimages_dir: Optional[str] = None, delete_old: bool = False) -> List[Tuple[str, str]]",
               "summary": "Copy referenced textures that live outside ``sourceimages`` into it.",
-              "line": 1592,
+              "line": 1594,
               "deprecated": false
             },
             {
@@ -17751,7 +17751,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, filenames: Optional[List[str]] = None) -> List[Union[str, Tuple[str, str]]]",
               "summary": "Find texture files for given objects' materials inside source_dir.",
-              "line": 1640,
+              "line": 1642,
               "deprecated": false
             },
             {
@@ -17760,7 +17760,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: Optional[List[str]] = None, old_dir: Optional[str] = None, new_dir: Optional[str] = None, silent: bool = False, delete_old: bool = False, objects: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> None",
               "summary": "Copies texture files from an old directory to a new one.",
-              "line": 1680,
+              "line": 1682,
               "deprecated": false
             },
             {
@@ -17769,7 +17769,7 @@
               "kind": "staticmethod",
               "signature": "(source_dir: str = None, output_dir: str = None) -> None",
               "summary": "Move unused textures to a specified directory.",
-              "line": 1704,
+              "line": 1706,
               "deprecated": false
             },
             {
@@ -17778,7 +17778,7 @@
               "kind": "staticmethod",
               "signature": "(mat: Union[str, object]) -> Optional[Tuple[float, float, float]]",
               "summary": "The material's base colour as ``(r, g, b)`` in 0..1: what its swatch",
-              "line": 1711,
+              "line": 1713,
               "deprecated": false
             },
             {
@@ -17787,7 +17787,7 @@
               "kind": "staticmethod",
               "signature": "(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]",
               "summary": "Convert a bump/height file node's texture to a normal map on disk.",
-              "line": 1724,
+              "line": 1726,
               "deprecated": false
             },
             {
@@ -17796,7 +17796,7 @@
               "kind": "staticmethod",
               "signature": "(normal_file_node, material=None) -> Dict[str, Any]",
               "summary": "Validate normal map file node setup and provide recommendations.",
-              "line": 1766,
+              "line": 1768,
               "deprecated": false
             },
             {
@@ -17805,7 +17805,7 @@
               "kind": "staticmethod",
               "signature": "(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None",
               "summary": "Open the Hypershade and graph the specified materials.",
-              "line": 1776,
+              "line": 1778,
               "deprecated": false
             },
             {
@@ -22542,7 +22542,7 @@
               "kind": "method",
               "signature": "(self, file_nodes) -> int",
               "summary": "Rewrite relative texture paths to absolute -- inverse of Normalize Paths.",
-              "line": 489,
+              "line": 399,
               "deprecated": false
             },
             {
@@ -22551,7 +22551,7 @@
               "kind": "method",
               "signature": "(self, file_nodes, external_mode: str = 'rewrite') -> int",
               "summary": "Rewrite (selected) paths inside the project to relative.",
-              "line": 546,
+              "line": 456,
               "deprecated": false
             },
             {
@@ -22560,7 +22560,7 @@
               "kind": "method",
               "signature": "(self, modes, file_nodes=None) -> int",
               "summary": "Rebind missing textures to files found under sourceimages.",
-              "line": 732,
+              "line": 644,
               "deprecated": false
             },
             {
@@ -22569,7 +22569,7 @@
               "kind": "method",
               "signature": "(self, file_nodes)",
               "summary": "The nodes whose stored path does not resolve -- what a Find & Copy",
-              "line": 873,
+              "line": 785,
               "deprecated": false
             },
             {
@@ -22578,7 +22578,7 @@
               "kind": "method",
               "signature": "(self, file_nodes, answers, lightmaps=(), choices=None, progress=None)",
               "summary": "What Find & Copy would do: one row per file node and per lightmap.",
-              "line": 891,
+              "line": 803,
               "deprecated": false
             },
             {
@@ -22587,7 +22587,7 @@
               "kind": "method",
               "signature": "(self, file_nodes, answers, lightmaps=(), dry_run=False, progress=None, plan=None) -> bool",
               "summary": "Find & Copy: gather the scope's textures into one folder and repath.",
-              "line": 941,
+              "line": 853,
               "deprecated": false
             },
             {
@@ -22596,7 +22596,7 @@
               "kind": "method",
               "signature": "(self, nodes)",
               "summary": "The files the scene reads through texture readers other than *nodes*",
-              "line": 994,
+              "line": 901,
               "deprecated": false
             },
             {
@@ -22605,7 +22605,7 @@
               "kind": "method",
               "signature": "(self, path: str, file_node=None) -> str",
               "summary": "The path a file node stores for the absolute *path*: project-relative",
-              "line": 1018,
+              "line": 910,
               "deprecated": false
             },
             {
@@ -22614,7 +22614,7 @@
               "kind": "method",
               "signature": "(self, rows) -> int",
               "summary": "Point each landed Collect row at its destination (``ptk.CollectHost``),",
-              "line": 1025,
+              "line": 917,
               "deprecated": false
             },
             {
@@ -22623,7 +22623,7 @@
               "kind": "method",
               "signature": "(self, file_node, path: str, relative: bool = False) -> str",
               "summary": "Point *file_node* at *path* -- Browse for File, or a typed path.",
-              "line": 1134,
+              "line": 1026,
               "deprecated": false
             },
             {
@@ -22632,7 +22632,7 @@
               "kind": "method",
               "signature": "(self, stored: str, typed: str, file_node=None) -> bool",
               "summary": "Whether a typed path renames *stored*'s file rather than repointing.",
-              "line": 1161,
+              "line": 1053,
               "deprecated": false
             },
             {
@@ -22641,7 +22641,7 @@
               "kind": "method",
               "signature": "(self, file_node, typed: str, shader=None, sync=None) -> str",
               "summary": "A path typed into *file_node*'s row: rename its file, or repoint it.",
-              "line": 1197,
+              "line": 1089,
               "deprecated": false
             },
             {
@@ -22650,7 +22650,7 @@
               "kind": "method",
               "signature": "(self, context, new_name: str, sync=None) -> bool",
               "summary": "Rename the texture file *context* names to *new_name*.",
-              "line": 1227,
+              "line": 1119,
               "deprecated": false
             },
             {
@@ -22659,7 +22659,7 @@
               "kind": "method",
               "signature": "(self, shader) -> bool",
               "summary": "Whether a shader cell may rename *shader* (any shader in the scene).",
-              "line": 1278,
+              "line": 1170,
               "deprecated": false
             },
             {
@@ -22668,7 +22668,7 @@
               "kind": "method",
               "signature": "(self, shader, new_name: str, sync=None) -> str",
               "summary": "Rename *shader*;",
-              "line": 1282,
+              "line": 1174,
               "deprecated": false
             },
             {
@@ -22677,7 +22677,7 @@
               "kind": "method",
               "signature": "(self, file_node, new_name: str, shader=None, sync=None) -> str",
               "summary": "Rename *file_node*;",
-              "line": 1301,
+              "line": 1193,
               "deprecated": false
             },
             {
@@ -22686,7 +22686,7 @@
               "kind": "method",
               "signature": "(self, shaders=(), lightmaps=()) -> int",
               "summary": "Select the objects wearing *shaders* and those *lightmaps* bind.",
-              "line": 1402,
+              "line": 1294,
               "deprecated": false
             },
             {
@@ -22695,7 +22695,7 @@
               "kind": "method",
               "signature": "(self, file_nodes) -> int",
               "summary": "Select *file_nodes* (replacing the selection);",
-              "line": 1423,
+              "line": 1315,
               "deprecated": false
             },
             {
@@ -22704,7 +22704,7 @@
               "kind": "staticmethod",
               "signature": "(file_nodes) -> None",
               "summary": "Graph *file_nodes* in the Hypershade.",
-              "line": 1431,
+              "line": 1323,
               "deprecated": false
             },
             {
@@ -22713,7 +22713,7 @@
               "kind": "method",
               "signature": "(self, file_nodes)",
               "summary": "What deleting *file_nodes* would unwire, as sentences for a confirm.",
-              "line": 1437,
+              "line": 1329,
               "deprecated": false
             },
             {
@@ -22722,7 +22722,7 @@
               "kind": "method",
               "signature": "(self, file_nodes) -> int",
               "summary": "Delete *file_nodes* (one undo step);",
-              "line": 1497,
+              "line": 1389,
               "deprecated": false
             },
             {
@@ -22731,7 +22731,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "The scene's lightmap dependency records (``LightmapRecords``):",
-              "line": 1528,
+              "line": 1420,
               "deprecated": false
             },
             {
@@ -22740,7 +22740,7 @@
               "kind": "method",
               "signature": "(self, dep)",
               "summary": "``(shader, node)`` labels for a lightmap row, read like a texture row.",
-              "line": 1534,
+              "line": 1426,
               "deprecated": false
             },
             {
@@ -22749,7 +22749,7 @@
               "kind": "method",
               "signature": "(self, lightmaps, relative: bool) -> int",
               "summary": "Re-spell the scoped lightmap markers' folders (Normalize / Make Absolute).",
-              "line": 1568,
+              "line": 1460,
               "deprecated": false
             },
             {
@@ -22758,7 +22758,7 @@
               "kind": "method",
               "signature": "(self, dep, folder: str) -> bool",
               "summary": "Point every marker naming *dep*'s map at *folder*.",
-              "line": 1593,
+              "line": 1485,
               "deprecated": false
             },
             {
@@ -22767,7 +22767,7 @@
               "kind": "method",
               "signature": "(self, dep, new_name: str) -> None",
               "summary": "Rename a lightmap's file and re-stamp the markers that bind it by name.",
-              "line": 1614,
+              "line": 1506,
               "deprecated": false
             },
             {
@@ -22776,7 +22776,7 @@
               "kind": "method",
               "signature": "(self, deps)",
               "summary": "``(objects, kept)``: the objects reverting *deps* would clear, and those",
-              "line": 1627,
+              "line": 1519,
               "deprecated": false
             },
             {
@@ -22785,7 +22785,7 @@
               "kind": "method",
               "signature": "(self, objects)",
               "summary": "The Lightmap Baker's Revert Selected on *objects*: their markers are",
-              "line": 1632,
+              "line": 1524,
               "deprecated": false
             }
           ]
@@ -28189,6 +28189,69 @@
       ]
     },
     {
+      "relpath": "ui_utils/maya_marking_menu_host.py",
+      "summary": "What a uitk marking menu needs from Maya: :class:`MayaMarkingMenuHost`.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "MayaMarkingMenuHost",
+          "summary": "Maya's answers to ``uitk.MarkingMenuHost`` (see the module docstring).",
+          "line": 28,
+          "bases": [
+            "PureMarkingMenuHost"
+          ],
+          "members": [
+            {
+              "name": "ui_handler",
+              "qualname": "MayaMarkingMenuHost.ui_handler",
+              "kind": "property",
+              "signature": "(self)",
+              "summary": "``MayaUiHandler``: wraps Maya's native menus, shows the tool windows.",
+              "line": 38,
+              "deprecated": false
+            },
+            {
+              "name": "is_batch",
+              "qualname": "MayaMarkingMenuHost.is_batch",
+              "kind": "staticmethod",
+              "signature": "() -> bool",
+              "summary": "True under ``maya -batch`` / ``maya.standalone`` (no GUI, no real Qt).",
+              "line": 45,
+              "deprecated": false
+            },
+            {
+              "name": "defer",
+              "qualname": "MayaMarkingMenuHost.defer",
+              "kind": "method",
+              "signature": "(self, fn)",
+              "summary": "Run *fn* on Maya's idle queue — ``userSetup.py`` runs before the UI exists.",
+              "line": 52,
+              "deprecated": false
+            },
+            {
+              "name": "main_window",
+              "qualname": "MayaMarkingMenuHost.main_window",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "Maya's main window (a ``QMainWindow``), or None (the menu logs a failure).",
+              "line": 79,
+              "deprecated": false
+            },
+            {
+              "name": "attach",
+              "qualname": "MayaMarkingMenuHost.attach",
+              "kind": "method",
+              "signature": "(self, menu) -> None",
+              "summary": "Register Maya's hotkey-collision checker on the bundled shortcut editors",
+              "line": 85,
+              "deprecated": false
+            }
+          ]
+        }
+      ],
+      "constants": []
+    },
+    {
       "relpath": "ui_utils/maya_native_menus.py",
       "summary": "",
       "functions": [],
@@ -29895,7 +29958,7 @@
               "kind": "staticmethod",
               "signature": "(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False, store: bool = True) -> None",
               "summary": "Freeze transforms into offsetParentMatrix while preserving pivot placement.",
-              "line": 335,
+              "line": 336,
               "deprecated": false
             },
             {
@@ -29904,7 +29967,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, prefix='original', delete_attrs=True) -> List[str]",
               "summary": "Inverse of :meth:`freeze_to_opm`: clear ``offsetParentMatrix`` and put",
-              "line": 362,
+              "line": 363,
               "deprecated": false
             },
             {
@@ -29913,7 +29976,7 @@
               "kind": "staticmethod",
               "signature": "(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]",
               "summary": "Push a child transform's local matrix up into its parent and zero the child.",
-              "line": 392,
+              "line": 393,
               "deprecated": false
             },
             {
@@ -29922,7 +29985,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, prefix='original', delete_attrs=True, channels=None, traverse=False)",
               "summary": "Compose stored bake history with current local TRS, per channel.",
-              "line": 430,
+              "line": 431,
               "deprecated": false
             },
             {
@@ -29931,7 +29994,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original') -> List[str]",
               "summary": "Delete the per-channel bake attrs without restoring.",
-              "line": 504,
+              "line": 505,
               "deprecated": false
             },
             {
@@ -29940,7 +30003,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, prefix='original', dry_run=False, clear_stale=False, tolerance=0.0001)",
               "summary": "Triage bake history left by earlier tool versions, restore only",
-              "line": 523,
+              "line": 524,
               "deprecated": false
             },
             {
@@ -29949,7 +30012,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original')",
               "summary": "Check if objects have any stored bake history.",
-              "line": 579,
+              "line": 580,
               "deprecated": false
             },
             {
@@ -29958,7 +30021,7 @@
               "kind": "staticmethod",
               "signature": "(node, tolerance=0.0001)",
               "summary": "True when *node*'s T/R/S channels sit at identity.",
-              "line": 589,
+              "line": 590,
               "deprecated": false
             },
             {
@@ -29967,7 +30030,7 @@
               "kind": "staticmethod",
               "signature": "(node, prefix='original')",
               "summary": "Read one node's stored pre-freeze channels back as plain values.",
-              "line": 602,
+              "line": 603,
               "deprecated": false
             },
             {
@@ -29976,7 +30039,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects)",
               "summary": "Reset the translation transformations on the given object(s).",
-              "line": 629,
+              "line": 630,
               "deprecated": false
             },
             {
@@ -29985,7 +30048,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "Set an object's translation value from its pivot location.",
-              "line": 634,
+              "line": 635,
               "deprecated": false
             },
             {
@@ -29994,7 +30057,7 @@
               "kind": "staticmethod",
               "signature": "(obj, **kwargs)",
               "summary": "Return the object's transform matrix using xform, allowing kwargs override.",
-              "line": 639,
+              "line": 640,
               "deprecated": false
             },
             {
@@ -30003,7 +30066,7 @@
               "kind": "staticmethod",
               "signature": "(obj, matrix, **kwargs) -> None",
               "summary": "Apply a transformation matrix's position and orientation to the manip pivot.",
-              "line": 648,
+              "line": 649,
               "deprecated": false
             },
             {
@@ -30012,7 +30075,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, prefix='original')",
               "summary": "Aim the manipulator at an object's PRE-FREEZE axes, without un-freezing it.",
-              "line": 654,
+              "line": 655,
               "deprecated": false
             },
             {
@@ -30021,7 +30084,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Returns a list of supported pivot options.",
-              "line": 678,
+              "line": 679,
               "deprecated": false
             },
             {
@@ -30030,7 +30093,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, pivot='center', all_to_last=True, match_scale=False) -> List[str]",
               "summary": "Move To: the objects move onto their target by *pivot*.",
-              "line": 714,
+              "line": 715,
               "deprecated": false
             },
             {
@@ -30039,7 +30102,7 @@
               "kind": "classmethod",
               "signature": "(cls, mode, objects=None) -> List[str]",
               "summary": "Align To: run the :attr:`ALIGN_MODES` command *mode* on *objects* (None:",
-              "line": 743,
+              "line": 744,
               "deprecated": false
             },
             {
@@ -30048,7 +30111,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> dict",
               "summary": "The move / scale / rotate tools' increment snapping:",
-              "line": 758,
+              "line": 759,
               "deprecated": false
             },
             {
@@ -30057,7 +30120,7 @@
               "kind": "classmethod",
               "signature": "(cls, kind, state=None, increment=None) -> dict",
               "summary": "Set the *kind* tool's increment snapping (``\"move\"``, ``\"scale\"`` or",
-              "line": 766,
+              "line": 767,
               "deprecated": false
             },
             {
@@ -30066,7 +30129,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> dict",
               "summary": "The transform constraints: ``{\"edge\": bool, \"surface\": bool, \"live\":",
-              "line": 786,
+              "line": 787,
               "deprecated": false
             },
             {
@@ -30075,7 +30138,7 @@
               "kind": "classmethod",
               "signature": "(cls, kind, state=True) -> dict",
               "summary": "Turn a transform constraint on or off: *kind* ``\"edge\"`` or",
-              "line": 793,
+              "line": 794,
               "deprecated": false
             },
             {
@@ -30084,7 +30147,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Clears the cached manipulator pivot data.",
-              "line": 808,
+              "line": 809,
               "deprecated": false
             },
             {
@@ -30093,7 +30156,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "Snapshot the current manipulator pivot state for the given node into the cache.",
-              "line": 813,
+              "line": 814,
               "deprecated": false
             },
             {
@@ -30102,7 +30165,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot: str)",
               "summary": "Determines the pivot matrix (orientation + position) for transformations.",
-              "line": 818,
+              "line": 819,
               "deprecated": false
             },
             {
@@ -30111,7 +30174,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot, axis_index=None)",
               "summary": "Determines the pivot position for mirroring/cutting along a specified axis or all axes.",
-              "line": 840,
+              "line": 841,
               "deprecated": false
             },
             {
@@ -30120,7 +30183,7 @@
               "kind": "staticmethod",
               "signature": "(align_from=None, align_to=None, translate=True)",
               "summary": "Align one object's pivot point to another using 3-point alignment.",
-              "line": 848,
+              "line": 849,
               "deprecated": false
             },
             {
@@ -30129,7 +30192,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> None",
               "summary": "Reset Pivot Transforms for the specified objects or selected objects.",
-              "line": 855,
+              "line": 856,
               "deprecated": false
             },
             {
@@ -30138,7 +30201,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, position: bool = True, orientation: bool = True) -> list",
               "summary": "Reset the manipulator pivot's position and/or orientation",
-              "line": 861,
+              "line": 862,
               "deprecated": false
             },
             {
@@ -30147,7 +30210,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, mode: str = 'object') -> list",
               "summary": "Center the pivots -- Maya's Center Pivot -- after resetting the",
-              "line": 879,
+              "line": 880,
               "deprecated": false
             },
             {
@@ -30156,7 +30219,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, pivot_type: str = 'object', mode: str = 'set')",
               "summary": "Get or set a world-aligned pivot for the specified objects or components.",
-              "line": 903,
+              "line": 904,
               "deprecated": false
             },
             {
@@ -30165,7 +30228,7 @@
               "kind": "staticmethod",
               "signature": "(objects, position=False, orientation=False, preserve_instancing=True)",
               "summary": "Bake the pivot orientation and position of the given object(s).",
-              "line": 935,
+              "line": 936,
               "deprecated": false
             },
             {
@@ -30174,7 +30237,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = True, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False, preserve_instancing: bool = True)",
               "summary": "Transfer the pivot from the first given object to the remaining given objects.",
-              "line": 969,
+              "line": 970,
               "deprecated": false
             },
             {
@@ -30183,7 +30246,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0))",
               "summary": "Aim the given object(s) at the given world space position.",
-              "line": 1034,
+              "line": 1035,
               "deprecated": false
             },
             {
@@ -30192,7 +30255,7 @@
               "kind": "staticmethod",
               "signature": "(transform, aim_vector=(1, 0, 0), up_vector=(0, 1, 0))",
               "summary": "Orients a transform so its local +X aims along the given world-space vector.",
-              "line": 1041,
+              "line": 1042,
               "deprecated": false
             },
             {
@@ -30201,7 +30264,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, target_pos)",
               "summary": "Aim the given object at the given world space position.",
-              "line": 1053,
+              "line": 1054,
               "deprecated": false
             },
             {
@@ -30210,7 +30273,7 @@
               "kind": "staticmethod",
               "signature": "(objects, returned_type='point')",
               "summary": "Get an objects orientation as a point or vector.",
-              "line": 1060,
+              "line": 1061,
               "deprecated": false
             },
             {
@@ -30219,7 +30282,7 @@
               "kind": "staticmethod",
               "signature": "(a, b)",
               "summary": "Get the magnatude of a vector using the center points of two given objects.",
-              "line": 1069,
+              "line": 1070,
               "deprecated": false
             },
             {
@@ -30228,7 +30291,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Get the bounding box center point of any given object(s).",
-              "line": 1078,
+              "line": 1079,
               "deprecated": false
             },
             {
@@ -30237,7 +30300,7 @@
               "kind": "staticmethod",
               "signature": "(objects, value='', world_space=True, return_valid_keys=False)",
               "summary": "Calculate and retrieve specific properties of the bounding box for the given object(s) or component…",
-              "line": 1087,
+              "line": 1088,
               "deprecated": false
             },
             {
@@ -30246,7 +30309,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, value='volume', descending=True, also_return_value=False)",
               "summary": "Sort the given objects by their bounding box value.",
-              "line": 1104,
+              "line": 1105,
               "deprecated": false
             },
             {
@@ -30255,7 +30318,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Move and align the object defined by the first 3 points to the last 3 points.",
-              "line": 1117,
+              "line": 1118,
               "deprecated": false
             },
             {
@@ -30264,7 +30327,7 @@
               "kind": "staticmethod",
               "signature": "(a, b, tolerance=0.001)",
               "summary": "Check if the vertices in a and b are overlapping within the given tolerance.",
-              "line": 1122,
+              "line": 1123,
               "deprecated": false
             },
             {
@@ -30273,7 +30336,7 @@
               "kind": "staticmethod",
               "signature": "(objects, plane_point, plane_normal, return_type: str = 'bool')",
               "summary": "General method to check if any object's geometry is below a defined plane.",
-              "line": 1127,
+              "line": 1128,
               "deprecated": false
             },
             {
@@ -30282,7 +30345,7 @@
               "kind": "staticmethod",
               "signature": "(objects, worldSpace=True)",
               "summary": "Get all vertex positions for the given objects.",
-              "line": 1142,
+              "line": 1143,
               "deprecated": false
             },
             {
@@ -30291,7 +30354,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, world_space=False)",
               "summary": "Find any vertices which point locations match between two given mesh.",
-              "line": 1151,
+              "line": 1152,
               "deprecated": false
             },
             {
@@ -30300,7 +30363,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, reference_point=None, reverse=False)",
               "summary": "Order the given objects by their distance from the given reference point.",
-              "line": 1160,
+              "line": 1161,
               "deprecated": false
             },
             {
@@ -30309,7 +30372,7 @@
               "kind": "staticmethod",
               "signature": "(mode, average=False, edgeloop=False)",
               "summary": "Align selected vertices along one or more axes.",
-              "line": 1172,
+              "line": 1173,
               "deprecated": false
             },
             {
@@ -30318,7 +30381,7 @@
               "kind": "staticmethod",
               "signature": "(node, world: bool = False)",
               "summary": "Translation as ``om.MVector``.",
-              "line": 1177,
+              "line": 1178,
               "deprecated": false
             },
             {
@@ -30327,7 +30390,7 @@
               "kind": "staticmethod",
               "signature": "(node, world: bool = False)",
               "summary": "Local or world matrix as ``om.MMatrix``.",
-              "line": 1186,
+              "line": 1187,
               "deprecated": false
             },
             {
@@ -30336,7 +30399,7 @@
               "kind": "staticmethod",
               "signature": "(node, value, world: bool = False) -> None",
               "summary": "Apply *value* to *node*'s local or world transformation matrix.",
-              "line": 1191,
+              "line": 1192,
               "deprecated": false
             },
             {
@@ -30345,7 +30408,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, order, preserve: bool = True) -> List[str]",
               "summary": "Change the rotate order of transforms, keeping their pose and animation.",
-              "line": 1201,
+              "line": 1202,
               "deprecated": false
             },
             {
@@ -30354,7 +30417,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None) -> dict",
               "summary": "Each transform's rotate order, by long name: ``{node: \"xyz\"}``.",
-              "line": 1249,
+              "line": 1250,
               "deprecated": false
             }
           ]

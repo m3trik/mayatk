@@ -938,7 +938,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (575)
+## Added (581)
 
 - `anim_utils/_anim_utils.py::AnimUtils.copied_key_counts(copied_data: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, int]`
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
@@ -1470,6 +1470,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `ui_utils/_ui_utils.py::UiUtils.open_preferences(cls, section: Optional[str] = None) -> str`
 - `ui_utils/_ui_utils.py::UiUtils.set_tool(cls, tool: str) -> str`
 - `ui_utils/_ui_utils.py::UiUtils.toggle_editor(cls, editor: str) -> bool`
+- `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost(class)`
+- `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.attach(self, menu) -> None`
+- `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.defer(self, fn)`
+- `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.is_batch() -> bool`
+- `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.main_window(self)`
+- `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.ui_handler(self)`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 - `uv_utils/_uv_pack.py::PackUvsResult.objects(self) -> List[str]`
 - `uv_utils/_uv_utils.py::UnfoldResult(class)`
