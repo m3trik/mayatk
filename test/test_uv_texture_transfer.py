@@ -1929,5 +1929,41 @@ class TestOutputDirResolution(MayaTkTestCase):
             )
 
 
+class TestTransferRun(MayaTkTestCase):
+    """``TextureTransfer.run``: pythontk's ``TransferRun`` over
+    ``MayaTransferHost`` (the run's decisions are pinned in pythontk's
+    ``test_uv_transfer_run``; the panel's wording in tentacle's)."""
+
+    def test_the_run_reads_the_selection_order_and_moves_the_uvs(self):
+        src = cmds.polyCube(name="runSrc", ch=False)[0]
+        tgt = cmds.polyCube(name="runTgt", ch=False)[0]
+        cmds.select([src, tgt], replace=True)
+        result = TextureTransfer.run(source="first", transfer="uvs")
+        self.assertIsInstance(result, ptk.TransferResult)
+        self.assertIsNone(result.refusal)
+        self.assertEqual(
+            [(s, t, how) for s, t, how in result.uvs],
+            [("|runSrc", "|runTgt", "topology")],
+        )
+
+    def test_an_empty_selection_is_a_refusal_not_a_raise(self):
+        cmds.select(clear=True)
+        result = TextureTransfer.run(source="first", transfer="uvs")
+        self.assertEqual(result.refusal, "pick_first")
+
+    def test_the_adapter_answers_the_librarys_operations(self):
+        from mayatk.uv_utils.texture_transfer import MayaTransferHost
+
+        class Sub(TextureTransfer):
+            pass
+
+        cube = cmds.ls(cmds.polyCube(name="hero_GEO", ch=False)[0], long=True)[0]
+        host = MayaTransferHost(Sub)
+        self.assertIsInstance(host.texture_transfer(), Sub)
+        self.assertFalse(host.has_lightmap(cube))
+        self.assertEqual(host.default_name([cube]), "hero")
+        self.assertEqual(MayaTransferHost().transfers, TextureTransfer)
+
+
 if __name__ == "__main__":
     unittest.main()
