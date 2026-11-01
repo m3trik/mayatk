@@ -482,9 +482,10 @@ class FbxUtils(ptk.HelpMixin):
 
         The records name their files by file name -- ``lightmaps`` its
         maps and reflection probe, ``shadows`` its silhouette, atlas
-        and horizon maps -- and a lighting-only bake binds its maps to no
-        material, so the FBX carried none of them and every consumer had them
-        copied in beside it. ``ptk.FbxMedia.embed_dependencies`` puts each
+        and horizon maps, ``materials`` each material's maps -- and a
+        lighting-only bake binds its maps to no material (nor can an
+        openPBRSurface's slots carry its own), so the FBX carried none of
+        them and every consumer had them copied in beside it. ``ptk.FbxMedia.embed_dependencies`` puts each
         inside the file under its name, the form Unity's importer extracts,
         resolved where this scene keeps it: *search_dirs*, else
         :meth:`LightmapRecords.search_dirs` -- the folders the GLB build joins

@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-31 - `FbxUtils.embed_dependencies` lists the `materials` record's maps among the files it embeds (`env_utils/fbx_utils.py`, docstring).** pythontk's dependency pass now embeds every map the record names, including an openPBRSurface's, which no FBX slot carries.
+  - Test(s): docstring only; the 17 modules `affected_tests.py` selects: 2155 tests, 0 failures, 2 skipped.
 - **2026-10-31 -- Docs: the `ui_utils` row names `MayaMarkingMenuHost`, the `uitk.MarkingMenuHost` adapter (`docs/README.md`).**
 - **2026-10-31 -- Comments name tentacle's one launcher (`Tcl.build`) where they named `TclMaya` (`edit_utils/macros/_macros.py`, `ui_utils/maya_ui_handler.py`, `test/test_macros.py`).** No behavior change.
 - **2026-10-31 -- Fix: Normalize Paths' move leaves a file a node outside the batch -- or one whose plug refused the repath -- still reads (`mat_utils/_texture_files.py` `stage_textures_relative`'s move through `ptk.FileCollect.finish_move`, its removal loop and `moved_this_run` deleted; new `_texture_reader_paths`, which the editor's `read_elsewhere` now runs).** The move removed each external original as soon as its node was staged, so an unselected row or an Arnold-only node reading the same file was left on a deleted path, and a locked plug's node too (the file went before the write failed). The originals now go once the batch is repointed, only when no `file` or `aiImage` node in the scene still reads them (warned when one does), and only once the staged copy holds the whole bytes; nodes of the batch storing one external path still rebind to the one staged twin. BACKLOG 2026-10-31 (logged with the Set Directory fix) closed.
