@@ -2306,6 +2306,201 @@ class TestFreezeInstanceStrategy(MayaTkTestCase):
             XformUtils.freeze_transforms(members, instance_strategy="bogus")
 
 
+class TestMirroredFreezeKeepsTheLook(MayaTkTestCase):
+    """A freeze never changes how a mesh looks, a mirroring one included.
+
+    After the freeze every face-vertex normal points the same way in world
+    space, each keeps its lock state (unlocked, locked, custom), the hard edges
+    are the same and every face fronts the way it did. Keyed by (face, vertex):
+    a mirrored freeze reverses each face's vertex order and renumbers the
+    normals, so a comparison by position in the face, or by normal id, reports
+    a turn that is not there (63 degrees unlocked, 63 to 85 locked, 141 to 161
+    custom on this cylinder, measured 2026-10-31).
+    """
+
+    VARIANTS = ("unlocked", "locked", "custom")
+
+    def _cylinder(self, variant, name="mirrored", history=False):
+        """A cylinder with soft sides and hard caps, mirrored on X (scaleX -1)."""
+        cyl = cmds.polyCylinder(name=name, sx=8, sy=2, sz=1, ch=history)[0]
+        cmds.polySoftEdge(cyl, angle=50, ch=history)
+        if variant == "locked":
+            cmds.polyNormalPerVertex(f"{cyl}.vtx[*]", freezeNormal=True)
+        elif variant == "custom":
+            # Custom normals on a few vertices, every other one left unlocked.
+            cmds.polyNormalPerVertex(f"{cyl}.vtx[0:3]", xyz=(0.3, 0.9, 0.1))
+        cmds.xform(
+            cyl, translation=(3, 1, -2), rotation=(30, 45, 10), scale=(-1, 2, 0.5)
+        )
+        return cmds.ls(cyl, long=True)[0]
+
+    @staticmethod
+    def _look(mesh):
+        """What a freeze must keep: normals, fronts and hard edges, by vertex id."""
+        shape = cmds.listRelatives(mesh, shapes=True, noIntermediate=True, fullPath=True)
+        sel = om.MSelectionList()
+        sel.add(shape[0])
+        fn = om.MFnMesh(sel.getDagPath(0))
+        normals, fronts = {}, {}
+        for f in range(fn.numPolygons):
+            # The world polygon normal is the side the face renders as its
+            # front: its winding, through the transform (a mirroring one
+            # included).
+            fronts[f] = om.MVector(fn.getPolygonNormal(f, om.MSpace.kWorld)).normal()
+            for v, nid in zip(fn.getPolygonVertices(f), fn.getFaceNormalIds(f)):
+                n = om.MVector(fn.getFaceVertexNormal(f, v, om.MSpace.kWorld))
+                normals[(f, v)] = (n.normal(), fn.isNormalLocked(nid))
+        hard = {
+            frozenset(fn.getEdgeVertices(e))
+            for e in range(fn.numEdges)
+            if not fn.isEdgeSmooth(e)
+        }
+        # ``opposite`` renders the faces reversed: what Maya sets instead of
+        # reversing the winding when a mirrored freeze runs without
+        # -preserveNormals.
+        opposite = cmds.getAttr(f"{shape[0]}.opposite")
+        return normals, fronts, hard, opposite
+
+    def _assert_same_look(self, before, after, label):
+        b_normals, b_fronts, b_hard, b_opposite = before
+        a_normals, a_fronts, a_hard, a_opposite = after
+        self.assertEqual(a_opposite, b_opposite, f"{label}: 'opposite' changed")
+        self.assertEqual(set(a_normals), set(b_normals), f"{label}: face-vertices")
+        locks = [k for k in b_normals if a_normals[k][1] != b_normals[k][1]]
+        self.assertEqual(locks, [], f"{label}: {len(locks)} lock states changed")
+        turned = []
+        for k, (n, _locked) in b_normals.items():
+            dot = max(-1.0, min(1.0, n * a_normals[k][0]))
+            angle = math.degrees(math.acos(dot))
+            if angle > 0.01:
+                turned.append(round(angle, 2))
+        self.assertEqual(
+            turned, [], f"{label}: {len(turned)} normals turned (degrees)"
+        )
+        flipped = [f for f, n in b_fronts.items() if n * a_fronts[f] < 0.999]
+        self.assertEqual(flipped, [], f"{label}: faces no longer front the same way")
+        self.assertEqual(a_hard, b_hard, f"{label}: hard edges changed")
+
+    def test_freeze_keeps_a_mirrored_mesh_look(self):
+        """``makeIdentity -preserveNormals 1`` (what every ``freeze_transforms``
+        runs) reverses a mirrored mesh's winding and carries each normal,
+        locked or not, through the bake. ``-preserveNormals 0`` turns the
+        unlocked ones inside out and ``-normal 1`` locks all of them: either
+        fails here."""
+        for variant in self.VARIANTS:
+            with self.subTest(variant=variant):
+                mesh = self._cylinder(variant, name=f"mirrored_{variant}")
+                before = self._look(mesh)
+
+                XformUtils.freeze_transforms(mesh, store=False)
+
+                self.assertAlmostEqual(cmds.getAttr(f"{mesh}.scaleX"), 1.0, places=5)
+                self._assert_same_look(before, self._look(mesh), variant)
+
+    def test_instance_preserve_freeze_keeps_locked_normals(self):
+        """Regression: ``freeze_instanced_group`` bakes the shared points by
+        hand (``MFnMesh.setPoints``), which leaves locked normals where they
+        were in object space, so after the freeze they pointed elsewhere in
+        world space, on the master and every sibling: up to 120 degrees on
+        this mirrored cylinder's locked normals (all 112), 54 on its 16 custom
+        ones. Fixed: 2026-10-31."""
+        for variant in self.VARIANTS:
+            with self.subTest(variant=variant):
+                master = self._cylinder(variant, name=f"inst_{variant}")
+                sibling = cmds.instance(master, name=f"inst_{variant}_sib")[0]
+                cmds.setAttr(f"{sibling}.translateX", 8)
+                sibling = cmds.ls(sibling, long=True)[0]
+                before = {m: self._look(m) for m in (master, sibling)}
+
+                XformUtils.freeze_transforms(
+                    master, store=False, instance_strategy="preserve"
+                )
+
+                self.assertAlmostEqual(
+                    cmds.getAttr(f"{master}.scaleX"), 1.0, places=5, msg="not frozen"
+                )
+                for label, m in (("master", master), ("sibling", sibling)):
+                    self._assert_same_look(
+                        before[m], self._look(m), f"{variant} {label}"
+                    )
+
+    def test_instance_preserve_unmirrored_freeze_keeps_locked_normals(self):
+        """The same bake without a mirror: a rotation and a non-uniform scale
+        turned the locked normals too (all 112, up to 75 degrees)."""
+        master = self._cylinder("locked", name="inst_plain")
+        cmds.setAttr(f"{master}.scaleX", 1.5)
+        sibling = cmds.ls(cmds.instance(master, name="inst_plain_sib")[0], long=True)[0]
+        cmds.setAttr(f"{sibling}.translateX", 8)
+        before = {m: self._look(m) for m in (master, sibling)}
+
+        XformUtils.freeze_transforms(master, store=False, instance_strategy="preserve")
+
+        for label, m in (("master", master), ("sibling", sibling)):
+            self._assert_same_look(before[m], self._look(m), label)
+
+    def test_instance_preserve_freeze_with_history_keeps_the_look(self):
+        """A shape with construction history bakes through Maya's own
+        ``transformGeometry`` node, as ``makeIdentity`` does: normals written to
+        the shape itself survive the history's re-evaluation, but each one
+        re-flags the edges around them (8 of the locked cylinder's soft edges
+        came out hard, 8 of the custom one's), so the look is checked again
+        after the history recomputes."""
+        for variant in self.VARIANTS:
+            for scale_x in (-1.0, 1.5):
+                with self.subTest(variant=variant, scale_x=scale_x):
+                    name = f"hist_{variant}_{'mir' if scale_x < 0 else 'plain'}"
+                    master = self._cylinder(variant, name=name, history=True)
+                    cmds.setAttr(f"{master}.scaleX", scale_x)
+                    # Tweaks on the shape ride after its history (one offset
+                    # for every vertex keeps the faces planar, so the unlocked
+                    # normals have nothing new to follow).
+                    cmds.move(0.0, 0.2, 0.0, f"{master}.vtx[*]", relative=True)
+                    sibling = cmds.instance(master, name=f"{name}_sib")[0]
+                    cmds.setAttr(f"{sibling}.translateX", 8)
+                    sibling = cmds.ls(sibling, long=True)[0]
+                    before = {m: self._look(m) for m in (master, sibling)}
+                    points = [
+                        cmds.xform(f"{master}.vtx[{i}]", q=True, ws=True, t=True)
+                        for i in (9, 12)
+                    ]
+
+                    XformUtils.freeze_transforms(
+                        master, store=False, instance_strategy="preserve"
+                    )
+                    creator = cmds.ls(cmds.listHistory(master), type="polyCylinder")[0]
+                    radius = cmds.getAttr(f"{creator}.radius")
+                    cmds.setAttr(f"{creator}.radius", radius * 1.5)
+                    cmds.setAttr(f"{creator}.radius", radius)  # re-evaluate
+
+                    for label, m in (("master", master), ("sibling", sibling)):
+                        self._assert_same_look(
+                            before[m], self._look(m), f"{variant} {label}"
+                        )
+                    for i, p in zip((9, 12), points):
+                        q = cmds.xform(f"{master}.vtx[{i}]", q=True, ws=True, t=True)
+                        for a, b in zip(p, q):
+                            self.assertAlmostEqual(a, b, places=4, msg=f"vtx[{i}]")
+
+    def test_instance_preserve_freeze_undoes_to_the_same_look(self):
+        """One undo puts back the points, the carried normals and the hard
+        edges together; one redo lands the freeze again."""
+        cmds.undoInfo(state=True, infinity=True)
+        master = self._cylinder("custom", name="inst_undo")
+        cmds.setAttr(f"{master}.scaleX", 1.5)  # no mirror: no cmds winding step
+        sibling = cmds.ls(cmds.instance(master, name="inst_undo_sib")[0], long=True)[0]
+        cmds.setAttr(f"{sibling}.translateX", 8)
+        before = self._look(master)
+
+        XformUtils.freeze_transforms(master, store=False, instance_strategy="preserve")
+        frozen = self._look(master)
+        cmds.undo()
+        self.assertAlmostEqual(cmds.getAttr(f"{master}.scaleX"), 1.5, places=5)
+        self._assert_same_look(before, self._look(master), "undo")
+        cmds.redo()
+        self.assertAlmostEqual(cmds.getAttr(f"{master}.scaleX"), 1.0, places=5)
+        self._assert_same_look(frozen, self._look(master), "redo")
+
+
 class TestStoredTransformReader(MayaTkTestCase):
     """XformUtils.get_stored_transforms — the read side of the bake contract."""
 

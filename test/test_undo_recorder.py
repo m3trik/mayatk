@@ -139,6 +139,45 @@ class TestUndoRecorder(MayaTkTestCase):
         self.assertEqual(normals(vtx1), [1.0, 0.0, 0.0] * 3)
         self.assertTrue(all(locked(vtx1)))
 
+    def test_normals_record_the_hard_edges(self):
+        """Regression: setting or unlocking a face-vertex normal re-flags the
+        edges around it, so the undo of a normal write left a soft cylinder's
+        edges hard (8 of them). ``recorder.normals`` puts the flags back too.
+        Fixed: 2026-10-31."""
+        cyl = cmds.polyCylinder(name="edges_cyl", sx=8, sy=2, sz=1, ch=False)[0]
+        cmds.polySoftEdge(cyl, angle=50, ch=False)
+        cmds.polyNormalPerVertex(cyl + ".vtx[*]", freezeNormal=True)
+        fn = CoreUtils.get_mfn_mesh(cyl)
+
+        def hard():
+            return {e for e in range(fn.numEdges) if not fn.isEdgeSmooth(e)}
+
+        def state():
+            flat = cmds.polyNormalPerVertex(cyl + ".vtx[*]", query=True, xyz=True)
+            return hard(), [round(v, 4) for v in flat]
+
+        before = state()
+        edges = om2.MIntArray(range(fn.numEdges))
+        smooth = [fn.isEdgeSmooth(e) for e in edges]
+        _counts, normal_ids = fn.getNormalIds()
+        vertex_counts, vertex_ids = fn.getVertices()
+        faces = om2.MIntArray([f for f, c in enumerate(vertex_counts) for _ in range(c)])
+        table = fn.getNormals()
+        turn = om2.MEulerRotation(0.0, 0.3, 0.0)
+        turned = om2.MVectorArray([om2.MVector(table[i]).rotateBy(turn) for i in normal_ids])
+        # The edit keeps its own flags (as the freeze does); only the
+        # recorder's put-back is under test here.
+        with UndoRecorder.record() as recorder, recorder.normals(fn):
+            fn.setFaceVertexNormals(turned, faces, vertex_ids)
+            fn.setEdgeSmoothings(edges, smooth)
+            fn.updateSurface()
+        after = state()
+        self.assertNotEqual(after[1], before[1], "fixture: no normal moved")
+        cmds.undo()
+        self.assertEqual(state(), before)
+        cmds.redo()
+        self.assertEqual(state(), after)
+
     def test_nothing_is_recorded_while_the_queue_is_off(self):
         """No cost where nobody can undo -- the export path runs this way."""
         cmds.setAttr(self.cube + ".translateZ", 9.0)

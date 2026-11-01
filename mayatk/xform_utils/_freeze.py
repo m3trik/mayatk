@@ -40,10 +40,13 @@ class _FreezeInternal:
         Parameters:
             obj: The transform node to freeze.
             axes_to_freeze (set): Set of axes to freeze (e.g., {'tx', 'ty', 'tz', 'rx', ...}).
-            normal (int/bool): ``makeIdentity -normal`` — 0 leave normals
-                alone, 1 freeze them, 2 freeze only when the transform
-                mirrors.  Matters for negatively-scaled geometry, whose
-                normals invert when the scale is baked out.
+            normal (int/bool): ``makeIdentity -normal`` — 0 keep each
+                normal's lock state, 1 lock every normal, 2 lock them only
+                for a non-uniform scale (a mirror alone locks none;
+                measured). ``-preserveNormals`` is always on: a mirrored
+                mesh's winding is reversed and every normal, locked or not,
+                points the same way in world space after the freeze
+                (``TestMirroredFreezeKeepsTheLook``).
 
         Returns:
             bool: True if successful, False if skipped due to error.
@@ -218,6 +221,120 @@ class _FreezeInternal:
         return list(next(iter(member_sets))), shapes
 
     @staticmethod
+    def _locked_normals(fn):
+        """``(faces, vertices, vectors)`` of *fn*'s locked face-vertex normals,
+        in object space, or ``None`` when none is locked.
+
+        An unlocked normal follows the geometry on its own; a locked one (an
+        import's hard-won shading, a custom normal) stays where it is in object
+        space whatever the points do, so a bake has to carry it.
+        """
+        _counts, normal_ids = fn.getNormalIds()
+        # One query per normal, not one per face-vertex sharing it.
+        locked = {i for i in set(normal_ids) if fn.isNormalLocked(i)}
+        if not locked:
+            return None
+        vertex_counts, vertex_ids = fn.getVertices()
+        table = fn.getNormals(om.MSpace.kObject)
+        faces, vertices, vectors = om.MIntArray(), om.MIntArray(), om.MVectorArray()
+        k = 0
+        for face, count in enumerate(vertex_counts):
+            for _ in range(count):
+                nid = normal_ids[k]
+                if nid in locked:
+                    faces.append(face)
+                    vertices.append(vertex_ids[k])
+                    vectors.append(om.MVector(table[nid]))
+                k += 1
+        return faces, vertices, vectors
+
+    @staticmethod
+    def _bake_through_history(shape: str, B) -> None:
+        """Bake *B* into a shape with construction history, as ``makeIdentity``
+        does: a ``transformGeometry`` node in front of the shape.
+
+        The node moves the points, carries every locked normal and, for a
+        mirroring *B*, reverses the winding, and its result survives the
+        history's re-evaluation; normals written to the shape itself survive
+        too, but each re-evaluation re-flags the edges around them (8 soft
+        edges of a locked cylinder came out hard, measured). The shape's own
+        tweaks are added after the node, in object space, so they are carried
+        by *B*'s linear part. All cmds, so it undoes with the chunk.
+        """
+        source = cmds.listConnections(
+            f"{shape}.inMesh", source=True, destination=False, plugs=True
+        )[0]
+        node = cmds.createNode("transformGeometry")
+        cmds.connectAttr(source, f"{node}.inputGeometry")
+        cmds.connectAttr(f"{node}.outputGeometry", f"{shape}.inMesh", force=True)
+        flat = [B.getElement(r, c) for r in range(4) for c in range(4)]
+        cmds.setAttr(f"{node}.transform", *flat, type="matrix")
+        cmds.setAttr(f"{node}.reverseNormals", B.det3x3() < 0)
+        tweaked = cmds.getAttr(f"{shape}.pnts", multiIndices=True)
+        if tweaked:
+            span = f"{shape}.pnts[{tweaked[0]}:{tweaked[-1]}]"
+            linear = om.MMatrix(B)
+            for c in range(3):
+                linear.setElement(3, c, 0.0)  # an offset takes no translation
+            moved = []
+            for offset in cmds.getAttr(span):
+                v = om.MVector(*offset) * linear
+                moved.extend((v.x, v.y, v.z))
+            cmds.setAttr(span, *moved)
+
+    @classmethod
+    def _bake_in_place(cls, shape: str, B) -> None:
+        """Bake *B* into a shape with no construction history, as ``makeIdentity``
+        does: its points, its locked normals and, for a mirroring *B*, its
+        winding.
+
+        ``setPoints`` alone leaves a locked normal where it was in object
+        space, which is somewhere else once the channels are rewritten
+        (measured: up to 120 degrees on a mirrored cylinder, 75 without the
+        mirror), so the locked ones are carried by the inverse transpose
+        (row vectors: ``n * B^-T``), which keeps each pointing the same way in
+        world space for the master and every compensated sibling; the unlocked
+        ones follow the points by themselves.
+        """
+        sel = om.MSelectionList()
+        sel.add(shape)
+        fn = om.MFnMesh(sel.getDagPath(0))
+        held = cls._locked_normals(fn)
+        # Recorded, and closed before the winding flip below edits the same
+        # shape through cmds, so the queue keeps the two in order.
+        with UndoRecorder.record() as recorder:
+            with recorder.points(fn):
+                fn.setPoints(
+                    om.MPointArray([p * B for p in fn.getPoints(om.MSpace.kObject)]),
+                    om.MSpace.kObject,
+                )
+            if held:
+                faces, vertices, vectors = held
+                normal_matrix = B.inverse().transpose()
+                edges = om.MIntArray(range(fn.numEdges))
+                smooth = [fn.isEdgeSmooth(e) for e in edges]
+                with recorder.normals(fn):
+                    fn.setFaceVertexNormals(
+                        om.MVectorArray([(n * normal_matrix).normal() for n in vectors]),
+                        faces,
+                        vertices,
+                        om.MSpace.kObject,
+                    )
+                    # Writing a face-vertex normal re-flags its edges (8 soft
+                    # edges of a locked cylinder came out hard, measured): the
+                    # hard edges are the mesh's.
+                    fn.setEdgeSmoothings(edges, smooth)
+                    fn.updateSurface()
+        if B.det3x3() < 0:
+            # A mirroring bake reverses the point set's handedness, so the
+            # winding would face inward -- the whole group inside-out.
+            # ``userNormalMode=0`` reverses it and leaves the locked normals,
+            # carried above, as they are.
+            cmds.polyNormal(
+                shape, normalMode=0, userNormalMode=0, constructionHistory=False
+            )
+
+    @staticmethod
     def _is_multi_path(transform: str) -> bool:
         """True when *transform* itself is instanced (several DAG paths)."""
         try:
@@ -341,32 +458,16 @@ class _FreezeInternal:
             if B.isEquivalent(om.MMatrix(), 1e-12):
                 return False
 
-            # A mirroring bake (negative determinant) reverses the handedness
-            # of the point set, so the existing face winding now faces inward
-            # — the whole group renders inside-out.  ``makeIdentity`` fixes
-            # this for itself on the normal path; baking the points by hand
-            # here does not, so the winding has to be reversed to match.
-            mirrored = B.det3x3() < 0
-
+            # Each SHARED shape is baked once -- every member sees it, which is
+            # exactly what the whole in-place design relies on -- the way
+            # ``makeIdentity`` bakes a shape of its own.
             for shape in shapes:
-                sel = om.MSelectionList()
-                sel.add(shape)
-                fn = om.MFnMesh(sel.getDagPath(0))
-                # Recorded, and closed before the normal flip below edits the
-                # same shape through cmds, so the queue keeps the two in order.
-                with UndoRecorder.record() as recorder, recorder.points(fn):
-                    fn.setPoints(
-                        om.MPointArray(
-                            [p * B for p in fn.getPoints(om.MSpace.kObject)]
-                        ),
-                        om.MSpace.kObject,
-                    )
-                if mirrored:
-                    # Edit the SHARED shape once — every member sees it, which
-                    # is exactly what the whole in-place design relies on.
-                    cmds.polyNormal(
-                        shape, normalMode=0, userNormalMode=0, constructionHistory=False
-                    )
+                if cmds.listConnections(
+                    f"{shape}.inMesh", source=True, destination=False
+                ):
+                    cls._bake_through_history(shape, B)
+                else:
+                    cls._bake_in_place(shape, B)
 
             with Attributes.temporarily_unlock([master]):
                 for attr in cls._FREEZE_CHANNEL_ATTRS:
@@ -536,9 +637,9 @@ class _FreezeInternal:
                 f"Valid options: {sorted(valid_inst_strategies)}"
             )
 
-        # ``makeIdentity -normal``: 0 leave alone, 1 freeze, 2 freeze only on
-        # a mirroring transform. A modifier, not a channel — see the note on
-        # ``channel_keys`` above.
+        # ``makeIdentity -normal``: 0 keep the lock states, 1 lock every
+        # normal, 2 lock them only for a non-uniform scale. A modifier, not a
+        # channel — see the note on ``channel_keys`` above.
         freeze_normals = int(kwargs.get("normal") or 0)
 
         freeze_channels: Set[str] = set()

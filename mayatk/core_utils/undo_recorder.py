@@ -168,10 +168,12 @@ class _Recorder:
 
     def normals(self, fn: Any) -> ContextManager[None]:
         """:meth:`state` for the face-vertex normals of an API 2.0 ``MFnMesh``,
-        locks included.
+        locks and hard edges included.
 
         Put back in object space: every normal that was locked takes its vector
         again, and every other one is unlocked, following the geometry as it did.
+        The edges' hard / soft flags go back last: setting or unlocking a
+        face-vertex normal re-flags the edges around it (measured).
         """
         import maya.api.OpenMaya as om2
 
@@ -185,19 +187,25 @@ class _Recorder:
             # One query per normal, not one per face-vertex sharing it.
             locked = {i for i in set(normal_ids) if fn.isNormalLocked(i)}
             held = [k for k, i in enumerate(normal_ids) if i in locked]
+            edges = om2.MIntArray(range(fn.numEdges))
             return (
                 om2.MIntArray(faces),
                 vertex_ids,
                 om2.MVectorArray([om2.MVector(table[normal_ids[k]]) for k in held]),
                 om2.MIntArray([faces[k] for k in held]),
                 om2.MIntArray([vertex_ids[k] for k in held]),
+                edges,
+                [fn.isEdgeSmooth(e) for e in edges],
             )
 
         def put(normals):
-            faces, vertex_ids, vectors, held_faces, held_vertices = normals
+            faces, vertex_ids, vectors, held_faces, held_vertices, edges, smooth = (
+                normals
+            )
             fn.unlockFaceVertexNormals(faces, vertex_ids)
             if len(vectors):
                 fn.setFaceVertexNormals(vectors, held_faces, held_vertices, space)
+            fn.setEdgeSmoothings(edges, smooth)
             fn.updateSurface()
 
         return self.state(read, put)

@@ -299,9 +299,10 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         ``scale``/``s``, or per-axis ``tx``…``sz``) restrict the freeze; with
         none of them the whole transform is frozen, matching Maya's
         ``makeIdentity -apply true``.  ``normal`` is a **modifier**, not a
-        channel: it maps to ``makeIdentity -normal`` (freeze vertex normals,
-        which matters for negatively-scaled geometry) and does not narrow the
-        channel set.
+        channel: it maps to ``makeIdentity -normal`` (1 locks every vertex
+        normal, 2 only under a non-uniform scale) and does not narrow the
+        channel set. Without it every normal keeps its lock state and, a
+        mirrored mesh's included, points the same way in world space.
 
         ``instance_strategy`` decides what happens to instanced objects:
 
