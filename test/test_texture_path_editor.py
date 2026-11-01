@@ -1820,7 +1820,8 @@ class TestFindAndCopy(MayaTkTestCase):
         self.assertIn("Dry run", report)
         self.assertIn("rep1.png", report)
         self.assertIn("Would repath 1 texture(s)", report)
-        self.assertIn("Apply", report)
+        # The library says nothing was written; the panel words the Apply step.
+        self.assertIn("Nothing has been written", report)
 
     def test_the_preview_promises_the_path_the_commit_writes(self):
         """Both derive it through ``plan_find_and_copy`` (``ptk.FileCollect.plan``)."""
