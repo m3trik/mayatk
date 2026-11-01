@@ -274,6 +274,8 @@ MOVED_NAMES = {
     # The sections of live-scene state a GLB took beside its FBX: the FBX's
     # materials record states every material (removed 2026-10-31).
     "SceneState": ("mayatk.MaterialRecords", "0.30.0"),
+    # The host seam's one convention: a model's host adapter is its HOST (2026-11-01).
+    "EmissiveGroups.adapter": ("mayatk.EmissiveGroups.HOST", "0.30.0"),
     # The curtain drape, written once for both hosts (CurtainMesh subclasses it).
     "CurtainDrape": ("pythontk.CurtainDrape", "0.30.0"),
     "DuplicateRadialSlots": (

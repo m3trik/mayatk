@@ -93,9 +93,9 @@ class _MayaEmissiveGroupsInternal:
                 yield arrived, canonical
 
 
-class MayaEmissiveGroups(_MayaEmissiveGroupsInternal):
+class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost):
     """The Maya scene operations of the Emissive Groups model
-    (``EmissiveGroupsAdapter``)."""
+    (``ptk.EmissiveGroupsHost``)."""
 
     data_nodes = DataNodes
     COLOR_SET_NOUN = "color set"
@@ -301,4 +301,4 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal):
 class EmissiveGroups(ptk.EmissiveGroupsModel):
     """The Emissive Groups API in Maya: pythontk's model over the Maya half."""
 
-    adapter = MayaEmissiveGroups()
+    HOST = MayaEmissiveGroups()
