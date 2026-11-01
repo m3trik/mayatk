@@ -114,8 +114,11 @@ tc.stale("tools")      # source maps revised since
 tc.recombine("tools")  # re-read them into the same layout
 tc.update("tools", map_size=2048)
 tc.restore("tools")    # originals back, record dropped
+tc.run_transfer(source="first", transfer="textures")  # Transfer mode, off the selection
 ```
 
 `TextureCombine.gather` + `plan` give the table's numbers without packing (`ptk.UvCombine.plan`). The planner is DCC-agnostic.
+
+`TextureCombine.run_transfer(**options)` is the Transfer mode as the panel runs it: the rows as plain keywords (`ptk.TransferRun.run`: `source`, `transfer`, `scope`, `assign_from`, …), the source and targets read off the selection, one undo step, a `ptk.TransferResult` back. Its texture pass is `TextureTransfer.transfer` (above), the primitive for meshes you name yourself.
 
 Blender: blendertk mirrors the engine (`btk.TextureCombine`), and the panel is the same one, opened from the Blender UV panel the same way; its Source row reads the active object where Maya's reads the selection order. Its Material row offers Same as source / Same as target / Overwrite target in Transfer mode only: a Blender material has no shader type to rebuild a combine on.

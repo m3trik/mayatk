@@ -120,7 +120,7 @@ The report behind tentacle's Get Scene Info. Sections render through pythontk's 
 
 ### DCC bridges
 
-One-click hand-offs that export the selection and drive the target app with a templated script: **Marmoset Toolbag** (including a bundled JSON-RPC plugin for live Toolbag scene ops), **Substance 3D Painter**, **RizomUV**, **Blender**, and **Unity**. Built on pythontk's `HandoffBridge` engine (RizomUV uses its own script-driven flow); each has a tentacle tool panel.
+One-click hand-offs that export the selection and drive the target app with a templated script: **Marmoset Toolbag** (including a bundled JSON-RPC plugin for live Toolbag scene ops), **Substance 3D Painter**, **RizomUV**, **Blender**, and **Unity**. Built on pythontk's `HandoffBridge` engine (RizomUV uses its own script-driven flow). Each has a tentacle tool panel (Blender's is the shared DCC Bridge) except Unity: its panel is extapps' Unity Workflow app, which tentacle opens with `UnityBridge` as its export half.
 
 `WebXrPreview` is the same engine aimed at a browser instead of an application: `mtk.WebXrPreview().push()` converts the selection to glTF and publishes it to a loopback server, so a tab left open — including one open in a PC-tethered headset — swaps to the new version on its next poll. Baked lightmaps and the scene's records (the `data_export` carrier: lightmaps, materials, the handoff) ride along automatically. See **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk owns the shared pipeline).
 
