@@ -42,7 +42,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `nurbs_utils` | NURBS surfaces, `ImageTracer`, curve-to-tube |
 | `render_utils` | Renderer switching and render-settings helpers (composed by `hdr_manager`) |
 | `rig_utils` | `Controls`, skinning, tube / wheel / telescope / shadow / [articulated](articulated_rig.md) rigs |
-| `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
+| `ui_utils` | `MayaUiHandler`, `MayaMarkingMenuHost` (the `uitk.MarkingMenuHost` adapter), channel box, native menus, hotkey collision check, node icons |
 | `uv_utils` | UV utilities, [Texture Combine](texture_combine.md) (material atlas combine + UV / texture transfer), Rizom bridge |
 | `xform_utils` | Transforms, matrices, pivot watcher |
 
