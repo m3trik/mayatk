@@ -1096,7 +1096,7 @@ class SceneExporter(ptk.SceneExporterBase):
             )
         from mayatk.node_utils.data_nodes import DataNodes
 
-        if any(n.split("|")[-1] == DataNodes.EXPORT for n in selection):
+        if any(DataNodes.is_carrier(n) for n in selection):
             self.logger.info(
                 "USD: the data_export carrier ships as a prim; consumers reading its "
                 "attributes as userProperties are not yet verified."

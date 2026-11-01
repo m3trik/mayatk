@@ -123,7 +123,8 @@ class MayaScenePersistence:
     across scene switches.
     """
 
-    ATTR_NAME = "shot_store"  # string channel on the shared ``data_internal`` node
+    # String channel on the shared ``data_internal`` node: the record key.
+    ATTR_NAME = ptk.SceneRecords.SHOT_STORE.key
     # Pre-consolidation carrier: a dedicated network node. Folded into
     # ``data_internal`` on first load (see :meth:`_migrate_legacy`).
     LEGACY_NODE_NAME = "shotStore"

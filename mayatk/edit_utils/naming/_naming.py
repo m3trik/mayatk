@@ -7,7 +7,6 @@ except ImportError:
 
 from typing import List, Union, Optional, Dict, Tuple
 import re
-import string
 
 import pythontk as ptk
 
@@ -950,150 +949,20 @@ class Naming(ptk.HelpMixin, ptk.LoggingMixin):
                 reverse=reverse,
             )
 
-        # Helper to determine if we should strip valid suffixes
-        # If independent_groups is True, we generally want to PRESERVE the group suffix (Type)
-        # So we force strip_defined_suffixes to False for the base name calculation in that mode.
-        strip_suffixes_for_grouping = strip_defined_suffixes
-        if independent_groups:
-            strip_suffixes_for_grouping = False
-
-        def strip_ints(name):
-            if strip_trailing_ints and name and name[-1].isdigit():
-                match = re.search(r"(_\d+|\d+)$", name)
-                if match:
-                    return name[: match.start()]
-            return name
-
-        sorted_suffixes = sorted(valid_suffixes or [], key=len, reverse=True)
-
-        def peel_suffix(name):
-            """``(root, suffix)``: *name* less the defined suffix it ends with."""
-            for suffix in sorted_suffixes:
-                if name.endswith(suffix):
-                    return name[: -len(suffix)], suffix
-            return name, ""
-
-        # The letters a previous alphabetical run wrote: the batch's '_A',
-        # '_B', ... (before a kept type suffix too) running from A with no
-        # gap. Only those are stripped (a re-run gave 'tile_C_C'); a side
-        # marker ('_L', '_R') is content.
-        letters = set()
-        for o in objects:
-            root = strip_ints(peel_suffix(strip_ints(cls._leaf(o)))[0])
-            m = re.search(r"_([A-Z])$", root)
-            if m:
-                letters.add(m.group(1))
-        own_letters = (
-            alphabetical
-            and bool(letters)
-            and sorted(letters) == list(string.ascii_uppercase[: len(letters)])
+        # The host-free plan (strip what a previous run left, group, number)
+        # is pythontk's, written once for both hosts.
+        new_names = ptk.StrUtils.sequence_names(
+            {obj: cls._leaf(obj) for obj in objects},
+            order=ordered,
+            alphabetical=alphabetical,
+            strip_trailing_ints=strip_trailing_ints,
+            strip_defined_suffixes=strip_defined_suffixes,
+            valid_suffixes=valid_suffixes,
+            independent_groups=independent_groups,
         )
 
-        def strip_own_letter(name):
-            if own_letters and re.search(r"_[A-Z]$", name):
-                return name[:-2]
-            return name
-
-        def get_base_name(name):
-            # Loop to handle stacked suffixes (e.g. Name_GRP_01_A)
-            # We continue stripping as long as we find something to strip
-            while True:
-                original_name = name
-
-                # 1. Strip Trailing Integers (e.g. _01, 123)
-                name = strip_ints(name)
-
-                # 2. Strip this tool's own letter (e.g. _A)
-                name = strip_own_letter(name)
-
-                # 3. Strip Defined Suffixes (e.g. _GRP)
-                if strip_suffixes_for_grouping and sorted_suffixes:
-                    for suffix in sorted_suffixes:
-                        if name.endswith(suffix):
-                            name = name[: -len(suffix)]
-                            break
-
-                if name == original_name:
-                    break
-
-            return name
-
-        newNames = {}
-        all_ordered_objs = []
-
-        if independent_groups:
-            # Group objects by base name
-            groups = {}
-            for obj in objects:
-                # The leaf name (no path, no namespace) groups similar objects
-                # in different hierarchies together.
-                base_name = get_base_name(cls._leaf(obj))
-                # A kept type suffix: the number or letter before it is this
-                # tool's too (Container_01_GRP), so a re-run groups as before.
-                root, suffix = peel_suffix(base_name)
-                if suffix:
-                    base_name = get_base_name(root) + suffix
-                groups.setdefault(base_name, []).append(obj)
-
-            for base_name, group_objs in groups.items():
-                ordered_group = ordered(group_objs)
-
-                length = len(ordered_group)
-                if alphabetical and length <= 26:
-                    suffix_list = list(string.ascii_uppercase)[:length]
-                else:
-                    pad = max(2, len(str(length)))
-                    suffix_list = [
-                        str(n + 1).zfill(pad) for n in range(length)
-                    ]  # 1-based index (01, 02)
-
-                # Determine if checking "Strip Defined Suffixes" should remove the suffix or move it to the end
-                # base_name here includes the suffix (e.g. Name_GRP) because strip_suffixes_for_grouping is False
-                root_name = base_name
-                type_suffix = ""
-
-                # Identify the suffix
-                for s in sorted_suffixes:
-                    if base_name.endswith(s):
-                        root_name = base_name[: -len(s)]
-                        type_suffix = s
-                        break
-
-                # If strip_defined_suffixes is True, we discard the suffix (User opted to Strip)
-                # If False, we keep it and append it at the end (User opted to Retain/Move)
-                if strip_defined_suffixes:
-                    type_suffix = ""
-
-                for i, obj in enumerate(ordered_group):
-                    # Construct: Root + _Index + Type
-                    nm = f"{root_name}_{suffix_list[i]}"
-                    if type_suffix:
-                        nm = f"{nm}{type_suffix}"
-
-                    newNames[obj] = nm
-
-                all_ordered_objs.extend(ordered_group)
-        else:
-            ordered_objs = ordered(objects)
-
-            length = len(ordered_objs)
-            if alphabetical and length <= 26:
-                suffix_list = list(string.ascii_uppercase)[:length]
-            else:
-                pad = max(2, len(str(length)))
-                suffix_list = [
-                    str(n + 1).zfill(pad) for n in range(length)
-                ]  # 1-based index
-
-            for n, obj in enumerate(ordered_objs):
-                base_name = get_base_name(cls._leaf(obj))
-                obj_suffix = suffix_list[n]
-                newNames[obj] = base_name + "_" + obj_suffix
-
-            all_ordered_objs = ordered_objs
-
         plan = [
-            (cls._key(obj), cls._leaf(obj), newNames[obj]) for obj in all_ordered_objs
+            (cls._key(obj), cls._leaf(obj), name) for obj, name in new_names.items()
         ]
         title = "Suffix By Location"
         if order in ("x", "y", "z"):

@@ -135,15 +135,6 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
         except Exception:
             pass
 
-    @classmethod
-    def _delete_existing_workspace_control(cls):
-        ws_name = "ScriptConsoleWorkspaceControl"
-        if cmds.workspaceControl(ws_name, exists=True):
-            try:
-                cmds.deleteUI(ws_name)
-            except Exception:
-                pass
-
     def _mirror_script_editor_output(self):
         # Ensure Script Editor is initialized
         was_open = self._ensure_script_editor_initialized()

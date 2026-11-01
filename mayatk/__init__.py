@@ -268,6 +268,9 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
+    # Removed with no caller left (2026-11-01): Maya's own MQtUtil.findControl
+    # (with shiboken6.wrapInstance) embeds a native control.
+    "wrap_control": ("maya.OpenMayaUI.MQtUtil.findControl", "0.30.0"),
     # The sections of live-scene state a GLB took beside its FBX: the FBX's
     # materials record states every material (removed 2026-10-31).
     "SceneState": ("mayatk.MaterialRecords", "0.30.0"),

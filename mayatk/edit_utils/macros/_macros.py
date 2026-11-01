@@ -196,18 +196,11 @@ class MacroManager(ptk.HelpMixin):
     # already upper-case in the method name (``UV``) are preserved as-is.
     _LABEL_ACRONYMS = {"uv": "UV", "uvs": "UVs", "id": "ID", "ui": "UI", "3d": "3D"}
 
-    # Modifier-order is canonical (ctl, alt, sht) so equivalent chords compare
-    # equal regardless of how they were typed.
-    _MOD_ORDER = ("ctl", "alt", "sht")
-    # Qt KeySequence modifier name -> Maya token.
-    _QT_MOD_MAP = {
-        "ctrl": "ctl",
-        "control": "ctl",
-        "alt": "alt",
-        "shift": "sht",
-        "meta": "ctl",
-        "cmd": "ctl",
-    }
+    # Modifier order + Qt-modifier-name mapping are the ecosystem's shared,
+    # DCC-agnostic hotkey-token convention -- sourced from ``ptk.HotkeyUtils``
+    # (the SSoT, as blendertk's MacroManager does) rather than restated here.
+    _MOD_ORDER = ptk.HotkeyUtils.MOD_ORDER
+    _QT_MOD_MAP = ptk.HotkeyUtils.QT_MOD_MAP
 
     @classmethod
     def list_available_macros(cls) -> Dict[str, str]:
@@ -239,21 +232,9 @@ class MacroManager(ptk.HelpMixin):
     def macro_label(cls, name: str) -> str:
         """Humanize a macro name for display, e.g. ``m_back_face_culling`` ->
         "Back Face Culling" (acronyms like ``UV`` / ``ID`` are preserved)."""
-        base = (
-            name[len(cls.MACRO_PREFIX) :] if name.startswith(cls.MACRO_PREFIX) else name
+        return ptk.HotkeyUtils.humanize_label(
+            name, prefix=cls.MACRO_PREFIX, acronyms=cls._LABEL_ACRONYMS
         )
-        words = []
-        for word in base.split("_"):
-            if not word:
-                continue
-            low = word.lower()
-            if low in cls._LABEL_ACRONYMS:
-                words.append(cls._LABEL_ACRONYMS[low])
-            elif word.isupper() and len(word) > 1:
-                words.append(word)  # already an acronym in the source name
-            else:
-                words.append(word.capitalize())
-        return " ".join(words)
 
     @classmethod
     def macro_category(cls, name: str) -> str:
@@ -511,7 +492,8 @@ class MacroManager(ptk.HelpMixin):
                 by_key[cls._normalize_key(key)].append(name)
         return {k: v for k, v in by_key.items() if len(v) > 1}
 
-    # --- key-format helpers (pure string, DCC-free) -------------------
+    # --- key-format helpers (pure string, DCC-free -- delegate to the shared,
+    # DCC-agnostic ptk.HotkeyUtils SSoT rather than reimplementing) -------
 
     @staticmethod
     def _parse_key(key: str) -> Tuple[bool, bool, bool, str]:
@@ -520,20 +502,7 @@ class MacroManager(ptk.HelpMixin):
         Modifiers (``ctl``/``alt``/``sht``) are matched case-insensitively; the
         remaining token is the key itself (e.g. ``"i"``, ``"F3"``).
         """
-        ctl = alt = sht = False
-        k = str(key)
-        for char in str(key).split("+"):
-            token = char.strip()
-            low = token.lower()
-            if low == "ctl":
-                ctl = True
-            elif low == "alt":
-                alt = True
-            elif low == "sht":
-                sht = True
-            else:
-                k = token
-        return ctl, alt, sht, k
+        return ptk.HotkeyUtils.parse_key(key)
 
     @classmethod
     def _normalize_key(cls, key: str) -> str:
@@ -550,39 +519,12 @@ class MacroManager(ptk.HelpMixin):
 
         Returns ``""`` when *sequence* carries no non-modifier key.
         """
-        if not sequence:
-            return ""
-        present = {"ctl": False, "alt": False, "sht": False}
-        key = None
-        for part in str(sequence).split("+"):
-            token = part.strip()
-            mod = cls._QT_MOD_MAP.get(token.lower())
-            if mod:
-                present[mod] = True
-            elif token:
-                key = token
-        if key is None:
-            return ""
-        if len(key) == 1:
-            key = key.lower()
-        mods = [m for m in cls._MOD_ORDER if present[m]]
-        return "+".join(mods + [key])
+        return ptk.HotkeyUtils.qt_sequence_to_key(sequence)
 
     @classmethod
     def maya_key_to_qt_sequence(cls, key: str) -> str:
         """Convert a Maya key token (``"ctl+sht+i"``) to a Qt key-sequence string."""
-        if not key:
-            return ""
-        ctl, alt, sht, k = cls._parse_key(key)
-        seq: List[str] = []
-        if ctl:
-            seq.append("Ctrl")
-        if alt:
-            seq.append("Alt")
-        if sht:
-            seq.append("Shift")
-        seq.append(k.upper() if len(k) == 1 else k)
-        return "+".join(seq)
+        return ptk.HotkeyUtils.key_to_qt_sequence(key)
 
     # --- preset persistence (PresetStore-backed, DCC-free) ------------
 

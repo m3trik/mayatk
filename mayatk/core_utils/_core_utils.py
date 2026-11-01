@@ -673,27 +673,6 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         return wrapped
 
     @staticmethod
-    def wrap_control(control_name, container):
-        """Embed a Maya Native UI Object."""
-        from qtpy import QtWidgets
-        from shiboken6 import wrapInstance
-        from maya.OpenMayaUI import MQtUtil
-
-        layout = QtWidgets.QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layoutName = ptk.set_case(container.objectName() + "Layout", "camel")
-        layout.setObjectName(layoutName)
-        cmds.setParent(layoutName)
-
-        derivedClass = ptk.get_derived_type(container)
-
-        ptr = MQtUtil.findControl(control_name)
-        control = wrapInstance(int(ptr), derivedClass)
-        layout.addWidget(control)
-
-        return control
-
-    @staticmethod
     def confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]:
         """Confirms the existence of each object in the provided list in Maya."""
         existing = []

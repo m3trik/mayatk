@@ -234,6 +234,28 @@ class TestRemove(MayaTkTestCase):
         self.assertEqual(audio_utils.load_file_map(), {})
 
 
+class TestWatchSnap(unittest.TestCase):
+    """The snap recipe watch is a plain-value primitive: a callback in, the
+    unwatch callable out. The widget lifetime is the panel's to connect."""
+
+    def test_returns_the_stores_unwatch_and_takes_no_widget(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        store, callback = MagicMock(), MagicMock()
+        with patch.object(DataNodes, "owner", return_value=store):
+            unwatch = AudioClips.watch_snap(callback)
+            with self.assertRaises(TypeError):
+                AudioClips.watch_snap(callback, widget=MagicMock())
+        self.assertIs(unwatch, store.watch_settings.return_value)
+        store.watch_settings.assert_called_once_with(callback)
+
+    def test_none_without_a_shot_store(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        with patch.object(DataNodes, "owner", return_value=None):
+            self.assertIsNone(AudioClips.watch_snap(MagicMock()))
+
+
 class TestListNodes(MayaTkTestCase):
     def test_lists_dg_and_composite(self):
         wav = _make_wav("list_one", duration_sec=0.3)

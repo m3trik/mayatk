@@ -566,7 +566,7 @@ class AudioClips(ptk.LoggingMixin):
         _audio_utils.set_snap_frames(value)
 
     @staticmethod
-    def watch_snap(callback, widget=None) -> Optional[Callable[[], None]]:
+    def watch_snap(callback) -> Optional[Callable[[], None]]:
         """Call *callback* whenever the scene's recipe changes (another panel,
         an undo, a scene opened), so a Snap To Frame toggle shows it. The shot
         store holds the recipe; it sits above this layer, so it is reached
@@ -574,20 +574,17 @@ class AudioClips(ptk.LoggingMixin):
 
         Parameters:
             callback: Called with the store's change arguments.
-            widget: A Qt widget whose destruction ends the watch.
 
         Returns:
-            The unwatch callable, or ``None`` without a shot store.
+            The unwatch callable (a panel calls it when its widget goes), or
+            ``None`` without a shot store.
         """
         from mayatk.node_utils.data_nodes import DataNodes
 
         store = DataNodes.owner(ptk.SceneRecords.SHOT_STORE.key)
         if store is None:
             return None
-        unwatch = store.watch_settings(callback)
-        if widget is not None:
-            widget.destroyed.connect(lambda *_: unwatch())
-        return unwatch
+        return store.watch_settings(callback)
 
     @classmethod
     def export_composite(

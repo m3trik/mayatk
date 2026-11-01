@@ -419,16 +419,6 @@ class GeometryMatcher(_GeometryMatcherInternal):
 
         return (geo_sig, tuple(child_sigs))
 
-    def _is_matrix_close(self, m1, m2):
-        """Checks if two matrices are equivalent within tolerance."""
-        if m1 is None and m2 is None:
-            return True
-        if m1 is None:
-            m1 = om.MMatrix()
-        if m2 is None:
-            m2 = om.MMatrix()
-        return m1.isEquivalent(m2, self.tolerance)
-
     def are_meshes_identical_with_transform(self, t1: str, t2: str, matrix) -> bool:
         """Check if t1 transformed by matrix matches t2."""
         m1 = NodeUtils.get_shape(t1)
