@@ -1889,7 +1889,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "The store class this backend serves (``ShotStore`` unless the key",
-              "line": 153,
+              "line": 154,
               "deprecated": false
             },
             {
@@ -1898,7 +1898,7 @@
               "kind": "method",
               "signature": "(self, data: Dict[str, Any], undoable: bool = False) -> None",
               "summary": "Write *data* to the channel.",
-              "line": 158,
+              "line": 159,
               "deprecated": false
             },
             {
@@ -1907,7 +1907,7 @@
               "kind": "method",
               "signature": "(self) -> Optional[Dict[str, Any]]",
               "summary": "The stored record, or ``None`` when the scene holds none.",
-              "line": 196,
+              "line": 197,
               "deprecated": false
             },
             {
@@ -1916,7 +1916,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Whether the channel differs from what this backend last wrote or read.",
-              "line": 225,
+              "line": 226,
               "deprecated": false
             },
             {
@@ -1925,7 +1925,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Tear down every SJM subscription owned by this store.",
-              "line": 301,
+              "line": 302,
               "deprecated": false
             }
           ]
@@ -1933,7 +1933,7 @@
         {
           "name": "MayaShotsHost",
           "summary": "Maya's half of the shot store: the :class:`pythontk.ShotsHost` the one",
-          "line": 454,
+          "line": 455,
           "bases": [
             "_MayaShotsHostInternal"
           ],
@@ -1944,7 +1944,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional['MayaShotsHost']",
               "summary": "The adapter when this process runs Maya (``maya.cmds`` imports),",
-              "line": 485,
+              "line": 486,
               "deprecated": false
             },
             {
@@ -1953,7 +1953,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether the scene can be reached (``maya.cmds`` imports).",
-              "line": 497,
+              "line": 498,
               "deprecated": false
             },
             {
@@ -1962,7 +1962,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[MayaScenePersistence]",
               "summary": "A new :class:`MayaScenePersistence` (``ShotStore.active`` installs",
-              "line": 502,
+              "line": 503,
               "deprecated": false
             },
             {
@@ -1971,7 +1971,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Nothing kept per store: Maya's lookups ask the scene each time.",
-              "line": 508,
+              "line": 509,
               "deprecated": false
             },
             {
@@ -1980,7 +1980,7 @@
               "kind": "staticmethod",
               "signature": "() -> float",
               "summary": "Current Maya scene framerate (24.0 outside Maya).",
-              "line": 513,
+              "line": 514,
               "deprecated": false
             },
             {
@@ -1989,7 +1989,7 @@
               "kind": "staticmethod",
               "signature": "(store) -> None",
               "summary": "Coalesce rapid mutations into a single deferred write.",
-              "line": 518,
+              "line": 519,
               "deprecated": false
             },
             {
@@ -1998,7 +1998,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[Dict[str, Any]]",
               "summary": "The detection prefs ``QSettings(\"uitk\", \"shots\")`` held before the",
-              "line": 529,
+              "line": 530,
               "deprecated": false
             },
             {
@@ -2007,7 +2007,7 @@
               "kind": "staticmethod",
               "signature": "(store) -> None",
               "summary": "Nothing to migrate: Maya claims by anim-curve node in every format.",
-              "line": 541,
+              "line": 542,
               "deprecated": false
             },
             {
@@ -2016,7 +2016,7 @@
               "kind": "staticmethod",
               "signature": "(store) -> bool",
               "summary": "Nothing to follow: a Maya member is re-resolved where it is read",
-              "line": 546,
+              "line": 547,
               "deprecated": false
             },
             {
@@ -2025,7 +2025,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the scene contains animCurves driving transforms.",
-              "line": 554,
+              "line": 555,
               "deprecated": false
             },
             {
@@ -2034,7 +2034,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Maya's region detection (:class:`Detection`).",
-              "line": 580,
+              "line": 581,
               "deprecated": false
             },
             {
@@ -2043,7 +2043,7 @@
               "kind": "staticmethod",
               "signature": "(store) -> Dict[int, str]",
               "summary": "Lightweight assessment: check if shot objects exist in the scene.",
-              "line": 585,
+              "line": 586,
               "deprecated": false
             },
             {
@@ -2052,7 +2052,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> List[str]",
               "summary": "Long names of every transform answering to a doc object *name*.",
-              "line": 612,
+              "line": 613,
               "deprecated": false
             },
             {
@@ -2061,7 +2061,7 @@
               "kind": "staticmethod",
               "signature": "(store, names) -> set",
               "summary": "Which of *names* the scene still holds (``ptk.ShotStore.stale_shots``).",
-              "line": 623,
+              "line": 624,
               "deprecated": false
             },
             {
@@ -2070,7 +2070,7 @@
               "kind": "staticmethod",
               "signature": "(names) -> Dict[str, str]",
               "summary": "``{name: node UUID}`` for each of *names* that answers to ONE node",
-              "line": 657,
+              "line": 658,
               "deprecated": false
             },
             {
@@ -2079,7 +2079,7 @@
               "kind": "staticmethod",
               "signature": "(store, windows) -> List[bool]",
               "summary": "Per ``(start, end)`` window, whether any animation curve in the",
-              "line": 700,
+              "line": 701,
               "deprecated": false
             },
             {
@@ -2088,7 +2088,7 @@
               "kind": "staticmethod",
               "signature": "(store, entries) -> List[Optional[bool]]",
               "summary": "Per ``(names, (start, end))``, whether a curve of the named objects",
-              "line": 760,
+              "line": 761,
               "deprecated": false
             },
             {
@@ -2097,7 +2097,7 @@
               "kind": "staticmethod",
               "signature": "() -> List[tuple]",
               "summary": "Every audio track's on/off spans (``ptk.ShotStore.empty_shots``).",
-              "line": 799,
+              "line": 800,
               "deprecated": false
             },
             {
@@ -2106,7 +2106,7 @@
               "kind": "staticmethod",
               "signature": "(store, objects=None)",
               "summary": "``keys_of(curve)``: a Maya curve is claimed under its own anim-curve",
-              "line": 808,
+              "line": 809,
               "deprecated": false
             },
             {
@@ -2115,7 +2115,7 @@
               "kind": "staticmethod",
               "signature": "(redo: bool = False) -> str",
               "summary": "Name of the entry Maya's undo (or redo) would consume next.",
-              "line": 816,
+              "line": 817,
               "deprecated": false
             },
             {
@@ -2124,7 +2124,7 @@
               "kind": "classmethod",
               "signature": "(cls, store, label: str = 'edit', snapshot: bool = True)",
               "summary": "Run a shot edit as ONE uniquely NAMED undo chunk",
-              "line": 832,
+              "line": 833,
               "deprecated": false
             },
             {
@@ -2133,7 +2133,7 @@
               "kind": "classmethod",
               "signature": "(cls, marker, redo: bool = False) -> bool",
               "summary": "Whether the undo (or redo) Maya JUST performed is the chunk named",
-              "line": 873,
+              "line": 874,
               "deprecated": false
             },
             {
@@ -2142,7 +2142,7 @@
               "kind": "classmethod",
               "signature": "(cls, on_step) -> None",
               "summary": "Subscribe *on_step* (the store's ``_on_native_step``) to Maya's Undo /",
-              "line": 893,
+              "line": 894,
               "deprecated": false
             },
             {
@@ -2151,7 +2151,7 @@
               "kind": "classmethod",
               "signature": "(cls, on_step) -> None",
               "summary": "Drop the Undo / Redo subscriptions :meth:`install_undo_sync` made",
-              "line": 932,
+              "line": 933,
               "deprecated": false
             },
             {
@@ -2160,7 +2160,7 @@
               "kind": "staticmethod",
               "signature": "(records) -> Optional[str]",
               "summary": "Commit the shot records onto the shared ``data_export`` node",
-              "line": 945,
+              "line": 946,
               "deprecated": false
             },
             {
@@ -2169,7 +2169,7 @@
               "kind": "staticmethod",
               "signature": "(enabled: bool) -> None",
               "summary": "Opt the shot record into (or out of) the any-export session hook",
-              "line": 961,
+              "line": 962,
               "deprecated": false
             },
             {
@@ -2178,7 +2178,7 @@
               "kind": "staticmethod",
               "signature": "() -> '_MayaShotTransfer'",
               "summary": "How a Maya scene meets the hand-off codec (:class:`_MayaShotTransfer`).",
-              "line": 974,
+              "line": 975,
               "deprecated": false
             }
           ]
@@ -3391,7 +3391,7 @@
         {
           "name": "SmartBake",
           "summary": "Intelligent baking with automatic detection of what needs to be baked.",
-          "line": 1081,
+          "line": 1077,
           "bases": [
             "_SmartBakeInternal"
           ],
@@ -3402,7 +3402,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, BakeAnalysis]",
               "summary": "Analyze objects to determine what needs baking.",
-              "line": 1313,
+              "line": 1309,
               "deprecated": false
             },
             {
@@ -3411,7 +3411,7 @@
               "kind": "method",
               "signature": "(self, analysis: Optional[Dict[str, BakeAnalysis]] = None) -> Tuple[int, int]",
               "summary": "Determine optimal bake time range from driver animation.",
-              "line": 1718,
+              "line": 1714,
               "deprecated": false
             },
             {
@@ -3420,7 +3420,7 @@
               "kind": "method",
               "signature": "(self, analysis: Dict[str, BakeAnalysis], fallback: Tuple[int, int]) -> Dict[str, Tuple[int, int]]",
               "summary": "The frames each driven object in *analysis* actually needs sampled.",
-              "line": 1762,
+              "line": 1758,
               "deprecated": false
             },
             {
@@ -3429,7 +3429,7 @@
               "kind": "method",
               "signature": "(self, analysis: Optional[Dict[str, BakeAnalysis]] = None, time_range: Optional[Tuple[int, int]] = None) -> BakeResult",
               "summary": "Execute baking on analyzed objects.",
-              "line": 2938,
+              "line": 2934,
               "deprecated": false
             },
             {
@@ -3438,7 +3438,7 @@
               "kind": "method",
               "signature": "(self) -> BakeResult",
               "summary": "High-level entry point: analyze and bake in one call.",
-              "line": 3618,
+              "line": 3614,
               "deprecated": false
             },
             {
@@ -3447,7 +3447,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return ids of restorable bake sessions recorded in this scene,",
-              "line": 3632,
+              "line": 3628,
               "deprecated": false
             },
             {
@@ -3456,7 +3456,7 @@
               "kind": "classmethod",
               "signature": "(cls, session_id: Optional[str] = None) -> 'RestoreResult'",
               "summary": "Reverse a bake session recorded by ``bake(restorable=True)``.",
-              "line": 3641,
+              "line": 3637,
               "deprecated": false
             },
             {
@@ -3465,7 +3465,7 @@
               "kind": "classmethod",
               "signature": "(cls, session_id: Optional[str] = None) -> 'RestoreResult'",
               "summary": "Restore ONLY the matrix (offsetParentMatrix) bakes of a session.",
-              "line": 3702,
+              "line": 3698,
               "deprecated": false
             },
             {
@@ -3474,7 +3474,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], bake_range: Optional[Tuple[float, float]] = None) -> Tuple[BakeResult, Callable[[], List[str]]]",
               "summary": "Put each node among *objects* where an FBX write would not, for",
-              "line": 3762,
+              "line": 3758,
               "deprecated": false
             },
             {
@@ -3483,7 +3483,7 @@
               "kind": "classmethod",
               "signature": "(cls, **kwargs)",
               "summary": "Context manager: bake on enter, restore on exit.",
-              "line": 4100,
+              "line": 4096,
               "deprecated": false
             },
             {
@@ -3492,7 +3492,7 @@
               "kind": "classmethod",
               "signature": "(cls, **kwargs) -> BakeResult",
               "summary": "Class method for quick smart baking without explicit instantiation.",
-              "line": 4126,
+              "line": 4122,
               "deprecated": false
             }
           ]
@@ -4581,7 +4581,7 @@
               "name": "watch_snap",
               "qualname": "AudioClips.watch_snap",
               "kind": "staticmethod",
-              "signature": "(callback, widget=None) -> Optional[Callable[[], None]]",
+              "signature": "(callback) -> Optional[Callable[[], None]]",
               "summary": "Call *callback* whenever the scene's recipe changes (another panel,",
               "line": 569,
               "deprecated": false
@@ -4592,7 +4592,7 @@
               "kind": "classmethod",
               "signature": "(cls, choose_path: Callable[[str], Optional[str]], trim_silence: bool = True) -> Tuple[Optional[str], bool]",
               "summary": "Write the scene's composite WAV where *choose_path* says, rebuilt",
-              "line": 593,
+              "line": 590,
               "deprecated": false
             },
             {
@@ -4601,7 +4601,7 @@
               "kind": "classmethod",
               "signature": "(cls, choose_dir: Callable[[str], Optional[str]], keyed_only: bool = True, suffix_range: bool = False) -> Tuple[int, List[str], Optional[str]]",
               "summary": "Copy the tracks' source files into the folder *choose_dir* names.",
-              "line": 644,
+              "line": 641,
               "deprecated": false
             },
             {
@@ -4610,7 +4610,7 @@
               "kind": "classmethod",
               "signature": "(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]",
               "summary": "Tell *owner* what happens to the scene's audio, through the",
-              "line": 730,
+              "line": 727,
               "deprecated": false
             },
             {
@@ -4619,7 +4619,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]",
               "summary": "The ``audio`` record for this scene, or ``None`` when there",
-              "line": 844,
+              "line": 841,
               "deprecated": false
             },
             {
@@ -4628,7 +4628,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "Bake the scene-wide audio manifest for FBX export.",
-              "line": 928,
+              "line": 925,
               "deprecated": false
             },
             {
@@ -4637,7 +4637,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Bake the audio manifest onto ``data_export`` before **every** FBX export.",
-              "line": 1021,
+              "line": 1018,
               "deprecated": false
             },
             {
@@ -4646,7 +4646,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Opt the producer out of the before-export hook for the rest of the",
-              "line": 1038,
+              "line": 1035,
               "deprecated": false
             },
             {
@@ -4655,7 +4655,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return names of every managed DG audio node plus the composite.",
-              "line": 1064,
+              "line": 1061,
               "deprecated": false
             },
             {
@@ -4664,7 +4664,7 @@
               "kind": "classmethod",
               "signature": "(cls, node_name: str, time_slider: bool = True) -> None",
               "summary": "Set an audio node as the active Time Slider sound.",
-              "line": 1079,
+              "line": 1076,
               "deprecated": false
             }
           ]
@@ -5253,21 +5253,12 @@
               "deprecated": false
             },
             {
-              "name": "wrap_control",
-              "qualname": "CoreUtils.wrap_control",
-              "kind": "staticmethod",
-              "signature": "(control_name, container)",
-              "summary": "Embed a Maya Native UI Object.",
-              "line": 676,
-              "deprecated": false
-            },
-            {
               "name": "confirm_existence",
               "qualname": "CoreUtils.confirm_existence",
               "kind": "staticmethod",
               "signature": "(objects: List[str]) -> Tuple[List[str], List[str]]",
               "summary": "Confirms the existence of each object in the provided list in Maya.",
-              "line": 697,
+              "line": 676,
               "deprecated": false
             },
             {
@@ -5276,7 +5267,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> list",
               "summary": "Rename-proof references to *nodes*, to be resolved after a renaming operation.",
-              "line": 711,
+              "line": 690,
               "deprecated": false
             },
             {
@@ -5285,7 +5276,7 @@
               "kind": "staticmethod",
               "signature": "(handles, drop_dead: bool = True) -> List[str]",
               "summary": "Current full path (DAG) / name (DG) for each :meth:`node_handles` handle.",
-              "line": 733,
+              "line": 712,
               "deprecated": false
             },
             {
@@ -5294,7 +5285,7 @@
               "kind": "staticmethod",
               "signature": "(objects, api_version: int = 2)",
               "summary": "Get MFnMesh function set(s) from transform or shape node(s).",
-              "line": 756,
+              "line": 735,
               "deprecated": false
             },
             {
@@ -5303,7 +5294,7 @@
               "kind": "staticmethod",
               "signature": "(array)",
               "summary": "Determine the given element(s) type.",
-              "line": 810,
+              "line": 789,
               "deprecated": false
             },
             {
@@ -5312,7 +5303,7 @@
               "kind": "staticmethod",
               "signature": "(lst, returned_type='str', flatten=False)",
               "summary": "Convert the given element(s) to <obj>, 'str', or int values.",
-              "line": 833,
+              "line": 812,
               "deprecated": false
             },
             {
@@ -5321,7 +5312,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Query a specified Maya command and return a dict mapping parameters to their values.",
-              "line": 915,
+              "line": 894,
               "deprecated": false
             },
             {
@@ -5330,7 +5321,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Apply a set of parameter values to a specified Maya node using a given Maya command.",
-              "line": 925,
+              "line": 904,
               "deprecated": false
             },
             {
@@ -5339,7 +5330,7 @@
               "kind": "classmethod",
               "signature": "(cls, source, target, tolerance: float = 0.1) -> dict",
               "summary": "Build a mapping of source meshes to target meshes based on geometric similarity.",
-              "line": 936,
+              "line": 915,
               "deprecated": false
             },
             {
@@ -5348,7 +5339,7 @@
               "kind": "staticmethod",
               "signature": "(keyword=None, ignore_case=True)",
               "summary": "Get global MEL variables.",
-              "line": 971,
+              "line": 950,
               "deprecated": false
             },
             {
@@ -5357,7 +5348,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, method='name', reverse=False)",
               "summary": "Reorder a given set of objects using various sorting methods.",
-              "line": 989,
+              "line": 968,
               "deprecated": false
             },
             {
@@ -5366,7 +5357,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> List[str]",
               "summary": "Coerce a node-or-iterable-of-nodes to a list of plain DAG-path strings.",
-              "line": 1113,
+              "line": 1092,
               "deprecated": false
             },
             {
@@ -5375,7 +5366,7 @@
               "kind": "staticmethod",
               "signature": "(node) -> str",
               "summary": "Leaf name with namespace stripped: ``\"|grp|ns:obj\"`` -> ``\"obj\"``.",
-              "line": 1131,
+              "line": 1110,
               "deprecated": false
             },
             {
@@ -5384,7 +5375,7 @@
               "kind": "staticmethod",
               "signature": "(node) -> str",
               "summary": "Leaf name with namespace preserved: ``\"|grp|ns:obj\"`` -> ``\"ns:obj\"``.",
-              "line": 1136,
+              "line": 1115,
               "deprecated": false
             },
             {
@@ -5393,7 +5384,7 @@
               "kind": "staticmethod",
               "signature": "(node, world: bool = True) -> BoundingBox",
               "summary": "Moved to ``XformUtils.get_bounding_box(node, \"box\", world_space=world)``,",
-              "line": 1146,
+              "line": 1125,
               "deprecated": true,
               "remove_in": "0.30.0"
             }
@@ -5749,7 +5740,7 @@
               "kind": "method",
               "signature": "(self, t1: str, t2: str, matrix) -> bool",
               "summary": "Check if t1 transformed by matrix matches t2.",
-              "line": 432,
+              "line": 422,
               "deprecated": false
             },
             {
@@ -5758,7 +5749,7 @@
               "kind": "method",
               "signature": "(self, t1: str, t2: str, expected_transform: Optional['om.MMatrix'] = None, is_root: bool = False) -> Tuple[bool, Optional['om.MMatrix']]",
               "summary": "Detailed hierarchy comparison.",
-              "line": 482,
+              "line": 472,
               "deprecated": false
             },
             {
@@ -5767,7 +5758,7 @@
               "kind": "staticmethod",
               "signature": "(shape, world: bool = False)",
               "summary": "``MPointArray`` for *shape*.",
-              "line": 662,
+              "line": 652,
               "deprecated": false
             },
             {
@@ -5776,7 +5767,7 @@
               "kind": "staticmethod",
               "signature": "(shape)",
               "summary": "``(counts, indices)`` from ``MFnMesh.getTriangles``, as plain lists.",
-              "line": 668,
+              "line": 658,
               "deprecated": false
             },
             {
@@ -5785,7 +5776,7 @@
               "kind": "staticmethod",
               "signature": "(shape)",
               "summary": "",
-              "line": 674,
+              "line": 664,
               "deprecated": false
             },
             {
@@ -5794,7 +5785,7 @@
               "kind": "staticmethod",
               "signature": "(shape, uv_set=None)",
               "summary": "",
-              "line": 678,
+              "line": 668,
               "deprecated": false
             },
             {
@@ -5803,7 +5794,7 @@
               "kind": "staticmethod",
               "signature": "(shape, uv_set=None)",
               "summary": "",
-              "line": 683,
+              "line": 673,
               "deprecated": false
             },
             {
@@ -5812,7 +5803,7 @@
               "kind": "staticmethod",
               "signature": "(node: str) -> float",
               "summary": "Calculate mesh volume using the divergence theorem (numpy).",
-              "line": 688,
+              "line": 678,
               "deprecated": false
             }
           ]
@@ -8923,7 +8914,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, str]",
               "summary": "Discover every ``m_*`` macro callable, mapped to its annotation.",
-              "line": 213,
+              "line": 206,
               "deprecated": false
             },
             {
@@ -8932,7 +8923,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Humanize a macro name for display, e.g.",
-              "line": 239,
+              "line": 232,
               "deprecated": false
             },
             {
@@ -8941,7 +8932,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Default category for a macro, derived from the ``*Macros`` mixin that",
-              "line": 259,
+              "line": 240,
               "deprecated": false
             },
             {
@@ -8950,7 +8941,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Sorted distinct default categories across all discoverable macros.",
-              "line": 276,
+              "line": 257,
               "deprecated": false
             },
             {
@@ -8959,7 +8950,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> str",
               "summary": "Return a macro's full (dedented) docstring — the single source of",
-              "line": 288,
+              "line": 269,
               "deprecated": false
             },
             {
@@ -8968,7 +8959,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, dict]",
               "summary": "Return the *live* key + category for every available macro.",
-              "line": 299,
+              "line": 280,
               "deprecated": false
             },
             {
@@ -8977,7 +8968,7 @@
               "kind": "classmethod",
               "signature": "(cls, bindings: Dict[str, dict]) -> None",
               "summary": "Apply a binding set ``{name: {\"key\", \"cat\"}}``.",
-              "line": 361,
+              "line": 342,
               "deprecated": false
             },
             {
@@ -8986,7 +8977,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, key: Optional[str] = None) -> None",
               "summary": "Unbind ``name``'s hotkey (the runtime command itself is kept).",
-              "line": 463,
+              "line": 444,
               "deprecated": false
             },
             {
@@ -8995,7 +8986,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, key: Optional[str] = None) -> None",
               "summary": "Clear ``name``'s hotkey and delete its (non-default) runtime command.",
-              "line": 489,
+              "line": 470,
               "deprecated": false
             },
             {
@@ -9004,7 +8995,7 @@
               "kind": "classmethod",
               "signature": "(cls, bindings: Dict[str, dict]) -> Dict[str, List[str]]",
               "summary": "Return ``{normalized_key: [macro, ...]}`` for keys bound more than once.",
-              "line": 503,
+              "line": 484,
               "deprecated": false
             },
             {
@@ -9013,7 +9004,7 @@
               "kind": "classmethod",
               "signature": "(cls, sequence: str) -> str",
               "summary": "Convert a Qt key-sequence string (``\"Ctrl+Shift+I\"``) to a Maya token.",
-              "line": 548,
+              "line": 517,
               "deprecated": false
             },
             {
@@ -9022,7 +9013,7 @@
               "kind": "classmethod",
               "signature": "(cls, key: str) -> str",
               "summary": "Convert a Maya key token (``\"ctl+sht+i\"``) to a Qt key-sequence string.",
-              "line": 572,
+              "line": 525,
               "deprecated": false
             },
             {
@@ -9031,7 +9022,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return all preset names (built-in + user, user shadows built-in).",
-              "line": 610,
+              "line": 552,
               "deprecated": false
             },
             {
@@ -9040,7 +9031,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> Dict[str, dict]",
               "summary": "Return the binding set stored under *name* (``_meta`` stripped).",
-              "line": 615,
+              "line": 557,
               "deprecated": false
             },
             {
@@ -9049,7 +9040,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, bindings: Optional[Dict[str, dict]] = None) -> str",
               "summary": "Save *bindings* (default: the current bindings) as user preset *name*.",
-              "line": 621,
+              "line": 563,
               "deprecated": false
             },
             {
@@ -9058,7 +9049,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> bool",
               "summary": "Delete a *user* preset (built-ins are read-only).",
-              "line": 636,
+              "line": 578,
               "deprecated": false
             },
             {
@@ -9067,7 +9058,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "The last-selected/applied preset name, or ``None``.",
-              "line": 641,
+              "line": 583,
               "deprecated": false
             },
             {
@@ -9076,7 +9067,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: Optional[str]) -> None",
               "summary": "Set (or clear, with ``None``) the active-preset pointer.",
-              "line": 646,
+              "line": 588,
               "deprecated": false
             },
             {
@@ -9085,7 +9076,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: Optional[str] = None) -> None",
               "summary": "Apply a saved preset/template's bindings to Maya on demand.",
-              "line": 651,
+              "line": 593,
               "deprecated": false
             },
             {
@@ -9094,7 +9085,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Mixin-derived categories plus any custom category carried by the",
-              "line": 707,
+              "line": 649,
               "deprecated": false
             },
             {
@@ -9103,7 +9094,7 @@
               "kind": "classmethod",
               "signature": "(cls, category: str) -> List[dict]",
               "summary": "Editor-shaped entries for every macro in *category*.",
-              "line": 717,
+              "line": 659,
               "deprecated": false
             },
             {
@@ -9112,7 +9103,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, sequence: str) -> None",
               "summary": "Apply a Qt key sequence captured in the editor (``\"\"`` clears).",
-              "line": 753,
+              "line": 695,
               "deprecated": false
             },
             {
@@ -9121,7 +9112,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, dict]",
               "summary": "The persist-worthy subset of the live bindings — every macro with a",
-              "line": 773,
+              "line": 715,
               "deprecated": false
             },
             {
@@ -9130,7 +9121,7 @@
               "kind": "classmethod",
               "signature": "(cls, data: Optional[Dict[str, dict]]) -> int",
               "summary": "Apply a loaded binding set (the preset ``value_applier``): release",
-              "line": 788,
+              "line": 730,
               "deprecated": false
             },
             {
@@ -9139,7 +9130,7 @@
               "kind": "classmethod",
               "signature": "(cls, parent=None)",
               "summary": "Open the Macro Manager — the unified uitk ``ShortcutEditor`` over",
-              "line": 812,
+              "line": 754,
               "deprecated": false
             }
           ]
@@ -9147,7 +9138,7 @@
         {
           "name": "DisplayMacros",
           "summary": "",
-          "line": 872,
+          "line": 814,
           "bases": [],
           "members": [
             {
@@ -9156,7 +9147,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Component Id Display through vertices, edges, faces, UVs, and off.",
-              "line": 876,
+              "line": 818,
               "deprecated": false
             },
             {
@@ -9165,7 +9156,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle face normals, vertex normals, tangents, and off.",
-              "line": 896,
+              "line": 838,
               "deprecated": false
             },
             {
@@ -9174,7 +9165,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Soft Edge Display.",
-              "line": 911,
+              "line": 853,
               "deprecated": false
             },
             {
@@ -9183,7 +9174,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle visibility of the selected objects, keeping them selected.",
-              "line": 921,
+              "line": 863,
               "deprecated": false
             },
             {
@@ -9192,7 +9183,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle the display of UV border edges for the given objects.",
-              "line": 931,
+              "line": 873,
               "deprecated": false
             },
             {
@@ -9201,7 +9192,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Back-Face Culling on selected objects, or on all objects if none are selected.",
-              "line": 957,
+              "line": 899,
               "deprecated": false
             },
             {
@@ -9210,7 +9201,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Isolate the current selection in the active 3D viewport.",
-              "line": 996,
+              "line": 938,
               "deprecated": false
             },
             {
@@ -9219,7 +9210,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Cycle the display state of the selection: Visible -> XRay -> Templated -> Hidden.",
-              "line": 1017,
+              "line": 959,
               "deprecated": false
             },
             {
@@ -9228,7 +9219,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle the selected objects between wireframe and shaded, together.",
-              "line": 1117,
+              "line": 1059,
               "deprecated": false
             },
             {
@@ -9237,7 +9228,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Toggle the grid.",
-              "line": 1128,
+              "line": 1070,
               "deprecated": false
             },
             {
@@ -9246,7 +9237,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggle grid and image plane visibility together.",
-              "line": 1146,
+              "line": 1088,
               "deprecated": false
             },
             {
@@ -9255,7 +9246,7 @@
               "kind": "classmethod",
               "signature": "(cls, steps: int = 2, adjust_clipping: bool = True) -> None",
               "summary": "Frame the selection at the ideal working distance;",
-              "line": 1221,
+              "line": 1163,
               "deprecated": false
             },
             {
@@ -9264,7 +9255,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Cycle smooth mesh preview: off -> on / no wireframe -> on / full wireframe.",
-              "line": 1292,
+              "line": 1234,
               "deprecated": false
             },
             {
@@ -9273,7 +9264,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles the wireframe display state.",
-              "line": 1339,
+              "line": 1281,
               "deprecated": false
             },
             {
@@ -9282,7 +9273,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle the viewport's default-material override.",
-              "line": 1371,
+              "line": 1313,
               "deprecated": false
             },
             {
@@ -9291,7 +9282,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport display mode between wireframe, smooth shaded with textures off,",
-              "line": 1393,
+              "line": 1335,
               "deprecated": false
             },
             {
@@ -9300,7 +9291,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport lighting between different states: default, all lights, active lights,",
-              "line": 1442,
+              "line": 1384,
               "deprecated": false
             },
             {
@@ -9309,7 +9300,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.",
-              "line": 1519,
+              "line": 1461,
               "deprecated": false
             }
           ]
@@ -9317,7 +9308,7 @@
         {
           "name": "EditMacros",
           "summary": "",
-          "line": 1560,
+          "line": 1502,
           "bases": [],
           "members": [
             {
@@ -9326,7 +9317,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 1565,
+              "line": 1507,
               "deprecated": false
             },
             {
@@ -9335,7 +9326,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Ungroup the selected group(s) — children keep their world transforms.",
-              "line": 1575,
+              "line": 1517,
               "deprecated": false
             },
             {
@@ -9344,7 +9335,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 1585,
+              "line": 1527,
               "deprecated": false
             },
             {
@@ -9353,7 +9344,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 1617,
+              "line": 1559,
               "deprecated": false
             },
             {
@@ -9362,7 +9353,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 1661,
+              "line": 1603,
               "deprecated": false
             },
             {
@@ -9371,7 +9362,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 1683,
+              "line": 1625,
               "deprecated": false
             },
             {
@@ -9380,7 +9371,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Enable the multi-component selection mask.",
-              "line": 1757,
+              "line": 1699,
               "deprecated": false
             },
             {
@@ -9389,7 +9380,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge vertices within a small distance tolerance.",
-              "line": 1772,
+              "line": 1714,
               "deprecated": false
             }
           ]
@@ -9397,7 +9388,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 1819,
+          "line": 1761,
           "bases": [],
           "members": [
             {
@@ -9406,7 +9397,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 1823,
+              "line": 1765,
               "deprecated": false
             },
             {
@@ -9415,7 +9406,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 1831,
+              "line": 1773,
               "deprecated": false
             },
             {
@@ -9424,7 +9415,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 1837,
+              "line": 1779,
               "deprecated": false
             },
             {
@@ -9433,7 +9424,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 1843,
+              "line": 1785,
               "deprecated": false
             },
             {
@@ -9442,7 +9433,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 1849,
+              "line": 1791,
               "deprecated": false
             },
             {
@@ -9451,7 +9442,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1867,
+              "line": 1809,
               "deprecated": false
             },
             {
@@ -9460,7 +9451,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 1926,
+              "line": 1868,
               "deprecated": false
             },
             {
@@ -9469,7 +9460,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 1950,
+              "line": 1892,
               "deprecated": false
             }
           ]
@@ -9477,7 +9468,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 1982,
+          "line": 1924,
           "bases": [],
           "members": [
             {
@@ -9486,7 +9477,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 1986,
+              "line": 1928,
               "deprecated": false
             }
           ]
@@ -9494,7 +9485,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 2018,
+          "line": 1960,
           "bases": [],
           "members": [
             {
@@ -9503,7 +9494,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2023,
+              "line": 1965,
               "deprecated": false
             },
             {
@@ -9512,7 +9503,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2033,
+              "line": 1975,
               "deprecated": false
             }
           ]
@@ -9520,7 +9511,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 2045,
+          "line": 1987,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -9542,7 +9533,7 @@
         {
           "name": "Naming",
           "summary": "Batch find / rename / suffix scene nodes.",
-          "line": 19,
+          "line": 18,
           "bases": [
             "pythontk.HelpMixin",
             "pythontk.LoggingMixin"
@@ -9554,7 +9545,7 @@
               "kind": "method",
               "signature": "(cls) -> Tuple[Tuple[str, str, str, str], ...]",
               "summary": "``(keyword, affix, label, type key)`` -- the live convention, joined",
-              "line": 90,
+              "line": 89,
               "deprecated": false
             },
             {
@@ -9563,7 +9554,7 @@
               "kind": "classmethod",
               "signature": "(cls, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> Dict[str, 'ptk.AffixRule']",
               "summary": "``{Maya type key: AffixRule}`` -- the convention bound to this host.",
-              "line": 106,
+              "line": 105,
               "deprecated": false
             },
             {
@@ -9572,7 +9563,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True, dry_run: bool = False) -> List[str]",
               "summary": "Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…",
-              "line": 131,
+              "line": 130,
               "deprecated": false
             },
             {
@@ -9581,7 +9572,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Every renameable node in the scene — the naming tools' \"Scene\" scope.",
-              "line": 299,
+              "line": 298,
               "deprecated": false
             },
             {
@@ -9590,7 +9581,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene: bool = False) -> List[str]",
               "summary": "What a naming operation acts on in a scene scope: every renameable",
-              "line": 320,
+              "line": 319,
               "deprecated": false
             },
             {
@@ -9599,7 +9590,7 @@
               "kind": "classmethod",
               "signature": "(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]",
               "summary": "Select the scene nodes whose name matches *pattern* (Find).",
-              "line": 334,
+              "line": 333,
               "deprecated": false
             },
             {
@@ -9608,7 +9599,7 @@
               "kind": "classmethod",
               "signature": "(cls, node: str) -> str",
               "summary": "A report link labeled with *node*'s leaf name that selects it.",
-              "line": 388,
+              "line": 387,
               "deprecated": false
             },
             {
@@ -9617,7 +9608,7 @@
               "kind": "classmethod",
               "signature": "(cls, base_name, suffix='_', padding=3)",
               "summary": "Generate a unique name based on the base_name.",
-              "line": 393,
+              "line": 392,
               "deprecated": false
             },
             {
@@ -9626,7 +9617,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, 'object', List[Union[str, 'object']], None] = None, force: bool = False) -> List[Tuple[str, str]]",
               "summary": "Rename shape nodes to Maya's conventional ``<transform>Shape`` form.",
-              "line": 425,
+              "line": 424,
               "deprecated": false
             },
             {
@@ -9635,7 +9626,7 @@
               "kind": "staticmethod",
               "signature": "(input_data, replace_with='_')",
               "summary": "Strips illegal characters from a string or a list of strings, replacing them with a specified chara…",
-              "line": 498,
+              "line": 497,
               "deprecated": false
             },
             {
@@ -9644,7 +9635,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, object, List[Union[str, object]]], num_chars: int = 1, trailing: bool = False, dry_run: bool = False) -> List[str]",
               "summary": "Deletes leading or trailing characters from the names of the provided objects,",
-              "line": 524,
+              "line": 523,
               "deprecated": false
             },
             {
@@ -9653,7 +9644,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, case='capitalize', dry_run: bool = False)",
               "summary": "Rename objects following the given case.",
-              "line": 563,
+              "line": 562,
               "deprecated": false
             },
             {
@@ -9662,7 +9653,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj: str) -> str",
               "summary": "Resolve a node to its suffix-by-type key (see ``SUFFIX_TYPES``).",
-              "line": 590,
+              "line": 589,
               "deprecated": false
             },
             {
@@ -9671,7 +9662,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj: str, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> 'ptk.AffixRule'",
               "summary": "The convention's affix rule for *obj*'s OWN type.",
-              "line": 654,
+              "line": 653,
               "deprecated": false
             },
             {
@@ -9680,7 +9671,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, object, List[Union[str, object]]], group_suffix: Optional[str] = None, locator_suffix: Optional[str] = None, joint_suffix: Optional[str] = None, mesh_suffix: Optional[str] = None, nurbs_curve_suffix: Optional[str] = None, camera_suffix: Optional[str] = None, light_suffix: Optional[str] = None, display_layer_suffix: Optional[str] = None, ik_handle_suffix: Optional[str] = None, nurbs_surface_suffix: Optional[str] = None, cluster_suffix: Optional[str] = None, lattice_suffix: Optional[str] = None, skin_cluster_suffix: Optional[str] = None, blend_shape_suffix: Optional[str] = None, constraint_suffix: Optional[str] = None, material_suffix: Optional[str] = None, shading_group_suffix: Optional[str] = None, texture_suffix: Optional[str] = None, set_suffix: Optional[str] = None, custom_suffixes: Optional[Dict[str, str]] = None, affix_mode: Optional[str] = None, affix_modes: Optional[Dict[str, str]] = None, strip: Union[str, List[str]] = None, strip_trailing_ints: bool = False, strip_trailing_underscores: bool = False, strip_trailing_padding: bool = True, dry_run: bool = False) -> List[str]",
               "summary": "Apply each object's conventional type **affix**, stripping any other it carries.",
-              "line": 687,
+              "line": 686,
               "deprecated": false
             },
             {
@@ -9689,7 +9680,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, first_obj_as_ref=False, alphabetical=False, strip_trailing_ints=True, strip_defined_suffixes=True, valid_suffixes=None, reverse=False, independent_groups=False, order: str = 'distance', dry_run: bool = False)",
               "summary": "Rename objects with a suffix numbering them by location.",
-              "line": 875,
+              "line": 874,
               "deprecated": false
             },
             {
@@ -9698,7 +9689,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> str",
               "summary": "*name* as a Maya node name, or ``\"\"`` when it holds no name at all.",
-              "line": 1137,
+              "line": 1006,
               "deprecated": false
             }
           ]
@@ -13872,7 +13863,7 @@
               "kind": "classmethod",
               "signature": "(cls, port: int) -> Optional[int]",
               "summary": "Find the process ID (PID) listening on the given TCP port.",
-              "line": 807,
+              "line": 812,
               "deprecated": false
             },
             {
@@ -13881,7 +13872,7 @@
               "kind": "classmethod",
               "signature": "(cls, pid: int, start_port: Optional[int] = None, span: Optional[int] = None) -> Optional[int]",
               "summary": "Find a TCP port the given PID is LISTENING on (inverse of",
-              "line": 822,
+              "line": 827,
               "deprecated": false
             },
             {
@@ -13890,7 +13881,7 @@
               "kind": "method",
               "signature": "(self, force: bool = False) -> bool",
               "summary": "Close the Maya THIS connection launched -- only it, and only while",
-              "line": 850,
+              "line": 855,
               "deprecated": false
             },
             {
@@ -13899,7 +13890,7 @@
               "kind": "staticmethod",
               "signature": "(port: Optional[int] = None, pid: Optional[int] = None, force: bool = False) -> bool",
               "summary": "Close a Maya instance identified by Port or PID.",
-              "line": 875,
+              "line": 880,
               "deprecated": false
             },
             {
@@ -13908,7 +13899,7 @@
               "kind": "classmethod",
               "signature": "(cls, start_port: int = 7002, max_check: int = 100) -> int",
               "summary": "Find an available port starting from start_port.",
-              "line": 905,
+              "line": 915,
               "deprecated": false
             },
             {
@@ -13917,7 +13908,7 @@
               "kind": "method",
               "signature": "(self, launch: bool = True, app_path: Optional[str] = None, launch_args: Optional[List[str]] = None) -> bool",
               "summary": "Verify the port is reachable;",
-              "line": 1000,
+              "line": 1010,
               "deprecated": false
             },
             {
@@ -13926,7 +13917,7 @@
               "kind": "method",
               "signature": "(self, code: str, timeout: int = 30, capture_output: bool = False, wait_for_response: bool = False, output_callback: Optional[Callable[[str], None]] = None) -> Optional[str]",
               "summary": "Execute Python code in Maya.",
-              "line": 1110,
+              "line": 1120,
               "deprecated": false
             },
             {
@@ -13935,7 +13926,7 @@
               "kind": "method",
               "signature": "(self, last_n_chars: Optional[int] = None) -> Optional[str]",
               "summary": "Get the full content of the Maya Script Editor history.",
-              "line": 1197,
+              "line": 1207,
               "deprecated": false
             },
             {
@@ -13944,7 +13935,7 @@
               "kind": "method",
               "signature": "(self, code: str, timeout: int = 30, mirror_to_script_output: bool = False) -> tuple[Optional[str], Optional[str]]",
               "summary": "Execute code and capture the Script Editor output generated by the execution.",
-              "line": 1229,
+              "line": 1239,
               "deprecated": false
             },
             {
@@ -13953,7 +13944,7 @@
               "kind": "method",
               "signature": "(self) -> bool",
               "summary": "Clear the Maya Script Editor history.",
-              "line": 1293,
+              "line": 1303,
               "deprecated": false
             },
             {
@@ -13962,7 +13953,7 @@
               "kind": "method",
               "signature": "(self, force: bool = False) -> None",
               "summary": "Shut down the connected Maya session and reset state.",
-              "line": 1501,
+              "line": 1514,
               "deprecated": false
             }
           ]
@@ -15302,7 +15293,7 @@
               "kind": "classmethod",
               "signature": "(cls, *args, **kwargs)",
               "summary": "Toggle the Script Output panel.",
-              "line": 196,
+              "line": 187,
               "deprecated": false
             },
             {
@@ -15311,7 +15302,7 @@
               "kind": "classmethod",
               "signature": "(cls, dock=None, width: int = None, height: int = None, tab_position: str = None, restore: bool = False)",
               "summary": "Show the Script Output console.",
-              "line": 213,
+              "line": 204,
               "deprecated": false
             }
           ]
@@ -18157,7 +18148,8 @@
           "summary": "The Maya scene operations of the Emissive Groups model",
           "line": 96,
           "bases": [
-            "_MayaEmissiveGroupsInternal"
+            "_MayaEmissiveGroupsInternal",
+            "pythontk.PureEmissiveGroupsHost"
           ],
           "members": [
             {
@@ -24435,7 +24427,7 @@
         {
           "name": "NurbsUtils",
           "summary": "",
-          "line": 22,
+          "line": 21,
           "bases": [
             "pythontk.HelpMixin"
           ],
@@ -24446,7 +24438,7 @@
               "kind": "classmethod",
               "signature": "(cls, action: str, curves=None) -> List[str]",
               "summary": "Run the curve action *action* (a :attr:`CURVE_ACTIONS` key) on *curves*.",
-              "line": 62,
+              "line": 61,
               "deprecated": false
             },
             {
@@ -24455,7 +24447,7 @@
               "kind": "classmethod",
               "signature": "(cls, curves=None, axis: str = 'y', start_sweep: float = 0.0, end_sweep: float = 360.0, sections: int = 8, degree: int = 3, range_: bool = False, polygon: bool = True, use_tolerance: bool = False, tolerance: float = 0.001, auto_correct_normal: bool = False) -> List[str]",
               "summary": "Revolve each profile curve about *axis* through its own pivot into a",
-              "line": 103,
+              "line": 102,
               "deprecated": false
             },
             {
@@ -24464,7 +24456,7 @@
               "kind": "classmethod",
               "signature": "(cls, uniform=True, close=False, degree=3, autoReverse=False, sectionSpans=1, range_=False, polygon=True, reverseSurfaceNormals=True, angle_loft_between_two_curves=False, angleLoftSpans=6)",
               "summary": "Create a loft between two selections.",
-              "line": 181,
+              "line": 180,
               "deprecated": false
             },
             {
@@ -24473,7 +24465,7 @@
               "kind": "classmethod",
               "signature": "(cls, start, end)",
               "summary": "Create a bezier curve between starting and end object(s).",
-              "line": 283,
+              "line": 282,
               "deprecated": false
             },
             {
@@ -24482,7 +24474,7 @@
               "kind": "staticmethod",
               "signature": "(path, start, count=6, geometry='Instancer')",
               "summary": "Duplicate objects along a given curve using MASH.",
-              "line": 357,
+              "line": 354,
               "deprecated": false
             },
             {
@@ -24491,7 +24483,7 @@
               "kind": "classmethod",
               "signature": "(cls, start, end, count=6, cleanup=False, uniform=1, close=0, autoReverse=0, degree=3, sectionSpans=1, range=0, polygon=1, reverseSurfaceNormals=0)",
               "summary": "Perform a loft between two nurbs curves or polygon sets of edges (that will be extracted as curves).",
-              "line": 403,
+              "line": 400,
               "deprecated": false
             },
             {
@@ -24500,7 +24492,7 @@
               "kind": "classmethod",
               "signature": "(cls, curve) -> float",
               "summary": "World-space arc length of the given curve (transform or shape).",
-              "line": 479,
+              "line": 476,
               "deprecated": false
             },
             {
@@ -24509,7 +24501,7 @@
               "kind": "classmethod",
               "signature": "(cls, curve, points) -> List[float]",
               "summary": "Arc length along *curve* of the closest curve point to each given point.",
-              "line": 484,
+              "line": 481,
               "deprecated": false
             },
             {
@@ -24518,7 +24510,7 @@
               "kind": "classmethod",
               "signature": "(cls, curve) -> List[float]",
               "summary": "Arc length of each CV's Greville abscissa, in CV index order.",
-              "line": 510,
+              "line": 507,
               "deprecated": false
             },
             {
@@ -24527,7 +24519,7 @@
               "kind": "staticmethod",
               "signature": "(x, curves, tolerance=0.0)",
               "summary": "Find the closest control vertex between the given vertices, CVs, or objects and each of the given c…",
-              "line": 553,
+              "line": 550,
               "deprecated": false
             },
             {
@@ -24536,7 +24528,7 @@
               "kind": "classmethod",
               "signature": "(cls, c, returned_type='cv', filter_=[])",
               "summary": "Get a dict containing CV's of the given curve(s) and their corresponding point positions (based on…",
-              "line": 593,
+              "line": 590,
               "deprecated": false
             },
             {
@@ -24545,7 +24537,7 @@
               "kind": "classmethod",
               "signature": "(cls, curves, normalize=1, values=False)",
               "summary": "Get the cross product of two vectors using points derived from the given curves.",
-              "line": 682,
+              "line": 679,
               "deprecated": false
             }
           ]
@@ -28195,8 +28187,8 @@
       "classes": [
         {
           "name": "MayaMarkingMenuHost",
-          "summary": "Maya's answers to ``uitk.MarkingMenuHost`` (see the module docstring).",
-          "line": 28,
+          "summary": "Maya's answers to ``uitk.MarkingMenuHost`` and ``uitk.MarkingMenuLaunchHost`` (see",
+          "line": 33,
           "bases": [
             "PureMarkingMenuHost"
           ],
@@ -28207,7 +28199,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "``MayaUiHandler``: wraps Maya's native menus, shows the tool windows.",
-              "line": 38,
+              "line": 44,
               "deprecated": false
             },
             {
@@ -28216,7 +28208,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True under ``maya -batch`` / ``maya.standalone`` (no GUI, no real Qt).",
-              "line": 45,
+              "line": 51,
               "deprecated": false
             },
             {
@@ -28225,7 +28217,16 @@
               "kind": "method",
               "signature": "(self, fn)",
               "summary": "Run *fn* on Maya's idle queue — ``userSetup.py`` runs before the UI exists.",
-              "line": 52,
+              "line": 60,
+              "deprecated": false
+            },
+            {
+              "name": "report",
+              "qualname": "MayaMarkingMenuHost.report",
+              "kind": "method",
+              "signature": "(self, message: str, error: bool = False) -> None",
+              "summary": "Tell the user *message* through Maya: an in-view message over the viewport (none",
+              "line": 87,
               "deprecated": false
             },
             {
@@ -28234,7 +28235,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Maya's main window (a ``QMainWindow``), or None (the menu logs a failure).",
-              "line": 79,
+              "line": 97,
               "deprecated": false
             },
             {
@@ -28243,7 +28244,7 @@
               "kind": "method",
               "signature": "(self, menu) -> None",
               "summary": "Register Maya's hotkey-collision checker on the bundled shortcut editors",
-              "line": 85,
+              "line": 103,
               "deprecated": false
             }
           ]
@@ -29425,6 +29426,123 @@
       ]
     },
     {
+      "relpath": "uv_utils/texture_combine/_transfer_host.py",
+      "summary": "Texture Combine's Transfer mode: Maya's half of the run.",
+      "functions": [],
+      "classes": [
+        {
+          "name": "MayaTransferHost",
+          "summary": "What :class:`pythontk.TransferRun` asks of Maya (a",
+          "line": 21,
+          "bases": [
+            "pythontk.PureTransferHost"
+          ],
+          "members": [
+            {
+              "name": "selection_sides",
+              "qualname": "MayaTransferHost.selection_sides",
+              "kind": "method",
+              "signature": "(self, mode, stored)",
+              "summary": "",
+              "line": 36,
+              "deprecated": false
+            },
+            {
+              "name": "face_materials",
+              "qualname": "MayaTransferHost.face_materials",
+              "kind": "method",
+              "signature": "(self, mesh)",
+              "summary": "",
+              "line": 39,
+              "deprecated": false
+            },
+            {
+              "name": "material_maps",
+              "qualname": "MayaTransferHost.material_maps",
+              "kind": "method",
+              "signature": "(self, material)",
+              "summary": "",
+              "line": 42,
+              "deprecated": false
+            },
+            {
+              "name": "pair_sources",
+              "qualname": "MayaTransferHost.pair_sources",
+              "kind": "method",
+              "signature": "(self, targets, sources)",
+              "summary": "",
+              "line": 45,
+              "deprecated": false
+            },
+            {
+              "name": "texture_transfer",
+              "qualname": "MayaTransferHost.texture_transfer",
+              "kind": "method",
+              "signature": "(self)",
+              "summary": "",
+              "line": 48,
+              "deprecated": false
+            },
+            {
+              "name": "default_name",
+              "qualname": "MayaTransferHost.default_name",
+              "kind": "method",
+              "signature": "(self, nodes) -> str",
+              "summary": "",
+              "line": 51,
+              "deprecated": false
+            },
+            {
+              "name": "transfer_uvs",
+              "qualname": "MayaTransferHost.transfer_uvs",
+              "kind": "staticmethod",
+              "signature": "(sources, targets)",
+              "summary": "",
+              "line": 60,
+              "deprecated": false
+            },
+            {
+              "name": "transfer_uvs_to_similar",
+              "qualname": "MayaTransferHost.transfer_uvs_to_similar",
+              "kind": "staticmethod",
+              "signature": "(source, candidates, tolerance)",
+              "summary": "",
+              "line": 66,
+              "deprecated": false
+            },
+            {
+              "name": "has_lightmap",
+              "qualname": "MayaTransferHost.has_lightmap",
+              "kind": "staticmethod",
+              "signature": "(mesh) -> bool",
+              "summary": "",
+              "line": 72,
+              "deprecated": false
+            },
+            {
+              "name": "transfer_lightmaps",
+              "qualname": "MayaTransferHost.transfer_lightmaps",
+              "kind": "staticmethod",
+              "signature": "(targets, source, **options)",
+              "summary": "",
+              "line": 78,
+              "deprecated": false
+            },
+            {
+              "name": "undo_chunk",
+              "qualname": "MayaTransferHost.undo_chunk",
+              "kind": "staticmethod",
+              "signature": "(name)",
+              "summary": "",
+              "line": 84,
+              "deprecated": false
+            }
+          ]
+        }
+      ],
+      "constants": []
+    },
+    {
       "relpath": "uv_utils/texture_combine/texture_combine.py",
       "summary": "Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.",
       "functions": [],
@@ -29432,14 +29550,14 @@
         {
           "name": "CombineInputs",
           "summary": "What :meth:`TextureCombine.gather` read: the scene side of a combine.",
-          "line": 75,
+          "line": 76,
           "bases": [],
           "members": []
         },
         {
           "name": "TextureCombine",
           "summary": "Combine the selected meshes' materials into one atlas and one material.",
-          "line": 356,
+          "line": 357,
           "bases": [
             "pythontk.LoggingMixin",
             "_TextureCombineInternal"
@@ -29451,7 +29569,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "The combines this scene holds, oldest first.",
-              "line": 374,
+              "line": 375,
               "deprecated": false
             },
             {
@@ -29460,7 +29578,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> Optional[Dict[str, Any]]",
               "summary": "A combine's record entry (settings, rows, meshes, sources), or ``None``.",
-              "line": 380,
+              "line": 381,
               "deprecated": false
             },
             {
@@ -29469,7 +29587,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> List[str]",
               "summary": "The live transforms a combine moved (every instance).",
-              "line": 385,
+              "line": 386,
               "deprecated": false
             },
             {
@@ -29478,7 +29596,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> Optional[str]",
               "summary": "The combine any of *objects* belongs to, or ``None``.",
-              "line": 401,
+              "line": 402,
               "deprecated": false
             },
             {
@@ -29487,7 +29605,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> List[str]",
               "summary": "The source maps of *name* revised (or gone) since it was combined.",
-              "line": 410,
+              "line": 411,
               "deprecated": false
             },
             {
@@ -29496,7 +29614,7 @@
               "kind": "method",
               "signature": "(self, objects=None) -> CombineInputs",
               "summary": "Read the islands, materials and maps of *objects* (default: selection).",
-              "line": 421,
+              "line": 422,
               "deprecated": false
             },
             {
@@ -29505,7 +29623,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> CombineInputs",
               "summary": "A stored combine's inputs AS THEY WERE before it ran.",
-              "line": 457,
+              "line": 458,
               "deprecated": false
             },
             {
@@ -29514,7 +29632,7 @@
               "kind": "method",
               "signature": "(self, inputs: CombineInputs, rows: Sequence[Dict[str, Any]] = ()) -> None",
               "summary": "Set every island's scale from the override *rows* -- the most",
-              "line": 519,
+              "line": 520,
               "deprecated": false
             },
             {
@@ -29523,7 +29641,7 @@
               "kind": "method",
               "signature": "(self, inputs: CombineInputs, *, sizing: str = 'proportional', normalize: str = 'resolution')",
               "summary": "Estimate the atlas for *inputs* (nothing packed) -- a",
-              "line": 571,
+              "line": 572,
               "deprecated": false
             },
             {
@@ -29532,7 +29650,16 @@
               "kind": "method",
               "signature": "(self, transforms: Sequence[str], fallback: str = 'combined') -> str",
               "summary": "What a blank name stands for: the meshes' common name, else",
-              "line": 592,
+              "line": 593,
+              "deprecated": false
+            },
+            {
+              "name": "run_transfer",
+              "qualname": "TextureCombine.run_transfer",
+              "kind": "method",
+              "signature": "(self, **options) -> 'ptk.TransferResult'",
+              "summary": "The panel's Transfer mode: UVs OR textures from the selection's",
+              "line": 605,
               "deprecated": false
             },
             {
@@ -29541,7 +29668,7 @@
               "kind": "method",
               "signature": "(self, objects=None, *, name: Optional[str] = None, rows: Sequence[Dict[str, Any]] = (), sizing: str = 'proportional', normalize: str = 'resolution', map_size: int = 4096, padding: Optional[int] = None, rotate: bool = True, supersample: int = 2, texture_padding: int = -1, output_dir: Optional[str] = None, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None, lightmaps: bool = True, inputs: Optional[CombineInputs] = None) -> Dict[str, Any]",
               "summary": "Combine *objects*' materials into one atlas and one material.",
-              "line": 604,
+              "line": 616,
               "deprecated": false
             },
             {
@@ -29550,7 +29677,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> Dict[str, Any]",
               "summary": "Re-read *name*'s source maps into its CURRENT layout -- a revision.",
-              "line": 891,
+              "line": 903,
               "deprecated": false
             },
             {
@@ -29559,7 +29686,7 @@
               "kind": "method",
               "signature": "(self, name: str, forget: bool = True) -> List[str]",
               "summary": "Put *name*'s meshes back: original UVs and materials, exactly.",
-              "line": 945,
+              "line": 957,
               "deprecated": false
             },
             {
@@ -29568,7 +29695,7 @@
               "kind": "method",
               "signature": "(self, name: str, **changes) -> Dict[str, Any]",
               "summary": "Re-pack *name* with changed settings or rows, keeping its name.",
-              "line": 1003,
+              "line": 1015,
               "deprecated": false
             },
             {
@@ -29577,7 +29704,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> bool",
               "summary": "Drop *name*'s record entry, leaving the scene as it is.",
-              "line": 1023,
+              "line": 1035,
               "deprecated": false
             },
             {
@@ -29586,7 +29713,7 @@
               "kind": "staticmethod",
               "signature": "(node) -> str",
               "summary": "*node*'s own name, for a label: no DAG path, no component",
-              "line": 1037,
+              "line": 1049,
               "deprecated": false
             },
             {
@@ -29595,7 +29722,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> int",
               "summary": "Replace the selection with those of *nodes* that exist --",
-              "line": 1043,
+              "line": 1055,
               "deprecated": false
             },
             {
@@ -29604,7 +29731,7 @@
               "kind": "staticmethod",
               "signature": "(inputs: CombineInputs, material) -> List[str]",
               "summary": "The faces of *inputs*' meshes that wear *material*, as",
-              "line": 1059,
+              "line": 1071,
               "deprecated": false
             },
             {
@@ -29613,7 +29740,7 @@
               "kind": "staticmethod",
               "signature": "() -> List[str]",
               "summary": "The selected faces (long ``<mesh>.f[a:b]`` strings), for an island",
-              "line": 1077,
+              "line": 1089,
               "deprecated": false
             },
             {
@@ -29622,7 +29749,7 @@
               "kind": "method",
               "signature": "(self, transforms: Sequence[str], name: str) -> Dict[str, Any]",
               "summary": "Bring the combined objects' committed lightmaps under the new material.",
-              "line": 1090,
+              "line": 1102,
               "deprecated": false
             },
             {
@@ -29631,7 +29758,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> List[str]",
               "summary": "Mesh transforms (long names) under *objects*, order kept.",
-              "line": 116,
+              "line": 117,
               "deprecated": false
             }
           ]

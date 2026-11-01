@@ -181,7 +181,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BoundingBox`
   - methods: corners
 - `class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`
-  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, selected_objects, active_object, ensure_component_mode, ensure_object_mode, preserved_selection, temp_option_vars, undoable, reparent, wrap_control, confirm_existence, node_handles, resolve_handles, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
+  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, selected_objects, active_object, ensure_component_mode, ensure_object_mode, preserved_selection, temp_option_vars, undoable, reparent, confirm_existence, node_handles, resolve_handles, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
 
 ### `core_utils/auto_instancer/_auto_instancer.py` — Scene auto-instancer: convert geometrically identical meshes to instances.
 - `class InstanceCandidate`
@@ -641,7 +641,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: groups, meshes
 
 ### `mat_utils/emissive_groups.py` — Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable
-- `class MayaEmissiveGroups(_MayaEmissiveGroupsInternal)`
+- `class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, pythontk.PureEmissiveGroupsHost)`
   - methods: faces, add_members, remove_members, members, select, membership_stores, carrier_weights, weight_exists, ensure_weight, delete_weight, sync_weight, key_weight, foreign_color_sets, write_colors, uv_triangles, mask_path, object_names, face_count, mesh, merge_stores, discard_stores, publish, extra_warnings
 - `class EmissiveGroups(pythontk.EmissiveGroupsModel)`
 
@@ -991,7 +991,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/maya_marking_menu_host.py` — What a uitk marking menu needs from Maya: :class:`MayaMarkingMenuHost`.
 - `class MayaMarkingMenuHost(PureMarkingMenuHost)`
-  - methods: ui_handler, is_batch, defer, main_window, attach
+  - methods: ui_handler, is_batch, defer, report, main_window, attach
 
 ### `ui_utils/maya_native_menus.py`
 - `class MayaNativeMenus(pythontk.LoggingMixin)`
@@ -1043,10 +1043,14 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class Parameters(ParamRegistry)`
   - methods: expand_includes, preset_min_version, referenced_keys, derived_values, render_context, strip_unsupported
 
+### `uv_utils/texture_combine/_transfer_host.py` — Texture Combine's Transfer mode: Maya's half of the run.
+- `class MayaTransferHost(pythontk.PureTransferHost)`
+  - methods: selection_sides, face_materials, material_maps, pair_sources, texture_transfer, default_name, transfer_uvs, transfer_uvs_to_similar, has_lightmap, transfer_lightmaps, undo_chunk
+
 ### `uv_utils/texture_combine/texture_combine.py` — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
 - `class CombineInputs`
 - `class TextureCombine(pythontk.LoggingMixin, _TextureCombineInternal)`
-  - methods: names, entry, members, owner, stale, gather, inputs_for, apply_rows, plan, default_name, combine, recombine, restore, update, forget, leaf_name, select, material_faces, selected_faces, consolidate_lightmaps, resolve_meshes
+  - methods: names, entry, members, owner, stale, gather, inputs_for, apply_rows, plan, default_name, run_transfer, combine, recombine, restore, update, forget, leaf_name, select, material_faces, selected_faces, consolidate_lightmaps, resolve_meshes
 
 ### `uv_utils/texture_transfer.py` — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - `class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`

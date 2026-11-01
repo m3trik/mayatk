@@ -206,6 +206,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`uv_utils/_uv_utils.py`](#uv_utils--_uv_utils)
 - [`uv_utils/rizom_bridge/_rizom_bridge.py`](#uv_utils--rizom_bridge--_rizom_bridge)
 - [`uv_utils/rizom_bridge/parameters.py`](#uv_utils--rizom_bridge--parameters) — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
+- [`uv_utils/texture_combine/_transfer_host.py`](#uv_utils--texture_combine--_transfer_host) — Texture Combine's Transfer mode: Maya's half of the run.
 - [`uv_utils/texture_combine/texture_combine.py`](#uv_utils--texture_combine--texture_combine) — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
 - [`uv_utils/texture_transfer.py`](#uv_utils--texture_transfer) — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils) — ``XformUtils`` -- the public index of mayatk's transform operations.
@@ -514,7 +515,7 @@ Maya shots host — the DCC layer under ``pythontk``'s one shot store.
   - `MayaScenePersistence.load(self) -> Optional[Dict[str, Any]]` — The stored record, or ``None`` when the scene holds none.
   - `MayaScenePersistence.record_changed(self) -> bool` — Whether the channel differs from what this backend last wrote or read.
   - `MayaScenePersistence.remove_callbacks(self) -> None` — Tear down every SJM subscription owned by this store.
-- **[`class MayaShotsHost(_MayaShotsHostInternal)`](mayatk/mayatk/anim_utils/shots/_shots.py#L454)** — Maya's half of the shot store: the :class:`pythontk.ShotsHost` the one
+- **[`class MayaShotsHost(_MayaShotsHostInternal)`](mayatk/mayatk/anim_utils/shots/_shots.py#L455)** — Maya's half of the shot store: the :class:`pythontk.ShotsHost` the one
   - `MayaShotsHost.resolve(cls) -> Optional['MayaShotsHost']` *(class)* — The adapter when this process runs Maya (``maya.cmds`` imports),
   - `MayaShotsHost.available() -> bool` *(static)* — Whether the scene can be reached (``maya.cmds`` imports).
   - `MayaShotsHost.persistence() -> Optional[MayaScenePersistence]` *(static)* — A new :class:`MayaScenePersistence` (``ShotStore.active`` installs
@@ -722,7 +723,7 @@ Smart bake module for intelligent pre-bake animation processing.
   - `BakeResult.baked_count(self) -> int` *(property)* — Number of objects successfully baked.
   - `BakeResult.success(self) -> bool` *(property)* — Return True if any objects were baked.
   - `BakeResult.describe(self) -> List[str]` — What the bake did, one line per fact, for a report (the Smart Bake
-- **[`class SmartBake(_SmartBakeInternal)`](mayatk/mayatk/anim_utils/smart_bake/_smart_bake.py#L1081)** — Intelligent baking with automatic detection of what needs to be baked.
+- **[`class SmartBake(_SmartBakeInternal)`](mayatk/mayatk/anim_utils/smart_bake/_smart_bake.py#L1077)** — Intelligent baking with automatic detection of what needs to be baked.
   - `SmartBake.analyze(self) -> Dict[str, BakeAnalysis]` — Analyze objects to determine what needs baking.
   - `SmartBake.get_time_range(self, analysis: Optional[Dict[str, BakeAnalysis]] = None) -> Tuple[int, int]` — Determine optimal bake time range from driver animation.
   - `SmartBake.get_object_time_ranges(self, analysis: Dict[str, BakeAnalysis], fallback: Tuple[int, int]) -> Dict[str, Tuple[int, int]]` — The frames each driven object in *analysis* actually needs sampled.
@@ -880,7 +881,7 @@ Scene-wide audio event manager — thin facade over ``audio_utils``.
   - `AudioClips.migrate_legacy(cls) -> List[str]` *(class)* — Move the carrier's legacy ``audio_trigger`` keys and file map onto
   - `AudioClips.get_snap_frames() -> bool` *(static)* — Whether audio keys snap to whole frames: the scene's effect recipe
   - `AudioClips.set_snap_frames(value: bool) -> None` *(static)* — Set the recipe's whole-frame snap (``AudioUtils.set_snap_frames``).
-  - `AudioClips.watch_snap(callback, widget=None) -> Optional[Callable[[], None]]` *(static)* — Call *callback* whenever the scene's recipe changes (another panel,
+  - `AudioClips.watch_snap(callback) -> Optional[Callable[[], None]]` *(static)* — Call *callback* whenever the scene's recipe changes (another panel,
   - `AudioClips.export_composite(cls, choose_path: Callable[[str], Optional[str]], trim_silence: bool = True) -> Tuple[Optional[str], bool]` *(class)* — Write the scene's composite WAV where *choose_path* says, rebuilt
   - `AudioClips.export_tracks(cls, choose_dir: Callable[[str], Optional[str]], keyed_only: bool = True, suffix_range: bool = False) -> Tuple[int, List[str], Optional[str]]` *(class)* — Copy the tracks' source files into the folder *choose_dir* names.
   - `AudioClips.watch(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]` *(class)* — Tell *owner* what happens to the scene's audio, through the
@@ -991,7 +992,6 @@ Per-camera visibility: Maya's Display > Per Camera Visibility
   - `CoreUtils.temp_option_vars(values: Dict[str, Union[int, float, str]])` *(static)* — Set Maya optionVars for a block, then put the user's values back.
   - `CoreUtils.undoable(fn=None, *, name: str = '', suspend_refresh: bool = False)` *(static)* — A decorator to place a function into Maya's undo chunk.
   - `CoreUtils.reparent(func: Callable) -> Callable` *(static)* — A decorator to manage reparenting of Maya nodes before and after an operation.
-  - `CoreUtils.wrap_control(control_name, container)` *(static)* — Embed a Maya Native UI Object.
   - `CoreUtils.confirm_existence(objects: List[str]) -> Tuple[List[str], List[str]]` *(static)* — Confirms the existence of each object in the provided list in Maya.
   - `CoreUtils.node_handles(nodes) -> list` *(static)* — Rename-proof references to *nodes*, to be resolved after a renaming operation.
   - `CoreUtils.resolve_handles(handles, drop_dead: bool = True) -> List[str]` *(static)* — Current full path (DAG) / name (DG) for each :meth:`node_handles` handle.
@@ -1556,7 +1556,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `MacroManager.export_bindings(cls) -> Dict[str, dict]` *(class)* — The persist-worthy subset of the live bindings — every macro with a
   - `MacroManager.import_bindings(cls, data: Optional[Dict[str, dict]]) -> int` *(class)* — Apply a loaded binding set (the preset ``value_applier``): release
   - `MacroManager.show_editor(cls, parent=None)` *(class)* — Open the Macro Manager — the unified uitk ``ShortcutEditor`` over
-- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L872)**
+- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L814)**
   - `DisplayMacros.m_component_id_display()` *(static)* — Toggle Component Id Display through vertices, edges, faces, UVs, and off.
   - `DisplayMacros.m_normals_display()` *(static)* — Toggle face normals, vertex normals, tangents, and off.
   - `DisplayMacros.m_soft_edge_display()` *(static)* — Toggle Soft Edge Display.
@@ -1575,7 +1575,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
   - `DisplayMacros.m_cycle_background(cls) -> str` *(class)* — Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1560)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1502)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_ungroup(objects=None)` *(static)* — Ungroup the selected group(s) — children keep their world transforms.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
@@ -1584,7 +1584,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1819)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1761)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1593,17 +1593,17 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1982)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1924)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2018)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1960)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L2045)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L1987)**
 
 <a id="edit_utils--naming--_naming"></a>
 ### `edit_utils/naming/_naming.py`
 
-- **[`class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L19)** — Batch find / rename / suffix scene nodes.
+- **[`class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L18)** — Batch find / rename / suffix scene nodes.
   - `Naming.SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]` — ``(keyword, affix, label, type key)`` -- the live convention, joined
   - `Naming.affix_rules(cls, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> Dict[str, 'ptk.AffixRule']` *(class)* — ``{Maya type key: AffixRule}`` -- the convention bound to this host.
   - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
@@ -2773,7 +2773,7 @@ Scene-stored bake sets: named object sets the bake tools read.
 
 Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable
 
-- **[`class MayaEmissiveGroups(_MayaEmissiveGroupsInternal)`](mayatk/mayatk/mat_utils/emissive_groups.py#L96)** — The Maya scene operations of the Emissive Groups model
+- **[`class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, pythontk.PureEmissiveGroupsHost)`](mayatk/mayatk/mat_utils/emissive_groups.py#L96)** — The Maya scene operations of the Emissive Groups model
   - `MayaEmissiveGroups.faces(self, faces=None) -> FaceMap`
   - `MayaEmissiveGroups.add_members(self, store: str, face_map: FaceMap) -> None`
   - `MayaEmissiveGroups.remove_members(self, store: str) -> None`
@@ -3705,7 +3705,7 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 <a id="nurbs_utils--_nurbs_utils"></a>
 ### `nurbs_utils/_nurbs_utils.py`
 
-- **[`class NurbsUtils(pythontk.HelpMixin)`](mayatk/mayatk/nurbs_utils/_nurbs_utils.py#L22)**
+- **[`class NurbsUtils(pythontk.HelpMixin)`](mayatk/mayatk/nurbs_utils/_nurbs_utils.py#L21)**
   - `NurbsUtils.curve_action(cls, action: str, curves=None) -> List[str]` *(class)* — Run the curve action *action* (a :attr:`CURVE_ACTIONS` key) on *curves*.
   - `NurbsUtils.revolve(cls, curves=None, axis: str = 'y', start_sweep: float = 0.0, end_sweep: float = 360.0, sections: int = 8, degree: int = 3, range_: bool = False, polygon: bool = True, use_tolerance: bool = False, tolerance: float = 0.001, auto_correct_normal: bool = False) -> List[str]` *(class)* — Revolve each profile curve about *axis* through its own pivot into a
   - `NurbsUtils.loft(cls, uniform=True, close=False, degree=3, autoReverse=False, sectionSpans=1, range_=False, polygon=True, reverseSurfaceNormals=True, angle_loft_between_two_curves=False, angleLoftSpans=6)` *(class)* — Create a loft between two selections.
@@ -4229,10 +4229,11 @@ Maya hotkey collision checker for the uitk ShortcutEditor.
 
 What a uitk marking menu needs from Maya: :class:`MayaMarkingMenuHost`.
 
-- **[`class MayaMarkingMenuHost(PureMarkingMenuHost)`](mayatk/mayatk/ui_utils/maya_marking_menu_host.py#L28)** — Maya's answers to ``uitk.MarkingMenuHost`` (see the module docstring).
+- **[`class MayaMarkingMenuHost(PureMarkingMenuHost)`](mayatk/mayatk/ui_utils/maya_marking_menu_host.py#L33)** — Maya's answers to ``uitk.MarkingMenuHost`` and ``uitk.MarkingMenuLaunchHost`` (see
   - `MayaMarkingMenuHost.ui_handler(self)` *(property)* — ``MayaUiHandler``: wraps Maya's native menus, shows the tool windows.
   - `MayaMarkingMenuHost.is_batch() -> bool` *(static)* — True under ``maya -batch`` / ``maya.standalone`` (no GUI, no real Qt).
   - `MayaMarkingMenuHost.defer(self, fn)` — Run *fn* on Maya's idle queue — ``userSetup.py`` runs before the UI exists.
+  - `MayaMarkingMenuHost.report(self, message: str, error: bool = False) -> None` — Tell the user *message* through Maya: an in-view message over the viewport (none
   - `MayaMarkingMenuHost.main_window(self)` — Maya's main window (a ``QMainWindow``), or None (the menu logs a failure).
   - `MayaMarkingMenuHost.attach(self, menu) -> None` — Register Maya's hotkey-collision checker on the bundled shortcut editors
 
@@ -4409,13 +4410,31 @@ Registry of user-tunable RizomUV parameters exposed to the bridge UI.
   - `Parameters.render_context(cls, values: 'dict[str, Any]') -> 'dict[str, str]'` *(class)* — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
   - `Parameters.strip_unsupported(script_text: str, version: 'tuple[int, ...]') -> str` *(static)* — Drop every line that references a placeholder requiring a newer Rizom.
 
+<a id="uv_utils--texture_combine--_transfer_host"></a>
+### `uv_utils/texture_combine/_transfer_host.py`
+
+Texture Combine's Transfer mode: Maya's half of the run.
+
+- **[`class MayaTransferHost(pythontk.PureTransferHost)`](mayatk/mayatk/uv_utils/texture_combine/_transfer_host.py#L21)** — What :class:`pythontk.TransferRun` asks of Maya (a
+  - `MayaTransferHost.selection_sides(self, mode, stored)`
+  - `MayaTransferHost.face_materials(self, mesh)`
+  - `MayaTransferHost.material_maps(self, material)`
+  - `MayaTransferHost.pair_sources(self, targets, sources)`
+  - `MayaTransferHost.texture_transfer(self)`
+  - `MayaTransferHost.default_name(self, nodes) -> str`
+  - `MayaTransferHost.transfer_uvs(sources, targets)` *(static)*
+  - `MayaTransferHost.transfer_uvs_to_similar(source, candidates, tolerance)` *(static)*
+  - `MayaTransferHost.has_lightmap(mesh) -> bool` *(static)*
+  - `MayaTransferHost.transfer_lightmaps(targets, source, **options)` *(static)*
+  - `MayaTransferHost.undo_chunk(name)` *(static)*
+
 <a id="uv_utils--texture_combine--texture_combine"></a>
 ### `uv_utils/texture_combine/texture_combine.py`
 
 Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
 
-- **[`class CombineInputs`](mayatk/mayatk/uv_utils/texture_combine/texture_combine.py#L75)** — What :meth:`TextureCombine.gather` read: the scene side of a combine.
-- **[`class TextureCombine(pythontk.LoggingMixin, _TextureCombineInternal)`](mayatk/mayatk/uv_utils/texture_combine/texture_combine.py#L356)** — Combine the selected meshes' materials into one atlas and one material.
+- **[`class CombineInputs`](mayatk/mayatk/uv_utils/texture_combine/texture_combine.py#L76)** — What :meth:`TextureCombine.gather` read: the scene side of a combine.
+- **[`class TextureCombine(pythontk.LoggingMixin, _TextureCombineInternal)`](mayatk/mayatk/uv_utils/texture_combine/texture_combine.py#L357)** — Combine the selected meshes' materials into one atlas and one material.
   - `TextureCombine.names(cls) -> List[str]` *(class)* — The combines this scene holds, oldest first.
   - `TextureCombine.entry(cls, name: str) -> Optional[Dict[str, Any]]` *(class)* — A combine's record entry (settings, rows, meshes, sources), or ``None``.
   - `TextureCombine.members(cls, name: str) -> List[str]` *(class)* — The live transforms a combine moved (every instance).
@@ -4426,6 +4445,7 @@ Several materials into ONE: one atlas, one material, in place -- no duplicated m
   - `TextureCombine.apply_rows(self, inputs: CombineInputs, rows: Sequence[Dict[str, Any]] = ()) -> None` — Set every island's scale from the override *rows* -- the most
   - `TextureCombine.plan(self, inputs: CombineInputs, *, sizing: str = 'proportional', normalize: str = 'resolution')` — Estimate the atlas for *inputs* (nothing packed) -- a
   - `TextureCombine.default_name(self, transforms: Sequence[str], fallback: str = 'combined') -> str` — What a blank name stands for: the meshes' common name, else
+  - `TextureCombine.run_transfer(self, **options) -> 'ptk.TransferResult'` — The panel's Transfer mode: UVs OR textures from the selection's
   - `TextureCombine.combine(self, objects=None, *, name: Optional[str] = None, rows: Sequence[Dict[str, Any]] = (), sizing: str = 'proportional', normalize: str = 'resolution', map_size: int = 4096, padding: Optional[int] = None, rotate: bool = True, supersample: int = 2, texture_padding: int = -1, output_dir: Optional[str] = None, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None, lightmaps: bool = True, inputs: Optional[CombineInputs] = None) -> Dict[str, Any]` — Combine *objects*' materials into one atlas and one material.
   - `TextureCombine.recombine(self, name: str) -> Dict[str, Any]` — Re-read *name*'s source maps into its CURRENT layout -- a revision.
   - `TextureCombine.restore(self, name: str, forget: bool = True) -> List[str]` — Put *name*'s meshes back: original UVs and materials, exactly.

@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (933)
+## Moved out (934)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -281,6 +281,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `audio_utils/audio_clips/callbacks.py::CallbacksMixin` → `mayatk.AudioClips` (from 0.30.0)
 - `audio_utils/audio_clips/callbacks.py::CallbacksMixin.remove_callbacks` → `mayatk.AudioClips` (from 0.30.0)
 - `audio_utils/audio_clips/export_ops.py::ExportMixin` → `mayatk.AudioClips` (from 0.30.0)
+- `core_utils/_core_utils.py::CoreUtils.wrap_control` → `maya.OpenMayaUI.MQtUtil.findControl` (from 0.30.0)
 - `core_utils/preview.py::Preview.cleanup_all_previews` → `mayatk.Preview.cleanup_all_instances` (from 0.30.0)
 - `core_utils/preview.py::Preview.enabled` → `mayatk.Preview.is_enabled` (from 0.30.0)
 - `core_utils/preview.py::Preview.get_operated_objects` → `mayatk.core_utils.preview.MayaPreviewSession.captured_objects` (from 0.30.0)
@@ -938,7 +939,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (581)
+## Added (595)
 
 - `anim_utils/_anim_utils.py::AnimUtils.copied_key_counts(copied_data: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, int]`
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
@@ -1088,7 +1089,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.set_snap_frames(value: bool) -> None`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.tracks_at(frame: float) -> List[str]`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]`
-- `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch_snap(callback, widget=None) -> Optional[Callable[[], None]]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch_snap(callback) -> Optional[Callable[[], None]]`
 - `cam_utils/_cam_utils.py::CamUtils.align_view_to_selection() -> list`
 - `cam_utils/_cam_utils.py::CamUtils.create_camera(focal_length: float = 35.0) -> str`
 - `cam_utils/_cam_utils.py::CamUtils.get_cameras() -> list`
@@ -1475,6 +1476,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.defer(self, fn)`
 - `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.is_batch() -> bool`
 - `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.main_window(self)`
+- `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.report(self, message: str, error: bool = False) -> None`
 - `ui_utils/maya_marking_menu_host.py::MayaMarkingMenuHost.ui_handler(self)`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 - `uv_utils/_uv_pack.py::PackUvsResult.objects(self) -> List[str]`
@@ -1502,8 +1504,21 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.params_registry(cls)`
 - `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.referenced_keys(self, script_text: str) -> 'set[str]'`
 - `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.run_preset(self, objects, preset: str, params=None)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost(class)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.default_name(self, nodes) -> str`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.face_materials(self, mesh)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.has_lightmap(mesh) -> bool`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.material_maps(self, material)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.pair_sources(self, targets, sources)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.selection_sides(self, mode, stored)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.texture_transfer(self)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.transfer_lightmaps(targets, source, **options)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.transfer_uvs(sources, targets)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.transfer_uvs_to_similar(source, candidates, tolerance)`
+- `uv_utils/texture_combine/_transfer_host.py::MayaTransferHost.undo_chunk(name)`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.leaf_name(node) -> str`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.material_faces(inputs: CombineInputs, material) -> List[str]`
+- `uv_utils/texture_combine/texture_combine.py::TextureCombine.run_transfer(self, **options) -> 'ptk.TransferResult'`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.select(nodes) -> int`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.selected_faces() -> List[str]`
 - `uv_utils/texture_transfer.py::TextureTransfer.auto_source(cls, meshes, stored=()) -> Tuple[str, Optional[str]]`
