@@ -64,6 +64,7 @@ from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.uv_utils._uv_pack import _UvPackInternal
 from mayatk.uv_utils.texture_transfer import TextureTransfer
+from mayatk.uv_utils.texture_combine._transfer_host import MayaTransferHost
 
 try:
     import numpy as np
@@ -600,6 +601,17 @@ class TextureCombine(ptk.LoggingMixin, _TextureCombineInternal):
             list(transforms), strip=ptk.NamingConvention.all_affixes()
         )
         return name or fallback
+
+    def run_transfer(self, **options) -> "ptk.TransferResult":
+        """The panel's Transfer mode: UVs OR textures from the selection's
+        source onto its targets, one undo step.
+
+        :meth:`pythontk.TransferRun.run` -- its keywords (the panel's rows as
+        plain values) and its :class:`pythontk.TransferResult` -- over this
+        host (``MayaTransferHost``; a blank Output Name is :meth:`default_name`'s).
+        Twin of blendertk's.
+        """
+        return ptk.TransferRun(MayaTransferHost(combine=self)).run(**options)
 
     def combine(
         self,

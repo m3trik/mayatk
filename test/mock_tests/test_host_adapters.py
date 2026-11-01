@@ -44,7 +44,10 @@ ADAPTERS = (
     ("SequenceHost", _adapter("mayatk.anim_utils.playblast_exporter", "MayaPlayblastHost")),
     ("EmissiveGroupsHost", _adapter("mayatk.mat_utils.emissive_groups", "MayaEmissiveGroups")),
     ("CollectHost", _adapter("mayatk.mat_utils.texture_path_editor", "TexturePathEditor")),
-    ("TransferHost", _adapter("mayatk.uv_utils.texture_transfer", "MayaTransferHost")),
+    (
+        "TransferHost",
+        _adapter("mayatk.uv_utils.texture_combine._transfer_host", "MayaTransferHost"),
+    ),
 )
 
 
