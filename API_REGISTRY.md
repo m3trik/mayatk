@@ -1147,43 +1147,43 @@ Animation-curve diagnostics and optional repair helpers.
 
 Scene-audit data contract: profiles, per-asset records, and the SceneReport tree.
 
-- [`SEVERITY_LOW`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L49) — constant
-- [`SEVERITY_MEDIUM`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L50) — constant
-- [`SEVERITY_HIGH`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L51) — constant
-- [`TRANSPARENCY_OPAQUE`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L55) — constant
-- [`TRANSPARENCY_MASKED`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L56) — constant
-- [`TRANSPARENCY_BLEND`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L57) — constant
-- **[`class AuditProfile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L21)** — Thresholds for scene analysis.
-- **[`class MeshRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L61)** — Per-mesh statistics for a single shape node.
-- **[`class MaterialRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L85)** — Per-shape material usage summary (aggregated across slots).
-- **[`class Finding`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L113)** — An observation about an asset (negative or risk-flagged).
-- **[`class FixAction`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L123)** — A recommended remediation step.
-- **[`class BudgetDelta`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L134)** — How far an asset exceeds the profile budget along each axis.
+- [`SEVERITY_LOW`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L47) — constant
+- [`SEVERITY_MEDIUM`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L48) — constant
+- [`SEVERITY_HIGH`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L49) — constant
+- [`TRANSPARENCY_OPAQUE`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L53) — constant
+- [`TRANSPARENCY_MASKED`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L54) — constant
+- [`TRANSPARENCY_BLEND`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L55) — constant
+- **[`class AuditProfile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L19)** — Thresholds for scene analysis.
+- **[`class MeshRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L59)** — Per-mesh statistics for a single shape node.
+- **[`class MaterialRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L83)** — Per-shape material usage summary (aggregated across slots).
+- **[`class Finding`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L111)** — An observation about an asset (negative or risk-flagged).
+- **[`class FixAction`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L121)** — A recommended remediation step.
+- **[`class BudgetDelta`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L132)** — How far an asset exceeds the profile budget along each axis.
   - `BudgetDelta.is_over_budget(self) -> bool`
   - `BudgetDelta.summary(self) -> str` — Pre-rendered ``"tris +N | slots +M | …"`` string used by the
-- **[`class AssetRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L169)** — Combined per-asset record produced by analyze().
-- **[`class ParetoEntry`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L193)** — One row of a Pareto ranking (top contributor + cumulative %).
-- **[`class TextureFile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L202)** — A texture file referenced by the scene, with usage stats.
-- **[`class MissingTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L227)** — A texture referenced by a material but not present on disk.
-- **[`class SharedTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L236)** — A texture used by more than one mesh.
-- **[`class MaterialSplit`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L244)** — A material correlated with high-slot meshes (draw-call splits).
-- **[`class MaterialAudit`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L254)** — One material as the scope uses it: who wears it and what it costs.
-- **[`class SceneOverview`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L278)** — Scene-wide facts, independent of the audit scope: the file, its units
-- **[`class SlotStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L299)** — Distribution stats for material slots-per-mesh.
-- **[`class InstanceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L310)** — Mesh / instance counts.
-- **[`class BudgetBuckets`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L319)** — Histogram of overage severity per dimension.
-- **[`class ComplianceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L331)** — Percentage of scene over budget per dimension.
-- **[`class MissingTextureImpact`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L339)** — Downstream effect of missing textures on the asset list.
+- **[`class AssetRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L167)** — Combined per-asset record produced by analyze().
+- **[`class ParetoEntry`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L191)** — One row of a Pareto ranking (top contributor + cumulative %).
+- **[`class TextureFile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L200)** — A texture file referenced by the scene, with usage stats.
+- **[`class MissingTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L225)** — A texture referenced by a material but not present on disk.
+- **[`class SharedTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L234)** — A texture used by more than one mesh.
+- **[`class MaterialSplit`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L242)** — A material correlated with high-slot meshes (draw-call splits).
+- **[`class MaterialAudit`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L252)** — One material as the scope uses it: who wears it and what it costs.
+- **[`class SceneOverview`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L276)** — Scene-wide facts, independent of the audit scope: the file, its units
+- **[`class SlotStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L297)** — Distribution stats for material slots-per-mesh.
+- **[`class InstanceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L308)** — Mesh / instance counts.
+- **[`class BudgetBuckets`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L317)** — Histogram of overage severity per dimension.
+- **[`class ComplianceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L329)** — Percentage of scene over budget per dimension.
+- **[`class MissingTextureImpact`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L337)** — Downstream effect of missing textures on the asset list.
   - `MissingTextureImpact.is_empty(self) -> bool`
-- **[`class SummaryStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L351)** — High-level scene counters surfaced by the Executive Summary.
-- **[`class BudgetStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L380)** — Budget / compliance / savings figures.
-- **[`class TextureStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L398)** — Texture-side aggregates (surface maps only;
-- **[`class PipelineStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L425)** — Pipeline integrity findings (missing textures + impact).
-- **[`class OffenderLists`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L436)** — Top-N rankings across various dimensions.
-- **[`class AnalysisManifest`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L461)** — What was analyzed, how, and how long it took.
-- **[`class SceneReport`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L485)** — Top-level result of ``SceneAnalyzer.generate_report``.
+- **[`class SummaryStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L349)** — High-level scene counters surfaced by the Executive Summary.
+- **[`class BudgetStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L378)** — Budget / compliance / savings figures.
+- **[`class TextureStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L396)** — Texture-side aggregates (surface maps only;
+- **[`class PipelineStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L423)** — Pipeline integrity findings (missing textures + impact).
+- **[`class OffenderLists`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L434)** — Top-N rankings across various dimensions.
+- **[`class AnalysisManifest`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L459)** — What was analyzed, how, and how long it took.
+- **[`class SceneReport`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L483)** — Top-level result of ``SceneAnalyzer.generate_report``.
   - `SceneReport.to_dict(self) -> Dict[str, Any]` — Serialize the report to a nested plain-dict tree.
-- **[`class SceneInfoSection`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L519)** — Report-section identifiers used to gate analyze() work and report output.
+- **[`class SceneInfoSection`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L517)** — Report-section identifiers used to gate analyze() work and report output.
   - `SceneInfoSection.normalize(cls, sections: Optional[List[str]]) -> List[str]` *(class)* — Coerce a caller-supplied sections argument to a stable,
 
 <a id="core_utils--diagnostics--mesh_diag"></a>
@@ -2571,7 +2571,6 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `LightmapBaker.device(self) -> Optional[str]` *(property)* — Which device Arnold bakes on -- ``"AUTO"`` (the default: the GPU
   - `LightmapBaker.adaptive(self) -> bool` *(property)* — Whether a GPU bake spends its samples adaptively: the preset's AA on
   - `LightmapBaker.preset_store() -> 'ptk.PresetStore'` *(static)* — Shared store of lightmap quality presets (built-in + user tiers).
-  - `LightmapBaker.preset_name(cls, name: str) -> str` *(class)* — *name* as the preset store knows it now: itself when the store has
   - `LightmapBaker.from_preset(cls, name: str, **overrides) -> 'LightmapBaker'` *(class)* — Construct a baker from a named quality preset.
   - `LightmapBaker.bake_targets(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — The meshes a bake of *objects* acts on (default: the selection).
   - `LightmapBaker.bake(self, objects: Optional[List[str]] = None, packing: str = 'atlas', output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', on_progress: Optional[Callable[[int, int, str], bool]] = None, intensity: float = 1.0, **kwargs) -> LightmapBakeResult` — Bake *objects*' lightmaps and record them: the whole workflow, as the panel runs it.

@@ -617,7 +617,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class LightmapBakeResult`
   - methods: files, folders
 - `class LightmapBaker(pythontk.LoggingMixin)`
-  - methods: device, adaptive, preset_store, preset_name, from_preset, bake_targets, bake, stale_report, rebake_changed, rebake_report, rebake, map_folders, bake_breakdown, bake_maps, bake_probe, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, track, combine_sizes, combine, scope_meshes, scope_lights, select
+  - methods: device, adaptive, preset_store, from_preset, bake_targets, bake, stale_report, rebake_changed, rebake_report, rebake, map_folders, bake_breakdown, bake_maps, bake_probe, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, track, combine_sizes, combine, scope_meshes, scope_lights, select
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(pythontk.LoggingMixin)`

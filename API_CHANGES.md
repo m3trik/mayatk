@@ -939,7 +939,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (595)
+## Added (594)
 
 - `anim_utils/_anim_utils.py::AnimUtils.copied_key_counts(copied_data: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, int]`
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
@@ -1303,7 +1303,6 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.rays(self, nodes: Sequence[str]) -> ptk.ProbeRays`
 - `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.to_internal(point: Sequence[float]) -> List[float]`
 - `light_utils/lightmap_baker/_probe_placement.py::MayaProbeHost.to_scene(value: float) -> float`
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.preset_name(cls, name: str) -> str`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_lights(cls, scope: str = 'selected') -> List[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_meshes(scope: str = 'selected') -> List[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.select(objects) -> List[str]`
@@ -1545,13 +1544,13 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - **HELD** `env_utils/_env_utils.py::EnvUtils.load_plugin` — remove in 0.23.0, not before 2026-11-02
 - **HELD** `uv_utils/texture_transfer.py::TextureTransfer.CONSTANT_ATTRS` — remove in 0.23.0, not before 2026-11-03
 - **HELD** `env_utils/scene_exporter/task_manager.py::TaskManager.check_uv_snapshots` — remove in 0.24.0, not before 2026-11-07
-- `core_utils/_core_utils.py::CoreUtils.get_bounding_box` — remove in 0.30.0, not before 2026-11-24
-- `env_utils/_env_utils.py::EnvUtils.scene_project_root` — remove in 0.30.0, not before 2026-11-24
-- `env_utils/_env_utils.py::EnvUtils.scene_source` — remove in 0.30.0, not before 2026-11-24
-- `env_utils/_env_utils.py::EnvUtils.scene_source_images_dir` — remove in 0.30.0, not before 2026-11-24
-- `env_utils/_env_utils.py::EnvUtils.scene_workspace` — remove in 0.30.0, not before 2026-11-24
-- `env_utils/_env_utils.py::EnvUtils.set_scene_source` — remove in 0.30.0, not before 2026-11-24
-- `env_utils/_env_utils.py::EnvUtils.twin_save_target` — remove in 0.30.0, not before 2026-11-24
+- **HELD** `core_utils/_core_utils.py::CoreUtils.get_bounding_box` — remove in 0.30.0, not before 2026-11-24
+- **HELD** `env_utils/_env_utils.py::EnvUtils.scene_project_root` — remove in 0.30.0, not before 2026-11-24
+- **HELD** `env_utils/_env_utils.py::EnvUtils.scene_source` — remove in 0.30.0, not before 2026-11-24
+- **HELD** `env_utils/_env_utils.py::EnvUtils.scene_source_images_dir` — remove in 0.30.0, not before 2026-11-24
+- **HELD** `env_utils/_env_utils.py::EnvUtils.scene_workspace` — remove in 0.30.0, not before 2026-11-24
+- **HELD** `env_utils/_env_utils.py::EnvUtils.set_scene_source` — remove in 0.30.0, not before 2026-11-24
+- **HELD** `env_utils/_env_utils.py::EnvUtils.twin_save_target` — remove in 0.30.0, not before 2026-11-24
 
 ## Moved (66)
 
