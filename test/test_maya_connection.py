@@ -570,19 +570,77 @@ class TestMayaConnectionMocked(unittest.TestCase):
                 with conn:
                     raise RuntimeError("boom")
 
-    @patch.object(MayaConnection, "close_instance")
-    def test_shutdown_port_mode(self, mock_close):
-        """shutdown() in port mode should call close_instance(port=...)."""
+    def _attached_port_connection(self):
+        """A port connection to a Maya this connection did NOT launch (the
+        user's, reached with ``force_new_instance=False`` / ``--reuse``)."""
         conn = MayaConnection()
         conn.is_connected = True
         conn.mode = "port"
         conn.port = 7005
+        return conn
 
-        conn.shutdown()
+    @patch.object(MayaConnection, "close_instance")
+    @patch("pythontk.AppLauncher.close_process")
+    def test_shutdown_never_closes_an_attached_maya(
+        self, mock_close_process, mock_close_instance
+    ):
+        """Regression: with no launched PID, shutdown() fell back to
+        close_instance(port=...), force-closing the user's attached session
+        (the runner's --reuse ``finally`` passed force=True: no save prompt).
+        A Maya this connection did not launch only has its state reset."""
+        conn = self._attached_port_connection()
 
-        mock_close.assert_called_once_with(port=7005, force=False)
+        conn.shutdown(force=True)
+
+        mock_close_instance.assert_not_called()
+        mock_close_process.assert_not_called()
         self.assertFalse(conn.is_connected)
         self.assertIsNone(conn.mode)
+
+    @patch.object(MayaConnection, "close_instance")
+    @patch("pythontk.AppLauncher.close_process")
+    def test_exit_never_closes_an_attached_maya(
+        self, mock_close_process, mock_close_instance
+    ):
+        """A ``with`` block over an attached session leaves that Maya open."""
+        conn = self._attached_port_connection()
+
+        with conn:
+            pass
+
+        mock_close_instance.assert_not_called()
+        mock_close_process.assert_not_called()
+        self.assertFalse(conn.is_connected)
+
+    @patch.object(MayaConnection, "close_instance")
+    @patch("pythontk.AppLauncher.close_process")
+    @patch("socket.socket")
+    def test_atexit_cleanup_never_closes_an_attached_maya(
+        self, _socket, mock_close_process, mock_close_instance
+    ):
+        """``auto_cleanup`` on an attached session resets state at exit only."""
+        conn = MayaConnection()
+        handlers = []
+        with (
+            patch("atexit.register", side_effect=handlers.append),
+            patch.object(MayaConnection, "_is_port_free", return_value=False),
+        ):
+            self.assertTrue(
+                conn.connect(
+                    mode="port",
+                    port=7005,
+                    force_new_instance=False,
+                    confirm_existing=False,
+                    auto_cleanup=True,
+                )
+            )
+        self.assertEqual(len(handlers), 1)
+
+        handlers[0]()
+
+        mock_close_instance.assert_not_called()
+        mock_close_process.assert_not_called()
+        self.assertFalse(conn.is_connected)
 
     def _launched_port_connection(self):
         conn = MayaConnection()
@@ -932,6 +990,31 @@ class TestPortCollisionResilience(unittest.TestCase):
             actual = conn._launch_maya_gui(port=7002)
 
         self.assertFalse(actual)
+
+    @patch("socket.socket")
+    @patch("pythontk.AppLauncher")
+    def test_launch_never_adopts_an_unverified_port(
+        self, MockAppLauncher, mock_socket_cls
+    ):
+        """Regression: with no window title and no listening-socket table
+        (``listening_ports`` raised), the wait accepted ANY listener on the
+        requested port -- a stranger's Maya, possibly the user's. A port whose
+        owner cannot be verified is never adopted (fail closed)."""
+        proc = MagicMock(pid=4242)
+        proc.poll.return_value = None
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        MockAppLauncher.get_window_titles.return_value = []
+        mock_socket_cls.return_value.connect_ex.return_value = 0  # it answers
+
+        conn = MayaConnection()
+        with patch.object(
+            MayaConnection, "_iter_listening_tcp", side_effect=OSError("no netstat")
+        ):
+            actual = conn._launch_maya_gui(port=7002)
+
+        self.assertFalse(actual)
+        mock_socket_cls.return_value.connect_ex.assert_not_called()
 
     @patch("pythontk.AppLauncher")
     def test_launch_prefers_title_stamped_port(self, MockAppLauncher):

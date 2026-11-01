@@ -37,7 +37,7 @@ Usage:
     python run_tests.py --timeout 7200           # GUI-pass hard ceiling (seconds); a
                                                  # stalled pass ends sooner, on its own
     python run_tests.py --keep-maya              # Keep GUI Maya open after tests
-    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene; implies --gui)
+    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene; implies --gui; left open)
 
 Notes:
     --jobs > 1 runs multiple mayapy chunks concurrently.  Standalone
@@ -1947,10 +1947,18 @@ def main() -> int:
         return 130
     finally:
         if not keep_maya and runner.connection and runner.connection.is_connected:
-            print("\nClosing Maya instance ...")
+            # shutdown() closes only the Maya this run launched (by its PID);
+            # a session --reuse attached to is the user's and stays open --
+            # only the connection state resets.
+            launched = bool(getattr(runner.connection, "_launched_pid", None))
+            print(
+                "\nClosing Maya instance ..."
+                if launched
+                else "\nLeaving the attached Maya open ..."
+            )
             try:
                 runner.connection.shutdown(force=True)
-                print("[OK] Maya closed.")
+                print("[OK] Maya closed." if launched else "[OK] Detached.")
             except Exception as e:
                 print(f"[WARNING] Failed to close Maya gracefully: {e}")
                 # Last resort: the Maya this run launched, by its PID -- never
