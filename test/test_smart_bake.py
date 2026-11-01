@@ -5280,5 +5280,52 @@ class TestBakeReport(unittest.TestCase):
         self.assertFalse(result.restorable)
 
 
+
+class TestNearestEulerThroughGimbal(unittest.TestCase):
+    """The layer bake's Euler filter keys a turn swept through gimbal lock on
+    the axis it rides. At the lock only the inner and outer angles' sum or
+    difference is fixed, and ``MEulerRotation`` puts the whole turn on the
+    inner one: a sweep carrying it on the outer one baked (0,87,30)
+    (-30,90,0) (0,93,30) in xyz, both curves spiking 30 degrees for one frame
+    (BACKLOG 2026-11-01, fresh-mayapy repro). The rule is
+    ``ptk.Quaternion.euler_near``, pythontk's glTF reader's too."""
+
+    ORDERS = ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx")
+
+    def test_a_sweep_through_the_lock_stays_on_its_axis_in_every_order(self):
+        import math
+
+        import maya.api.OpenMaya as om2
+
+        from mayatk.anim_utils.smart_bake._smart_bake import _SmartBakeInternal
+
+        axes = {"x": 0, "y": 1, "z": 2}
+        for index, order in enumerate(self.ORDERS):
+            inner, middle, outer = (axes[c] for c in order)
+            for lock in (90.0, -90.0):
+                for carried in (inner, outer):
+                    with self.subTest(order=order, lock=lock, carried="xyz"[carried]):
+                        previous, baked, authored = None, [], []
+                        # From inside the middle's range: a first key is
+                        # taken as read.
+                        for step in (-6.0, -3.0, 0.0, 3.0, 6.0)[:: 1 if lock > 0 else -1]:
+                            want = [0.0, 0.0, 0.0]
+                            want[middle], want[carried] = lock + step, 30.0
+                            authored.append(want)
+                            q = om2.MEulerRotation(
+                                [math.radians(v) for v in want], index
+                            ).asQuaternion()
+                            euler = _SmartBakeInternal._nearest_euler(
+                                q.asEulerRotation().reorder(index), previous
+                            )
+                            previous = euler
+                            baked.append(
+                                [math.degrees(v) for v in (euler.x, euler.y, euler.z)]
+                            )
+                        for got, want in zip(baked, authored):
+                            for g, w in zip(got, want):
+                                self.assertAlmostEqual(g, w, delta=1e-6, msg=baked)
+
+
 if __name__ == "__main__":
     unittest.main()

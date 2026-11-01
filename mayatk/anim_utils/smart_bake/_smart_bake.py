@@ -356,35 +356,31 @@ class _SmartBakeInternal:
                 return "scalar"
         return None
 
-    @staticmethod
-    def _nearest_euler(euler, previous):
-        """*euler* (or its alternate solution), unwrapped to sit nearest *previous*.
+    #: ``MEulerRotation.order`` (the ``rotateOrder`` enum) -> its axes, the
+    #: first applied first: ``ptk.Quaternion``'s spelling of an order.
+    _EULER_ORDERS = ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx")
+
+    @classmethod
+    def _nearest_euler(cls, euler, previous):
+        """*euler* spelled to sit nearest *previous* (``ptk.Quaternion.euler_near``,
+        the rule pythontk's glTF reader keys with too).
 
         The Euler filter a per-frame decomposition needs: each frame's split
-        is independent, so without this a rotation passing 180 degrees flips
-        to the equivalent (x+180, 180-y, z+180) triple and the curve jumps.
+        is independent, so without it a rotation passing 180 degrees flips to
+        its twin triple and the curve jumps, and at gimbal lock
+        ``MEulerRotation`` puts the whole turn on the inner angle, which spiked
+        both curves of a sweep riding the outer one for a frame.
         """
         import maya.api.OpenMaya as om2
 
         if previous is None:
             return euler
-        best = None
-        best_cost = None
-        for candidate in (euler, euler.alternateSolution()):
-            comps = []
-            for value, prior in zip(
-                (candidate.x, candidate.y, candidate.z),
-                (previous.x, previous.y, previous.z),
-            ):
-                value += 2.0 * math.pi * round((prior - value) / (2.0 * math.pi))
-                comps.append(value)
-            cost = sum(
-                abs(v - p) for v, p in zip(comps, (previous.x, previous.y, previous.z))
-            )
-            if best_cost is None or cost < best_cost:
-                best_cost = cost
-                best = om2.MEulerRotation(comps[0], comps[1], comps[2], euler.order)
-        return best
+        near = ptk.Quaternion.euler_near(
+            cls._EULER_ORDERS[euler.order],
+            [math.degrees(v) for v in (euler.x, euler.y, euler.z)],
+            [math.degrees(v) for v in (previous.x, previous.y, previous.z)],
+        )
+        return om2.MEulerRotation([math.radians(v) for v in near], euler.order)
 
     @staticmethod
     def _set_doubles(pairs) -> None:
