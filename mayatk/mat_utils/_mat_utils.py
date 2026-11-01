@@ -1609,9 +1609,9 @@ class MatUtils(_MatUtilsInternal):
 
         Only files that exist on disk and are not already under
         ``sourceimages`` are copied.  A file whose basename already exists in
-        ``sourceimages`` is left untouched: identical size is treated as the
-        same asset (the relative path will resolve to it), while a different
-        size is a name collision — skipped with a warning rather than
+        ``sourceimages`` is left untouched: identical content is the same
+        asset (the relative path will resolve to it), while any other file of
+        the name is a collision — skipped with a warning rather than
         clobbering a different texture or silently rebinding to the wrong one.
         Tile/frame token patterns (:attr:`_PATH_TOKENS`) are skipped (no
         single file to copy); the token is preserved by the subsequent remap.

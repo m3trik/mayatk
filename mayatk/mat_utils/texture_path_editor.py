@@ -331,26 +331,34 @@ class TexturePathEditor:
     ) -> int:
         """Repath each file node so its texture lives directly under *target_dir*.
 
-        *relocate_mode* controls disk behavior for nodes whose current path
-        resolves to an existing file:
-          - ``"rewrite"`` -- path-only (no file movement).
-          - ``"copy"`` -- copy the file to *target_dir* then rebind.
-          - ``"move"`` -- move the file to *target_dir* then rebind.
+        The file work is ``ptk.FileCollect.set_directory`` over this host (a
+        FLAT Collect: the copy and move engine Find & Copy runs on), the repath
+        one undo step here (the disk work is not undoable). *relocate_mode*:
+          - ``"rewrite"`` -- nothing on disk: the path only.
+          - ``"copy"`` / ``"move"`` -- each file brought into *target_dir* under
+            its name, a tile set whole, identical bytes already there reused; a
+            move takes a source away only once its copy compares whole --
+            never one that IS the destination however spelled (a junction, a
+            subst or mapped drive), never one a texture reader outside
+            *file_nodes* still reads (that one is copied). A name a different
+            file holds at the destination, or that two different files of the
+            batch bring, leaves those nodes on their path, warned: Set
+            Directory keeps nothing apart in subfolders and never rebinds a
+            node to bytes it did not bring. (Its own loop took a same-SIZE file
+            for the copy and deleted the only one.)
 
-        A node is repathed only when the texture is ACTUALLY at the destination
+        A node is repathed only when its texture is ACTUALLY at the destination
         afterwards -- tile/frame tokens resolved, so a UDIM set counts as present
         when its tiles are. Every mode used to rewrite the plug regardless, which
         is how picking sourceimages in the default (path-only) mode filled the
         table with red rows naming files that were never at the destination.
         *allow_missing* restores the blind rewrite for the one case that wants
-        it: pointing a batch at a folder you are about to fill.
+        it: pointing a batch at a folder you are about to fill. A node whose
+        texture is on disk nowhere has nothing to bring, in any mode, and is
+        repathed by that rule.
 
-        Tile sets relocate per tile (``MatUtils.texture_tiles``) -- the same rule
-        ``MatUtils.stage_textures_relative`` stages them by.
-
-        Collision policy: same-name + same-size at destination is a safe rebind
-        (no overwrite); different size is skipped + warned. Records prior paths
-        in :attr:`previous_paths`. Returns the number of file nodes updated.
+        Records prior paths in :attr:`previous_paths`. Returns the number of
+        file nodes updated.
         """
         if relocate_mode not in self.RELOCATE_MODES:
             raise ValueError(
@@ -359,126 +367,28 @@ class TexturePathEditor:
             )
         if not file_nodes:
             return 0
-        node_names = [str(n) for n in file_nodes]
-        target_dir_norm = os.path.normpath(target_dir).replace("\\", "/")
-        workspace, source_images = self._project_roots()
-
-        # Phase 1 -- collect (node, old_path, new_path, source tiles, new_abs).
-        plan = []
-        for node_name in node_names:
-            old_path = self.stored_path(node_name)
-            if not old_path:
-                continue
-            new_abs = os.path.normpath(
-                os.path.join(target_dir_norm, os.path.basename(old_path))
-            ).replace("\\", "/")
-            new_path = MatUtils.to_project_relative(new_abs, workspace, source_images)
-            if new_path == old_path:
-                continue
-            # The whole set, not one name: a token path denotes every tile on
-            # disk, and each has to travel for the repathed pattern to resolve.
-            sources = (
-                MatUtils.texture_tiles(
-                    MatUtils.to_absolute(old_path, workspace, source_images)
-                )
-                if relocate_mode != "rewrite"
-                else []
-            )
-            plan.append((node_name, old_path, new_path, sources, new_abs))
-
-        # Phase 2 -- relocations outside the undo chunk (disk ops aren't undoable).
-        relocated = 0
-        collision_skipped = 0
-        skipped_nodes = set()
-        if relocate_mode in ("copy", "move"):
-            import shutil
-
-            for node_name, _old_path, _new_path, sources, new_abs in plan:
-                dst_dir = os.path.dirname(new_abs)
-                for src in sources:
-                    dst = os.path.join(dst_dir, os.path.basename(src))
-                    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
-                        os.path.abspath(dst)
-                    ):
-                        continue  # already at the destination -- nothing to do
-                    try:
-                        if os.path.exists(dst):
-                            try:
-                                same = os.path.getsize(src) == os.path.getsize(dst)
-                            except OSError:
-                                same = False
-                            if not same:
-                                self._log(
-                                    f"{node_name}: '{os.path.basename(dst)}' already "
-                                    "exists at destination with different size; "
-                                    "skipping to avoid wrong-file rebind.",
-                                    "warning",
-                                )
-                                collision_skipped += 1
-                                skipped_nodes.add(node_name)
-                                break
-                            if relocate_mode == "move":
-                                try:
-                                    os.remove(src)
-                                except OSError as e:
-                                    self._log(
-                                        f"{node_name}: equivalent at dst, but could "
-                                        f"not remove '{src}': {e}",
-                                        "warning",
-                                    )
-                        else:
-                            os.makedirs(dst_dir, exist_ok=True)
-                            if relocate_mode == "move":
-                                shutil.move(src, dst)
-                            else:
-                                shutil.copy2(src, dst)
-                        relocated += 1
-                    except Exception as e:
-                        self._log(
-                            f"{node_name}: failed to {relocate_mode}: {e}", "warning"
-                        )
-                        skipped_nodes.add(node_name)
-                        break
-
-        # Phase 3 -- path updates (undoable).
-        count = 0
-        missing_at_target = 0
-        cmds.undoInfo(openChunk=True, chunkName="Set Texture Directory")
-        try:
-            for node_name, old_path, new_path, _sources, new_abs in plan:
-                if node_name in skipped_nodes:
-                    continue
-                # The destination is what the node will READ from, so it is
-                # what has to hold a file -- never "did a copy run?" (a texture
-                # already sitting in the target needs no copy and must still be
-                # rebound to the shorter form).
-                if not (allow_missing or self._texture_on_disk(new_abs)):
-                    missing_at_target += 1
-                    continue
-                try:
-                    Attributes.set_plug_literal(
-                        f"{node_name}.fileTextureName", new_path
-                    )
-                    self.previous_paths[node_name] = old_path
-                    count += 1
-                except Exception as e:
-                    self._log(f"{node_name}: failed to set path: {e}", "warning")
-        finally:
-            cmds.undoInfo(closeChunk=True)
-
-        if relocate_mode != "rewrite":
+        target = os.path.normpath(target_dir).replace("\\", "/")
+        done = FileCollect(self).set_directory(
+            [str(n) for n in file_nodes],
+            target,
+            relocate_mode,
+            allow_missing=allow_missing,
+            copy=self._copy_into,
+            kind="texture",
+        )
+        for level, message, items in done["report"]:
+            self._log(f"Set Directory: {message}", level, items)
+        with CoreUtils.undo_chunk("Set Texture Directory"):
+            count = self._repath_nodes(done["repath"])
+        if done["absent"]:
             self._log(
-                f"Set Directory — relocated: {relocated} file(s); "
-                f"collision skipped: {collision_skipped}; mode: {relocate_mode}."
-            )
-        if missing_at_target:
-            self._log(
-                f"Set Directory: {missing_at_target} file node(s) left on their "
-                f"current path — '{target_dir_norm}' holds no texture of that "
+                f"Set Directory: {len(done['absent'])} file node(s) left on their "
+                f"current path — '{target}' holds no texture of that "
                 "name, and repathing them would only spell the breakage "
                 "differently. Use copy/move to bring the files along, or tick "
                 "'Allow Missing Targets' to point them there anyway.",
                 "warning",
+                items=done["absent"],
             )
         return count
 

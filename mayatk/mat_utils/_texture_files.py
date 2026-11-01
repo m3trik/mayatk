@@ -66,9 +66,14 @@ class _TextureFilesInternal:
         """True when two stored texture paths denote the same image CONTENT.
 
         Same normalized path is trivially identical; different paths are
-        identical only when both resolve and their (size, partial-hash) ids
-        match — the consolidation case (external copy vs sourceimages copy)
-        the loose basename fingerprint exists for, minus its false positives.
+        identical only when both resolve and hold the same bytes -- the
+        consolidation case (external copy vs sourceimages copy) the loose
+        basename fingerprint exists for, minus its false positives. The (size,
+        partial-hash) id is the cheap NEGATIVE that spares reading files that
+        differ; equal ids are settled on the whole bytes (one file however
+        spelled, or a full compare): two bakes of one map that differ only
+        between the hashed ends share an id, and a move that took one for the
+        other deleted the new bake.
         """
 
         def norm(p):
@@ -77,7 +82,13 @@ class _TextureFilesInternal:
         if norm(path_a) == norm(path_b):
             return True
         id_a = cls._texture_content_id(path_a)
-        return id_a is not None and id_a == cls._texture_content_id(path_b)
+        if id_a is None or id_a != cls._texture_content_id(path_b):
+            return False
+        a, b = (
+            cls.probe_texture_path(cls.resolve_path(p, search=False))
+            for p in (path_a, path_b)
+        )
+        return ptk.FileUtils.is_same_file(a, b) or ptk.FileUtils.has_same_content(a, b)
 
     @staticmethod
     def _unique_ordered(nodes: List[Any]) -> List[Any]:
@@ -493,9 +504,10 @@ class _TextureFilesInternal:
                 # rebind: the staged file is what the node reads from here on.
                 for src in sources:
                     dst = _dst_for(src, index)
-                    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
-                        os.path.abspath(dst)
-                    ):
+                    if ptk.FileUtils.is_same_file(src, dst):
+                        # The "twin" IS the source, however spelled (an
+                        # external path through a junction, a subst or a
+                        # mapped drive naming sourceimages): the only copy.
                         continue
                     try:
                         os.remove(src)
@@ -664,17 +676,16 @@ class _TextureFilesInternal:
         def _copy_one(src_path, filename):
             """``(src, dst, status)`` -- ``"copied"``, ``"uptodate"`` or ``"collision"``.
 
-            The Texture Path Editor's documented collision policy, applied by
-            the primitive itself (Set Directory had its own copy of it; this
-            one silently overwrote until 2026-08-26): a destination already
-            holding a SAME-SIZE file of that name is reused without rewriting
-            -- hundreds of files the user already copied would otherwise make a
-            cloud-sync client re-hash and re-upload every one -- and one holding
-            a DIFFERENT-SIZE file is refused, in either mode: overwriting it
-            would destroy an external, and the caller's repath would then bind
-            to bytes it never chose. Same size is the equivalence test, as the
-            policy states; the warning is raised by the caller on the main
-            thread -- ``cmds`` is not thread-safe.
+            The Texture Path Editor's collision policy, applied by the
+            primitive itself (this one silently overwrote until 2026-08-26): a
+            destination already holding IDENTICAL bytes of that name is reused
+            without rewriting -- hundreds of files the user already copied
+            would otherwise make a cloud-sync client re-hash and re-upload
+            every one -- and one holding any other file is refused, in either
+            mode: overwriting it would destroy an external, and the caller's
+            repath would then bind to bytes it never chose. The warning is
+            raised by the caller on the main thread -- ``cmds`` is not
+            thread-safe.
             """
             dst_path = os.path.join(new_dir, filename)
             if ptk.FileUtils.is_same_file(src_path, dst_path):
@@ -699,11 +710,11 @@ class _TextureFilesInternal:
                     return src_path, dst_path, "collision"
                 if same_size:
                     # Same size: now prove the CONTENT matches before anything is
-                    # removed. _textures_identical is the class's own check (size +
-                    # first/last 64 KB md5) and is what stage_textures_relative
-                    # already uses. Safe off the main thread here: both paths are
-                    # known-existing absolutes, so resolve_path returns on its first
-                    # tier and never reaches cmds.workspace.
+                    # removed. _textures_identical is the class's own check (a
+                    # partial-hash negative, then the whole bytes) and is what
+                    # stage_textures_relative uses. Safe off the main thread here:
+                    # both paths are known-existing absolutes, so resolve_path
+                    # returns on its first tier and never reaches cmds.workspace.
                     if cls._textures_identical(src_path, dst_path):
                         if delete_old:
                             os.remove(src_path)  # proven identical; src redundant
@@ -784,13 +795,13 @@ class _TextureFilesInternal:
         for src_path, dst_path in collisions:
             cmds.warning(
                 f"// '{os.path.basename(dst_path)}' already exists at the destination "
-                f"with a different size; skipped to avoid a wrong-file rebind: {dst_path}"
+                f"with different content; skipped to avoid a wrong-file rebind: {dst_path}"
             )
 
         print(
             f"// Result: {len(copied)} texture(s) ok "
             f"({skipped} already up-to-date, "
-            f"{len(collisions)} skipped on a different-size collision, "
+            f"{len(collisions)} skipped on a different-file collision, "
             f"{len(errors)} errors, "
             f"{len(timed_out)} timed out"
             f"{', cancelled' if cancelled and not timed_out else ''})."
@@ -842,22 +853,19 @@ class _TextureFilesInternal:
 
             # Same-basename collision — against a file already in sourceimages
             # OR against another external already queued for the same basename
-            # (the copy is flat, so both would land on one destination). Size
-            # is a cheap proxy for "same file" (matches the texture-path
-            # editor's policy): same size → the relative path resolves to the
-            # single copy, nothing more to do; different size → refuse to
-            # clobber / rebind to the wrong texture.
+            # (the copy is flat, so both would land on one destination).
+            # Identical CONTENT → the relative path resolves to the single
+            # copy, nothing more to do; anything else → refuse to clobber /
+            # rebind to the wrong texture. Size was the proxy, and two maps of
+            # one resolution share it: the relative remap after this bound the
+            # node to the other image.
             rival = dst if os.path.exists(dst) else claimed.get(base_key)
             if rival:
-                try:
-                    same = os.path.getsize(norm) == os.path.getsize(rival)
-                except OSError:
-                    same = False
-                if not same:
+                if not cls._textures_identical(norm, rival):
                     cmds.warning(
                         f"'{base}' resolves to more than one texture of differing "
-                        f"size; keeping the first and skipping '{norm}' to avoid a "
-                        f"wrong-file rebind."
+                        f"content; keeping the first and skipping '{norm}' to avoid "
+                        f"a wrong-file rebind."
                     )
                 continue
 

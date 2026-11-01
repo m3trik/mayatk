@@ -2686,6 +2686,56 @@ class TestFindTextureFilesByName(MayaTkTestCase):
             self.assertEqual(fh.read(), b"the only copy")
         self.assertEqual([os.path.basename(d) for _s, d in copied], ["only.png"])
 
+    def test_move_mode_never_deletes_a_source_whose_namesake_differs_mid_file(self):
+        """Size plus a hash of the first and last 64 KB was the identity Move
+        deleted on: two bakes of one map that differ only between them (a
+        repaint in the middle of an uncompressed map) passed it, and the new
+        bake -- the artist's only copy -- was removed for the stale one."""
+        dest = os.path.join(self.root, "dest_mid")
+        os.makedirs(dest, exist_ok=True)
+        head, tail = b"H" * 65536, b"T" * 65536
+        src = self._write("src", "Wall_BaseColor.tga")
+        with open(src, "wb") as fh:
+            fh.write(head + b"NEW PAINT" + tail)
+        other = os.path.join(dest, "Wall_BaseColor.tga")
+        with open(other, "wb") as fh:
+            fh.write(head + b"OLD PAINT" + tail)
+
+        copied = MatUtils.move_texture_files([src], dest, delete_old=True)
+
+        self.assertTrue(os.path.isfile(src), "Move deleted the new bake")
+        with open(other, "rb") as fh:
+            self.assertIn(b"OLD PAINT", fh.read(), "destination untouched")
+        self.assertEqual(copied, [], "the node would be repathed onto the stale bake")
+
+    def test_copy_to_sourceimages_calls_a_same_size_namesake_a_collision(self):
+        """A same-named sourceimages file of the same SIZE was taken for the
+        texture and passed over silently ("the relative path will resolve to
+        it") -- the relative remap after it bound the node to the other image.
+        It is a collision, and said."""
+        from unittest import mock
+
+        si = os.path.join(self.root, "sourceimages")
+        os.makedirs(si, exist_ok=True)
+        with open(os.path.join(si, "metal.tga"), "wb") as fh:
+            fh.write(b"THEIRS!!")
+        src = self._write("ext", "metal.tga")
+        with open(src, "wb") as fh:
+            fh.write(b"OURS!!!!")
+        node = cmds.shadingNode("file", asTexture=True, name="tex_si_namesake")
+        cmds.setAttr(f"{node}.fileTextureName", src, type="string")
+
+        with mock.patch.object(cmds, "warning") as warned:
+            copied = MatUtils.copy_textures_to_sourceimages(
+                file_nodes=[node], sourceimages_dir=si
+            )
+
+        self.assertEqual(copied, [])
+        self.assertTrue(
+            any("metal.tga" in str(call) for call in warned.call_args_list),
+            f"no collision was reported: {warned.call_args_list}",
+        )
+
     def test_move_mode_removes_a_source_proven_identical(self):
         """The short-circuit still earns its keep when content really matches."""
         dest = os.path.join(self.root, "dest_same")

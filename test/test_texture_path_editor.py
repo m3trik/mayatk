@@ -543,6 +543,72 @@ class TestNormalizeToRelative(MayaTkTestCase):
         finally:
             shutil.rmtree(ext_dir, ignore_errors=True)
 
+    def test_move_through_an_alias_of_sourceimages_keeps_the_only_copy(self):
+        """An "external" path that is a junction (a subst, a mapped drive)
+        naming sourceimages itself: the resident "twin" is the file, the
+        spellings differ, and Move removed the external original -- the only
+        copy -- before rebinding the node to it."""
+        resident = os.path.join(self.si_dir, "aliased.png")
+        with open(resident, "wb") as fh:
+            fh.write(b"ONLY COPY")
+        outside = tempfile.mkdtemp(prefix="external_alias_")
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        alias = os.path.join(outside, "si_alias")
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(os.path.normpath(self.si_dir), alias)
+        except (ImportError, AttributeError, OSError) as error:
+            self.skipTest(f"no directory junction can be made here: {error}")
+        self.addCleanup(lambda: os.path.lexists(alias) and os.rmdir(alias))
+        node = self._make_file_node(
+            "tex_alias_move", os.path.join(alias, "aliased.png").replace("\\", "/")
+        )
+
+        self.editor.normalize_paths([node], external_mode="move")
+
+        with open(resident, "rb") as fh:
+            self.assertEqual(fh.read(), b"ONLY COPY", "Move deleted the only copy")
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/aliased.png")
+
+    def test_move_never_takes_a_resident_differing_mid_file_for_the_external(self):
+        """Size plus a hash of the first and last 64 KB called two bakes of one
+        map the same file when only their middle differs; Move then removed
+        the external (the new bake) and bound the node to the stale resident."""
+        head, tail = b"H" * 65536, b"T" * 65536
+        with open(os.path.join(self.si_dir, "wall.tga"), "wb") as fh:
+            fh.write(head + b"OLD PAINT" + tail)
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        self.addCleanup(shutil.rmtree, ext_dir, ignore_errors=True)
+        ext_file = os.path.join(ext_dir, "wall.tga")
+        with open(ext_file, "wb") as fh:
+            fh.write(head + b"NEW PAINT" + tail)
+        node = self._make_file_node("tex_mid_move", ext_file.replace("\\", "/"))
+
+        self.editor.normalize_paths([node], external_mode="move")
+
+        stored = cmds.getAttr(f"{node}.fileTextureName")
+        with open(MatUtils.to_absolute(stored, self.tmp_root, self.si_dir), "rb") as fh:
+            self.assertIn(b"NEW PAINT", fh.read(), f"{stored} is the stale bake")
+        with open(os.path.join(self.si_dir, "wall.tga"), "rb") as fh:
+            self.assertIn(b"OLD PAINT", fh.read(), "the resident was overwritten")
+
+    @unittest.expectedFailure  # BACKLOG 2026-10-31: Normalize Paths' move keeps no outside reader's file
+    def test_move_leaves_a_file_a_node_outside_the_batch_reads(self):
+        """Set Directory and Find & Copy copy a file a node outside the batch
+        still reads; Normalize Paths' move takes it away under that node."""
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        self.addCleanup(shutil.rmtree, ext_dir, ignore_errors=True)
+        ext_file = os.path.join(ext_dir, "shared_out.png").replace("\\", "/")
+        with open(ext_file, "wb") as fh:
+            fh.write(b"SHARED")
+        moved = self._make_file_node("tex_norm_in", ext_file)
+        self._make_file_node("tex_norm_out", ext_file)
+
+        self.editor.normalize_paths([moved], external_mode="move")
+
+        self.assertTrue(os.path.isfile(ext_file), "the outside node was stranded")
+
     def test_move_collision_with_different_content_stages_a_variant(self):
         """Move + same-name-same-SIZE collision: the engine hashes content, so
         the different file lands as an ``_1`` variant and the external is
@@ -1178,6 +1244,144 @@ class TestSetTextureDirRelocate(MayaTkTestCase):
     def test_invalid_relocate_mode_raises(self):
         with self.assertRaises(ValueError):
             self.editor.set_texture_directory([], "/anywhere", relocate_mode="bogus")
+
+    # Move's guards: Set Directory's copy / move is a flat ``ptk.FileCollect``
+    # (BACKLOG 2026-10-23, S1; measured 2026-10-31 in a fresh mayapy).
+
+    @staticmethod
+    def _write(path, data):
+        """Write *data* to *path*; returns it forward-slashed, as stored."""
+        path = path.replace("\\", "/")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+
+    @staticmethod
+    def _read(path):
+        with open(path, "rb") as fh:
+            return fh.read()
+
+    def _reads(self, node):
+        """The bytes *node* reads now (its stored path resolved)."""
+        stored = cmds.getAttr(f"{node}.fileTextureName")
+        return self._read(MatUtils.to_absolute(stored, self.tmp_root, self.si_dir))
+
+    def _junction(self, link, target):
+        """A directory junction *link* naming *target* (no elevation needed;
+        ``test_mat_utils``' way), removed -- never its target -- by the
+        cleanups; skipped where none can be made."""
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(os.path.normpath(target), os.path.normpath(link))
+        except (ImportError, AttributeError, OSError) as error:
+            self.skipTest(f"no directory junction can be made here: {error}")
+        self.addCleanup(lambda: os.path.lexists(link) and os.rmdir(link))
+        return link
+
+    def test_move_never_takes_a_same_size_different_file_for_its_copy(self):
+        """A DIFFERENT file of the name and size at the destination passed the
+        old ``getsize`` test, so Move deleted the source -- the artist's only
+        copy -- and rebound the node to the other image (uncompressed maps of
+        one resolution always share a size)."""
+        theirs = self._write(f"{self.tmp_root}/same_size/wood.tga", b"THEIRS!!")
+        src = self._write(f"{self.tmp_root}/ext/wood.tga", b"OURS!!!!")
+        node = self._make_file_node("tex_same_size", src)
+
+        count = self.editor.set_texture_directory(
+            [node], os.path.dirname(theirs), relocate_mode="move"
+        )
+
+        self.assertEqual(self._read(src), b"OURS!!!!", "the only copy was deleted")
+        self.assertEqual(self._read(theirs), b"THEIRS!!")
+        self.assertEqual(count, 0)
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), src, "rebound to the other image"
+        )
+
+    def test_move_into_an_alias_of_the_source_folder_keeps_the_only_copy(self):
+        """A destination that is a junction (a subst, a mapped drive) naming the
+        source's own folder: the "copy" there IS the source, so Move removed it
+        -- the only copy -- and left the node on a path to nothing. The file
+        stays; the node reads it through the folder it was pointed at."""
+        src = self._write(f"{self.tmp_root}/real/metal.png", b"ONLY COPY")
+        alias = self._junction(
+            os.path.join(self.tmp_root, "alias"), os.path.dirname(src)
+        )
+        node = self._make_file_node("tex_alias", src)
+
+        count = self.editor.set_texture_directory([node], alias, relocate_mode="move")
+
+        self.assertEqual(self._read(src), b"ONLY COPY", "the only copy was deleted")
+        self.assertEqual(count, 1)
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "alias/metal.png")
+        self.assertEqual(self._reads(node), b"ONLY COPY")
+
+    def test_move_repaths_every_node_reading_one_file(self):
+        """Two nodes of the batch reading one file: the first moved it, the
+        second found its source gone, called the copy a "different size"
+        collision and was left on the deleted path."""
+        src = self._write(f"{self.tmp_root}/ext/stone.png", b"STONE")
+        nodes = [self._make_file_node(n, src) for n in ("tex_shared_a", "tex_shared_b")]
+        target = os.path.join(self.tmp_root, "shared_dest")
+
+        count = self.editor.set_texture_directory(nodes, target, relocate_mode="move")
+
+        self.assertEqual(count, 2)
+        for node in nodes:
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"), "shared_dest/stone.png"
+            )
+            self.assertEqual(self._reads(node), b"STONE")
+        self.assertFalse(os.path.exists(src))
+
+    def test_move_copies_a_file_a_node_outside_the_batch_still_reads(self):
+        """A node left out of the batch (an unselected row, a hidden Arnold
+        node) reading the same file was stranded on a deleted path."""
+        src = self._write(f"{self.tmp_root}/ext/moss.png", b"MOSS")
+        moved = self._make_file_node("tex_in_batch", src)
+        outside = self._make_file_node("tex_outside", src)
+
+        self.editor.set_texture_directory(
+            [moved], os.path.join(self.tmp_root, "moss_dest"), relocate_mode="move"
+        )
+
+        self.assertEqual(cmds.getAttr(f"{outside}.fileTextureName"), src)
+        self.assertEqual(self._read(src), b"MOSS", "the outside reader was stranded")
+        self.assertEqual(self._reads(moved), b"MOSS")
+
+    def test_move_never_rebinds_one_namesake_to_another(self):
+        """Two different same-sized files of one name in one batch: the second
+        was taken for the first's copy, its source deleted and its node bound
+        to the first's bytes. Set Directory keeps nothing apart in subfolders:
+        a name two files claim moves neither."""
+        wood = self._write(f"{self.tmp_root}/wood/diffuse.tga", b"WOOD")
+        metal = self._write(f"{self.tmp_root}/metal/diffuse.tga", b"METL")
+        nodes = {
+            self._make_file_node("tex_wood", wood): b"WOOD",
+            self._make_file_node("tex_metal", metal): b"METL",
+        }
+
+        self.editor.set_texture_directory(
+            list(nodes), os.path.join(self.tmp_root, "one"), relocate_mode="move"
+        )
+
+        for node, data in nodes.items():
+            self.assertEqual(self._reads(node), data, f"{node} reads another file")
+
+    def test_a_texture_below_the_target_is_brought_up_to_it(self):
+        """Set Directory is flat: "directly under the target" holds for a file
+        in one of its subfolders too (a gather would leave it in place)."""
+        target = os.path.join(self.tmp_root, "flat")
+        src = self._write(f"{target}/sub/rock.png", b"ROCK")
+        node = self._make_file_node("tex_below", src)
+
+        self.editor.set_texture_directory([node], target, relocate_mode="move")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "flat/rock.png")
+        self.assertEqual(self._reads(node), b"ROCK")
+        self.assertFalse(os.path.exists(src))
 
 
 class _Reported:
