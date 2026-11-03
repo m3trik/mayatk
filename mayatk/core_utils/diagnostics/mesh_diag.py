@@ -319,8 +319,9 @@ class MeshDiagnostics(_MeshDiagnosticsInternal):
             )
 
         cmds.select(objects)
-        mel.eval("changeSelectMode 1")
-        cmds.selectType(smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0)
+        if not cmds.about(batch=True):  # a UI to show the faces in; batch has none
+            mel.eval("changeSelectMode 1")
+            cmds.selectType(smp=0, sme=1, smf=0, smu=0, pv=0, pe=1, pf=0, puv=0)
         cmds.polySelectConstraint(mode=3, type=0x0008, size=3)
         # Flattened to individual face components — same granularity as
         # clean_geometry's select-mode return.

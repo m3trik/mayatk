@@ -40,6 +40,14 @@ Repository = "https://github.com/m3trik/mayatk"
 Changelog = "https://github.com/m3trik/mayatk/blob/main/CHANGELOG.md"
 Issues = "https://github.com/m3trik/mayatk/issues"
 
+# Operations (``python -m pythontk ops``): mayatk's declarations, and the
+# runner that gives each ``host="maya"`` call a fresh mayapy.
+[project.entry-points."pythontk.operations"]
+mayatk = "mayatk.operations"
+
+[project.entry-points."pythontk.operation_hosts"]
+maya = "mayatk:MayaSceneFiles.operation_host"
+
 [tool.setuptools.dynamic]
 version = {attr = "mayatk.__version__"}
 readme = {file = "docs/README.md", content-type = "text/markdown"}

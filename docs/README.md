@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-9441%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-8769%20passed-brightgreen.svg)](../test/)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2C%20Linux-lightgrey.svg)
 
 # mayatk
@@ -35,7 +35,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `core_utils` | `CoreUtils`, `Components`, `AutoInstancer`, MASH bridge, diagnostics, preview |
 | `display_utils` | Visibility & isolation, color ID, exploded view |
 | `edit_utils` | `Selection`, naming, primitives, snap, bevel, bridge, mirror, duplicate (linear/radial/grid), mesh graph |
-| `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX/USD, scene exporter, Blender + Unity bridges, WebXR preview |
+| `env_utils` | `MayaConnection`, `MayaSceneFiles` (the `maya` operation host: a fresh mayapy per `python -m pythontk ops` call, one kept per MCP session), workspace, namespace sandbox, references, hierarchy sync, FBX/USD, scene exporter, Blender + Unity bridges, WebXR preview |
 | `light_utils` | [Lightmap baker](lightmap_baker.md), [Light rigs](light_rig.md), HDR manager, lights-from-geometry |
 | `mat_utils` | `GameShader`, `RenderEffects` (per-object `opacity` / `highlight` channels), `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
 | `node_utils` | `NodeUtils`, `Attributes`, the Channels engine, [shared scene data nodes](data_nodes.md) |
@@ -63,7 +63,7 @@ mtk.EnvUtils.SCENE_UNIT_VALUES
 sel = mtk.Selection()
 ```
 
-For the full public surface (auto-generated, refreshed each release) see [`API_REGISTRY.md`](../API_REGISTRY.md).
+For the full public surface, search it (read live from the installed source): `python -m pythontk ops run api.search "query=<words>"`.
 
 Design notes: [Shadow Rig — a source-responsive rig type](shadow_rig_morphing.md) (the `Rig:` combo's planned *Morphing* entry: options weighed, a recommendation, the maintainer's decisions).
 
@@ -166,13 +166,14 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 
 ## Session safety
 
-`MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` — every call launches a fresh Maya on an unused port. The user's open session is never touched. The test runner (`test/run_tests.py`) defaults the same way; only `--reuse` overrides, and you should not pass it. See [CLAUDE.md](../CLAUDE.md) for the full rule.
+`MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` — every call launches a fresh Maya on an unused port. The user's open session is never touched. The test runner (`test/run_tests.py`) defaults the same way; `--reuse` keeps a mayapy it launched between runs, never one a person opened. See [AGENTS.md](../AGENTS.md) for the full rule.
 
 ---
 
 ## Guides
 
 - **[Shot Sequencer](shot_sequencer.md)** — the per-shot animation timeline: its Standard / Compact / Graph views, the shot, clip and key gestures, the graph editor, keys and header settings (the panel's `?` help links here).
+- **[Shot Manifest](shot_manifest.md)** — what the build-sheet checker and shot builder owns: it never creates scene objects or removes shots, never writes the sheet, and reconciles both ways with explicit verbs.
 - **[Scene data nodes](data_nodes.md)** — the `data_internal` / `data_export` carriers every tool keeps scene-wide metadata on: what each record holds, and what an FBX, GLB or USD export carries.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
 - **[Texture Combine](texture_combine.md)** — several materials into one atlas and one material, in place: stack-aware packing, per-material / mesh / island scale overrides, lightmap consolidation, and restore / re-combine from a scene record; plus the UV / texture Transfer mode (the panel's `?` help links here).
@@ -190,11 +191,11 @@ Format specs (co-located with the code that consumes them):
 
 ## Links
 
-- **Full API:** [`API_REGISTRY.md`](../API_REGISTRY.md) · [`API_CHANGES.md`](../API_CHANGES.md)
+- **Full API:** `python -m pythontk ops run api.search "query=<words>"` (the installed source, searched)
 - **Blender parity:** [blendertk](https://github.com/m3trik/blendertk) mirrors this package's public API (`btk.X` ↔ `mtk.X`); the subpackage/class correspondence map — including what is deliberately absent on each side — is [blendertk/docs/STRUCTURE.md](https://github.com/m3trik/blendertk/blob/main/docs/STRUCTURE.md). Consult it before adding, moving, or renaming a public symbol here.
 - **Test suite:** [`test/README.md`](../test/README.md) — suite layout, base classes, runner invocations
 - **Changelog:** [`CHANGELOG.md`](../CHANGELOG.md)
-- **Contributor / AI-agent guide:** [`CLAUDE.md`](../CLAUDE.md)
+- **Contributor / AI-agent guide:** [`AGENTS.md`](../AGENTS.md)
 - **PyPI:** https://pypi.org/project/mayatk/
 - **Issues:** https://github.com/m3trik/mayatk/issues
 

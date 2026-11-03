@@ -757,10 +757,16 @@ class _AnimationTasksMixin(_TaskDataMixin):
         EVERY carrier, not just the canonical one: an assembly's referenced
         modules publish onto their own ``NS:data_export``, so shipping the root
         alone dropped a referenced module's lightmap manifest from the
-        deliverable (see ``DataNodes.get_export_nodes``).
+        deliverable (see ``DataNodes.get_export_nodes``). A carrier the
+        publish removed -- an import's leftover (``ptk.SceneStoreBase.migrate``)
+        -- leaves the set with it, or the write would warn it no longer exists.
         """
         from mayatk.node_utils.data_nodes import DataNodes
 
+        objects = self.objects or []
+        live = [o for o in objects if not DataNodes.is_carrier(o) or cmds.objExists(o)]
+        if len(live) != len(objects):
+            self.objects = live
         nodes = DataNodes.get_export_nodes()
         if not nodes:
             self.logger.debug("No data_export node in scene — nothing to include.")

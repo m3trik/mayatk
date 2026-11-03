@@ -225,23 +225,28 @@ class TestEnvUtils(MayaTkTestCase):
     # Plugin Management Tests
     # -------------------------------------------------------------------------
 
-    def test_load_plugin_is_a_deprecated_alias_of_the_plugin_door(self):
-        """Moved to ``Plugins.load`` / ``Plugins.is_loaded`` (the one door,
-        ``test_plugins``): the aliases warn and still load and answer."""
-        plugin_name = "objExport"
-        if cmds.pluginInfo(plugin_name, q=True, loaded=True):
-            cmds.unloadPlugin(plugin_name)
+    def test_the_removed_plugin_names_name_their_new_home(self):
+        """``EnvUtils.is_plugin_loaded`` / ``load_plugin`` left when their
+        window closed: ``Plugins.is_loaded`` / ``Plugins.load`` are the one
+        door (``test_plugins``). The flat ``mtk.is_plugin_loaded`` /
+        ``mtk.load_plugin`` read raises ``MovedNameError`` naming that home
+        and the release the names left in.
+        Added: 2026-11-03"""
+        import mayatk as mtk
+        from pythontk.core_utils.module_resolver import MovedNameError
 
-        with self.assertWarns(DeprecationWarning):
-            EnvUtils.load_plugin(plugin_name)
-        self.assertTrue(cmds.pluginInfo(plugin_name, q=True, loaded=True))
-        with self.assertWarns(DeprecationWarning):
-            self.assertTrue(EnvUtils.is_plugin_loaded(plugin_name))
-
-    def test_load_plugin_invalid(self):
-        """The alias keeps its ValueError for a plugin Maya cannot find."""
-        with self.assertWarns(DeprecationWarning), self.assertRaises(ValueError):
-            EnvUtils.load_plugin("non_existent_plugin_xyz")
+        for name, home in (
+            ("is_plugin_loaded", "mayatk.Plugins.is_loaded"),
+            ("load_plugin", "mayatk.Plugins.load"),
+        ):
+            self.assertFalse(hasattr(EnvUtils, name))
+            with self.assertRaises(MovedNameError) as caught:
+                getattr(mtk, name)
+            self.assertEqual(
+                (caught.exception.new_home, caught.exception.version),
+                (home, "0.31.0"),
+            )
+            self.assertEqual(mtk.MOVED_NAMES[f"EnvUtils.{name}"], (home, "0.31.0"))
 
     # -------------------------------------------------------------------------
     # Recent Files & Projects Tests

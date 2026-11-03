@@ -666,15 +666,6 @@ class _TextureTransferInternal:
 class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
     """Move textures between UV layouts of the same mesh(es) -- see module doc."""
 
-    @ptk.ClassProperty
-    @ptk.Deprecation.symbol(
-        "ShaderAttributeMap.CONSTANT_ATTRS", remove_in="0.23.0", since="2026-10-04"
-    )
-    def CONSTANT_ATTRS(cls) -> Dict[str, Dict[str, str]]:
-        """The table moved to :attr:`ShaderAttributeMap.CONSTANT_ATTRS`, read
-        through :meth:`ShaderAttributeMap.read_constant`."""
-        return ShaderAttributeMap.CONSTANT_ATTRS
-
     #: What an assigned material is (``transfer``'s *assign_from*): a copy of
     #: the target's, a copy of the source's, or the target's own, re-used.
     ASSIGN_FROM = ("target", "source", "in_place")

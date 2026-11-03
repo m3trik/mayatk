@@ -142,7 +142,7 @@ class TestGuiDeferralDiagnostics(unittest.TestCase):
 
     def _defer(self):
         """Drive the GUI pass with a connection that always fails."""
-        self.runner.connect_to_maya = lambda: False
+        self.runner.connect_to_maya = lambda **_: False
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             result = self.runner._run_via_port(
@@ -431,7 +431,8 @@ class TestTheConfigNamesALaunchedMaya(unittest.TestCase):
         self.runner.reuse_instance = reuse
         self.runner.keep_maya = keep_maya
         self.runner.connection = mock.Mock(mode=mode)
-        self.runner.connect_to_maya = lambda: True
+        self.connects = []
+        self.runner.connect_to_maya = lambda **kw: self.connects.append(kw) or True
         self.runner.send_code = lambda code: False
         with contextlib.redirect_stdout(io.StringIO()):
             self.runner._run_via_port(
@@ -452,11 +453,19 @@ class TestTheConfigNamesALaunchedMaya(unittest.TestCase):
                 self.assertIs(config.get("launched"), False, config)
 
     def test_the_users_own_session_is_not(self):
-        """The in-session harness (Script Editor), and an attach (``--reuse``)."""
-        for mode, reuse in (("interactive", False), ("port", True)):
-            with self.subTest(mode=mode, reuse=reuse):
-                config = self._gui_config(mode, reuse)
-                self.assertFalse(config.get("launched", False), config)
+        """The in-session harness (Script Editor)."""
+        config = self._gui_config("interactive")
+        self.assertFalse(config.get("launched", False), config)
+
+    def test_a_reuse_runs_gui_pass_is_a_maya_it_launched(self):
+        """``--reuse`` keeps headless mayapys only: its GUI pass is a new Maya."""
+        self.assertIs(self._gui_config("port", reuse=True).get("launched"), True)
+
+    def test_a_no_wait_run_connects_to_a_maya_that_outlives_it(self):
+        self._gui_config("port")
+        self.assertEqual(self.connects[-1], {"outlives_run": False})
+        self._gui_config("port", no_wait=True)
+        self.assertEqual(self.connects[-1], {"outlives_run": True})
 
     def test_k_reaches_the_chunk_and_the_gui_pass(self):
         """``-k`` narrows inside the driver, so both phases must be handed it."""
@@ -527,6 +536,12 @@ class TestTheCommandLine(unittest.TestCase):
         built.assert_not_called()
         self.assertIn("--quick", out)
 
+    def test_show_is_handed_to_the_runner(self):
+        for argv, wanted in ((["--list"], False), (["--show", "--list"], True)):
+            with mock.patch.object(rt.sys, "argv", ["run_tests.py", *argv]),                     mock.patch.object(rt, "MayaTestRunner") as built,                     contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(rt.main(), rt.EXIT_OK)
+            self.assertIs(built.call_args.kwargs["show"], wanted)
+
     def test_k_is_collected_and_handed_to_the_runner(self):
         with mock.patch.object(rt.sys, "argv", ["run_tests.py", "--list", "-k", "a", "-k", "b"]), \
                 mock.patch.object(rt, "MayaTestRunner") as built, \
@@ -535,26 +550,179 @@ class TestTheCommandLine(unittest.TestCase):
         self.assertEqual(built.call_args.kwargs["patterns"], ["a", "b"])
 
 
-class TestAReusedMayaOutlivesTheRun(unittest.TestCase):
-    """``--reuse`` attaches to the user's Maya; the run's ``finally`` must
-    leave it open. Regression: it called ``shutdown(force=True)``, which
-    closed the attached session by its port with no save prompt."""
+class TestTheGuiMayaIsHidden(unittest.TestCase):
+    """The GUI pass's Maya starts on a private desktop (``connect(hidden=True)``):
+    it takes neither the user's focus nor their input. ``--show`` shows it, and
+    so does a Maya the run leaves open (``--keep-maya``, ``--no-wait``): the
+    user's from then on, and a hidden one would end with the runner."""
 
-    def test_the_attached_session_is_never_closed(self):
-        from mayatk.env_utils.maya_connection import MayaConnection
+    def _hidden(self, show=False, keep_maya=False, outlives_run=False):
+        runner = rt.MayaTestRunner(port=7904, keep_maya=keep_maya, show=show)
+        self.addCleanup(runner.results_file.unlink, True)
+        runner.connection = mock.Mock()
+        runner.connection.connect.return_value = False
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(runner.connect_to_maya(outlives_run=outlives_run))
+        return runner.connection.connect.call_args.kwargs.get("hidden")
 
-        conn = MayaConnection()
-        conn.is_connected, conn.mode, conn.port = True, "port", 7005  # attached
-        runner = mock.MagicMock(connection=conn)
+    def test_a_maya_the_run_closes_is_hidden(self):
+        self.assertIs(self._hidden(), True)
+
+    def test_show_and_a_maya_left_open_are_not(self):
+        for kwargs in ({"show": True}, {"keep_maya": True}, {"outlives_run": True}):
+            with self.subTest(**kwargs):
+                self.assertIs(self._hidden(**kwargs), False)
+
+
+class TestReuseKeepsOnlyMayapysThisToolingLaunched(unittest.TestCase):
+    """``--reuse`` runs the headless chunks in mayapys this tooling launched and
+    keeps between runs (pythontk's ``SessionOperationHost``); it never attaches
+    to a Maya. Its old meaning attached to whatever Maya held the port --
+    usually the user's -- and reset their scene.
+
+    No Maya: the kept mayapy is a stub session, or the chunk handle a fake.
+    """
+
+    def _runner(self, **kwargs):
+        runner = rt.MayaTestRunner(port=7905, reuse_instance=True, **kwargs)
+        self.addCleanup(runner.results_file.unlink, True)
+        runner.temp_test_dir.mkdir(exist_ok=True)
+        return runner
+
+    def _cleanup_chunk_files(self, runner):
+        def clean():
+            for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+                stale.unlink(missing_ok=True)
+
+        self.addCleanup(clean)
+
+    def test_the_gui_pass_still_launches_a_new_maya(self):
+        runner = self._runner()
+        runner.connection = mock.Mock()
+        runner.connection.connect.return_value = False
+        with contextlib.redirect_stdout(io.StringIO()):
+            runner.connect_to_maya()
+        kwargs = runner.connection.connect.call_args.kwargs
+        self.assertEqual(
+            (kwargs["force_new_instance"], kwargs["confirm_existing"]), (True, True)
+        )
+
+    def test_reuse_no_longer_routes_the_run_through_the_gui(self):
+        runner = mock.MagicMock(connection=None)
         runner.run_tests.return_value = {"dry_run": True}
         with mock.patch.object(rt.sys, "argv", ["run_tests.py", "--reuse", "core_utils"]), \
-                mock.patch.object(rt, "MayaTestRunner", return_value=runner), \
-                mock.patch.object(MayaConnection, "close_instance") as by_port, \
-                mock.patch("pythontk.AppLauncher.close_process") as by_pid, \
+                mock.patch.object(rt, "MayaTestRunner", return_value=runner) as built, \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(rt.main(), rt.EXIT_OK)
-        by_port.assert_not_called()
-        by_pid.assert_not_called()
+        self.assertIs(built.call_args.kwargs["reuse_instance"], True)
+        self.assertIs(runner.run_tests.call_args.kwargs["gui"], False)
+
+    def test_the_kept_sessions_are_made_before_the_runs_temp_is_isolated(self):
+        """The session's folder must outlive the run: made in the run's
+        throwaway temp root, the next run would find no instance to reuse."""
+        runner = self._runner()
+        order = []
+        status = {"failed_modules": [], "not_run": []}
+        with mock.patch.object(rt, "_inside_maya", return_value=False), \
+                mock.patch.object(runner, "_keep_sessions", side_effect=lambda: order.append("keep") or []), \
+                mock.patch.object(runner, "_isolate_temp", side_effect=lambda: order.append("isolate")), \
+                mock.patch.object(runner, "_run_headless", return_value=(True, [])), \
+                mock.patch.object(runner, "_finalize_results", return_value=status), \
+                contextlib.redirect_stdout(io.StringIO()):
+            runner.run_tests(["test_x"])
+        self.assertEqual(order, ["keep", "isolate"])
+
+    def test_a_chunk_runs_as_a_call_in_its_slots_kept_mayapy(self):
+        import json
+
+        runner = self._runner()
+        self._cleanup_chunk_files(runner)
+        runner._sessions = ["slot-0"]
+        runner._free_slots.put(0)
+        calls = []
+
+        def kept_chunk(slot, cfg_path, log_path):
+            # What the driver does in the kept mayapy, written at once.
+            config = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+            with open(config["progress_file"], "w", encoding="utf-8") as f:
+                f.write("INIT_DONE\nSTARTED test_x\nFINISHED test_x\nDONE\n")
+            with open(config["results_file"], "w", encoding="utf-8") as f:
+                f.write("\ntest_x: PASS [0.1s]\n  Tests: 1, Failures: 0, Errors: 0, Skipped: 0\n")
+            calls.append(slot)
+            return mock.Mock(poll=mock.Mock(return_value=0), pid=4321)
+
+        with mock.patch.object(runner, "_kept_chunk", side_effect=kept_chunk), \
+                mock.patch.object(rt.subprocess, "Popen") as fresh, \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = runner._run_chunk("mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False)
+        self.assertEqual(result, (True, []))
+        self.assertEqual(calls, [0])
+        fresh.assert_not_called()
+        self.assertEqual(runner._free_slots.get_nowait(), 0)  # the slot is free again
+
+    def test_a_kept_mayapy_that_cannot_start_hands_the_run_to_fresh_ones(self):
+        import pythontk as ptk
+
+        runner = self._runner()
+        self._cleanup_chunk_files(runner)
+        session = mock.Mock()
+        session.queue.worker.return_value = {}
+        session.run.return_value = ptk.Outcome.refused(
+            "maya.python.exec", "cannot start this session's maya instance: no licence", False
+        )
+        runner._sessions = [session]
+        runner._free_slots.put(0)
+        refused = mock.patch.object(
+            rt.subprocess, "Popen", side_effect=OSError("launch refused by the test")
+        )
+        with refused as fresh, contextlib.redirect_stdout(io.StringIO()) as out:
+            ok, deferred = runner._run_chunk(
+                "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
+            )
+        self.assertIn("no licence", runner._reuse_broken)
+        self.assertEqual(fresh.call_count, 1)  # the chunk started over in a fresh one
+        self.assertEqual(deferred, ["test_x"])  # which this test refused
+        self.assertIn("[REUSE]", out.getvalue())
+
+    def test_killing_a_kept_chunk_cancels_its_call(self):
+        import time
+
+        import pythontk as ptk
+
+        session = mock.Mock()
+        session.queue.worker.return_value = {"pid": 99}
+
+        def run(entry, request, scope=None):
+            self.assertEqual(entry["id"], "maya.python.exec")
+            self.assertIn("run_job", request.args["code"])
+            while not scope.poll():
+                time.sleep(0.01)
+            return ptk.Outcome(op=entry["id"], status="cancelled", error=scope.reason)
+
+        session.run.side_effect = run
+        session.host.grace = 1
+        log = Path(self._runner().temp_test_dir, f"kept_{os.getpid()}.log")
+        self.addCleanup(log.unlink, True)
+        chunk = rt._KeptChunk(session, "_driver.run_job('c', 'l')", log)
+        self.assertIsNone(chunk.poll())
+        chunk.kill()
+        # Back only once the call ended: a run that aborts next leaves none running.
+        self.assertEqual((chunk.pid, chunk.poll()), (99, 1))
+        self.assertEqual(chunk.wait(10), 1)
+        self.assertIsNone(chunk.could_not_start())
+        # Why it ended is in the chunk's log, where a crash is read.
+        self.assertIn("[kept mayapy] cancelled", log.read_text(encoding="utf-8"))
+
+    def test_a_second_run_on_this_checkout_takes_other_kept_mayapys(self):
+        first, second = self._runner(), self._runner()
+        first.mayapy = second.mayapy = sys.executable  # never launched here
+        mine = first._keep_sessions()
+        self.addCleanup(lambda: [s.close() for s in mine])
+        theirs = second._keep_sessions()
+        self.addCleanup(lambda: [s.close() for s in theirs])
+        self.assertEqual(len(mine), first.jobs)
+        self.assertTrue(theirs, "every slot was refused")
+        self.assertFalse({s.session for s in mine} & {s.session for s in theirs})
 
 
 class TestAnInSessionRunLeavesTheUsersTempAlone(unittest.TestCase):

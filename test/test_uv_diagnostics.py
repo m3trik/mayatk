@@ -501,10 +501,10 @@ class TestNonManifoldUvs(MayaTkTestCase):
         )
 
     def test_repaired_mesh_unfolds(self):
-        from mayatk import load_plugin
+        from mayatk import Plugins
 
         try:
-            load_plugin("Unfold3D")
+            Plugins.load("Unfold3D")
         except Exception:
             self.skipTest("Unfold3D plugin unavailable")
         xform, shape = self._make_corrupt_strip()

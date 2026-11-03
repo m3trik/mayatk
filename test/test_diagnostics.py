@@ -10,9 +10,11 @@ Covers:
 """
 
 import unittest
+from unittest.mock import patch
 
 import maya.cmds as cmds
 
+from mayatk.core_utils.diagnostics import mesh_diag
 from mayatk.core_utils.diagnostics.animation_diag import AnimCurveDiagnostics
 from mayatk.core_utils.diagnostics.mesh_diag import MeshDiagnostics
 from mayatk.core_utils.diagnostics.transform_diag import TransformDiagnostics
@@ -173,6 +175,18 @@ class TestMeshDiagnostics(MayaTkTestCase):
         cmds.select(clear=True)
         with self.assertRaises(ValueError):
             MeshDiagnostics.get_ngons(objects=None)
+
+    def test_get_ngons_runs_without_the_ui(self):
+        # A fresh mayapy (the maya.* operations run there) sources no UI
+        # scripts, so changeSelectMode does not exist: finding must not need it.
+        facet = cmds.polyCreateFacet(
+            p=[(0, 0, 0), (2, 0, 0), (2, 2, 0), (1, 3, 0), (0, 2, 0)]
+        )[0]
+        missing = RuntimeError('Cannot find procedure "changeSelectMode".')
+        with patch.object(mesh_diag.mel, "eval", side_effect=missing), patch.object(
+            mesh_diag.cmds, "about", return_value=True
+        ):
+            self.assertEqual(MeshDiagnostics.get_ngons(objects=[facet]), [f"{facet}.f[0]"])
 
 
 class TestNonOrthogonalLocal(MayaTkTestCase):

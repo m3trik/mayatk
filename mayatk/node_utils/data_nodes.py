@@ -502,6 +502,58 @@ class DataNodes(ptk.SceneStoreBase):
             found[scope] = node
         return found
 
+    @staticmethod
+    def _shaped_as_export_carrier(node: str) -> bool:
+        """Whether *node* has the ``data_export`` carrier's shape, as
+        :meth:`ensure_export` makes it: a plain transform (a joint is not one)
+        whose shapes are all locators, at least one. A name alone is no
+        carrier: a user's mesh or joint may be called ``data_export1``."""
+        if cmds.nodeType(node) != "transform":
+            return False
+        shapes = cmds.listRelatives(node, shapes=True, fullPath=True) or []
+        return bool(shapes) and all(cmds.nodeType(s) == "locator" for s in shapes)
+
+    @classmethod
+    def _leftover_carriers(cls) -> Dict[str, Tuple[ptk.Scope, str]]:
+        """Every carrier node beside the scene's own of its scope that no
+        reference owns, by long name: what a plain import left -- a numbered
+        ``data_export1``, a namespace it kept (``MOD:data_export``), a copy
+        under a group. A copy is told by its name AND its shape: a
+        ``data_export`` copy is a locator transform
+        (:meth:`_shaped_as_export_carrier`), so a user's mesh or joint named
+        like one is never offered. A referenced module's is its file's, and
+        stays; so does one parenting other nodes, which are not a migration's
+        to delete."""
+        found: Dict[str, Tuple[ptk.Scope, str]] = {}
+        if cmds is None:
+            return found
+        for scope, name in cls.NAMES.items():
+            scope = _Scope(scope)
+            kind = "network" if scope is _Scope.PRIVATE else "transform"
+            own = cls._resolve(name)
+            own = (cmds.ls(own, long=True) or [None])[0] if own else None
+            nodes = cmds.ls(
+                f"{name}*", f"*:{name}*", long=True, recursive=True, type=kind
+            )
+            for node in nodes or []:
+                if node == own or not cls.is_carrier(node, scope):
+                    continue
+                if scope is _Scope.DELIVERABLE and not cls._shaped_as_export_carrier(
+                    node
+                ):
+                    continue
+                if cmds.referenceQuery(node, isNodeReferenced=True):
+                    continue
+                if cmds.listRelatives(node, children=True, type="transform"):
+                    logger.warning(
+                        "%s: a carrier an import left parents other nodes; "
+                        "left as it is.",
+                        node,
+                    )
+                    continue
+                found[node] = (scope, node)
+        return found
+
     @classmethod
     def _carrier_values(cls, carrier: str) -> Dict[str, object]:
         return cls._node_values(carrier)

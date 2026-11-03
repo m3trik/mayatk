@@ -2481,6 +2481,12 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         namespaced = cmds.ls(
             cmds.createNode("transform", name="MODULE:data_export"), long=True
         )[0]
+        # The module's manifest, which the scene's own carrier lacks: a stand-in
+        # that held nothing would be an import's empty leftover, which the
+        # commit's migration removes (``ptk.SceneStoreBase.migrate``).
+        manifest = {"version": ptk.SceneRecords.LIGHTMAPS.version, "objects": []}
+        cmds.addAttr(namespaced, longName="lightmaps", dataType="string")
+        cmds.setAttr(f"{namespaced}.lightmaps", json.dumps(manifest), type="string")
         mesh = cmds.ls(cmds.polyCube(name="ns_carrier_mesh")[0], long=True)[0]
 
         with (
