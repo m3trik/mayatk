@@ -4,9 +4,9 @@
 
 Runs under mayapy in a FRESH headless standalone Maya (``maya.standalone``) — it
 never attaches to a running session, so it is safe per the session-safety rule.
-This is the DCC half of the drift gate: the static registry walker cannot import
-Maya, so the live surface (which sees metaclass/mixin-injected members) is dumped
-here and diffed against the committed registry from a normal shell.
+This is the DCC half of the drift gate: the static read (``ApiSurface.read``)
+cannot import Maya, so the live surface (which sees metaclass/mixin-injected
+members) is dumped here and diffed against the static read from a normal shell.
 
     & "C:\\Program Files\\Autodesk\\Maya2025\\bin\\mayapy.exe" mayatk\\test\\dump_runtime_surface.py
     python m3trik/scripts/verify_runtime_surface.py verify mayatk --runtime mayatk/API_RUNTIME.json

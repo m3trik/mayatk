@@ -726,18 +726,25 @@ class MatUtils(_MatUtilsInternal):
 
     @staticmethod
     @CoreUtils.undoable
-    def rename_mat(material: str, name: str) -> str:
+    def rename_mat(material: str, name: str, ctx=None) -> str:
         """Rename *material* to *name*, one undo step. Twin of blendertk's
         ``MatUtils.rename_mat``.
 
+        Parameters:
+            material: The material's current name.
+            name: Its new name.
+            ctx: An operation context (``ptk.OpContext``); in a dry run the
+                rename is listed, not made.
+
         Returns:
-            str: The name Maya gave it (it adjusts invalid characters and clashes).
+            str: The name Maya gave it (it adjusts invalid characters and
+            clashes); in a dry run, *name*.
 
         Raises:
             ValueError: No material named *material*.
             RuntimeError: Maya refused (a read-only or locked node).
         """
-        return MatUtils._rename_mat(material=material, name=name)
+        return MatUtils._rename_mat(material=material, name=name, ctx=ctx)
 
     @staticmethod
     @CoreUtils.undoable

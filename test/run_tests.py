@@ -12,7 +12,9 @@ crashes or hangs headlessly is attributed via progress markers, the chunk
 resumes in a fresh process, and the offender is deferred to a single GUI
 pass at the end (alongside the known-GUI-only modules in GUI_REQUIRED).
 The GUI pass launches a NEW Maya via command port — user sessions are never
-touched.
+touched — on a private desktop (Windows): it takes neither your focus nor your
+input. --show puts it on yours; a Maya the run leaves open (--keep-maya,
+--no-wait) shows too.
 
 The in-session harness lives in _suite_driver.py and is shared by both
 paths, so headless and GUI runs behave identically per module.
@@ -36,10 +38,23 @@ Usage:
     python run_tests.py --no-wait                # Fire-and-forget (GUI mode only)
     python run_tests.py --timeout 7200           # GUI-pass hard ceiling (seconds); a
                                                  # stalled pass ends sooner, on its own
-    python run_tests.py --keep-maya              # Keep GUI Maya open after tests
-    python run_tests.py --reuse                  # Reuse existing Maya (CAUTION: resets scene; implies --gui; left open)
+    python run_tests.py --keep-maya              # Keep GUI Maya open after tests (shown)
+    python run_tests.py --show                   # Show the GUI Maya (default: hidden)
+    python run_tests.py --reuse                  # Headless chunks in a mayapy this tooling keeps
+                                                 # between runs (never a Maya a person opened)
 
 Notes:
+    --reuse runs each headless chunk as a call in a mayapy this tooling
+    launched and keeps (pythontk's SessionOperationHost; one per --jobs slot,
+    per checkout): the first run starts it, later runs reuse it, and it ends
+    by itself KEEP_SECONDS after the last chunk, freeing its licence seat. It
+    imports mayatk and the tests afresh for every chunk, and restarts when
+    other code it loaded (pythontk, uitk) changes. A chunk that crashes or
+    hangs stops it, and the rest resume in a fresh one. Chunks share one
+    process across runs, so a test that leaks native state can affect a later
+    chunk: a fresh run (no --reuse) is the reference. The GUI pass is always
+    a fresh hidden Maya.
+
     --jobs > 1 runs multiple mayapy chunks concurrently.  Standalone
     initializations are staggered (one at a time) to avoid license-checkout
     races; if a run ever hangs at init, drop back to --jobs 1 and let the
@@ -68,9 +83,11 @@ Directory Structure:
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
+import queue
 import re
 import shutil
 import socket
@@ -274,6 +291,67 @@ def _split_markers(markers: List[str]) -> Tuple[List[str], set, bool, bool]:
     return started, finished, "DONE" in markers, "INIT_DONE" in markers
 
 
+class _KeptChunk:
+    """A chunk run as one call in a kept mayapy (``--reuse``), shaped like the
+    ``Popen`` of a fresh chunk for :meth:`MayaTestRunner._run_chunk`'s loop:
+    ``poll``, ``kill``, ``wait``, ``pid``. Killing it cancels the call, and the
+    session stops a mayapy still running it after its grace.
+    """
+
+    def __init__(self, session, code: str, log_path: Path):
+        import pythontk as ptk
+
+        self.scope = ptk.CancelScope("mayatk tests")
+        self.outcome = None
+        self.returncode: Optional[int] = None
+        self._session = session
+        entry = ptk.Operation(
+            "maya.python.exec", "pythontk:PythonConsole.run", effect="code", host="maya"
+        ).describe()
+        request = ptk.OpRequest(op=entry["id"], args={"code": code}, dry_run=False)
+
+        def call() -> None:
+            outcome = session.run(entry, request, scope=self.scope)
+            self.outcome = outcome
+            self.returncode = 0 if outcome.ok else 1
+            if not outcome.ok and outcome.error:
+                # The chunk's log is where a crash is read: a driver that never
+                # started (an import error in the edited code) says why there.
+                try:
+                    with open(log_path, "a", encoding="utf-8", errors="replace") as log:
+                        log.write(f"\n[kept mayapy] {outcome.status}: {outcome.error}\n")
+                except OSError:
+                    pass
+
+        self._thread = threading.Thread(target=call, name="mayatk-kept-chunk", daemon=True)
+        self._thread.start()
+
+    @property
+    def pid(self) -> Optional[int]:
+        """The kept mayapy's pid, once it serves."""
+        return (self._session.queue.worker() or {}).get("pid")
+
+    def poll(self) -> Optional[int]:
+        return None if self._thread.is_alive() else self.returncode
+
+    def kill(self) -> None:
+        """Cancel the call and wait while the session stops it (or, past its
+        grace, the mayapy), so a run that aborts next leaves no chunk running."""
+        self.scope.cancel("the runner stopped this chunk")
+        self._thread.join((self._session.host.grace or 0) + 10)
+
+    def wait(self, timeout: Optional[float] = None) -> Optional[int]:
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise subprocess.TimeoutExpired("kept mayapy", timeout)
+        return self.returncode
+
+    def could_not_start(self) -> Optional[str]:
+        """Why the kept mayapy never took the call, or ``None``."""
+        error = (self.outcome.error or "") if self.outcome is not None else ""
+        return error if error.startswith("cannot start this session") else None
+
+
 def _parse_module_blocks(text: str) -> List[dict]:
     """Parse per-module result blocks out of a results-file text."""
     records = []
@@ -312,6 +390,7 @@ class MayaTestRunner:
         wait_timeout: Optional[int] = None,
         keep_maya: bool = False,
         patterns: Optional[List[str]] = None,
+        show: bool = False,
     ):
         self.host = host
         #: ``-k`` test-id filters, handed to every chunk / GUI pass (the driver's
@@ -321,6 +400,8 @@ class MayaTestRunner:
         self.reuse_instance = reuse_instance
         # The GUI Maya stays open after the run (--keep-maya): see _run_via_port.
         self.keep_maya = keep_maya
+        # The GUI Maya on the user's desktop (--show), not a private one.
+        self.show = show
         self.mayapy = mayapy
         self.chunk_size = max(1, chunk_size)
         self.jobs = max(1, jobs)
@@ -345,6 +426,14 @@ class MayaTestRunner:
         self.results_file = (
             self.temp_test_dir / f"test_results_{port}_{os.getpid()}.txt"
         )
+
+        #: The kept mayapys of a ``--reuse`` run, one per --jobs slot
+        #: (:meth:`_keep_sessions`); empty: every chunk in a fresh mayapy.
+        self._sessions: list = []
+        self._free_slots: "queue.Queue[int]" = queue.Queue()
+        #: Why the kept mayapy could not start, once it could not: the rest of
+        #: the run uses fresh ones.
+        self._reuse_broken: Optional[str] = None
 
         self._merge_lock = threading.Lock()
         self._print_lock = threading.Lock()
@@ -389,29 +478,25 @@ class MayaTestRunner:
     # Connection (GUI / command-port path)
     # ------------------------------------------------------------------
 
-    def connect_to_maya(self):
+    def connect_to_maya(self, outlives_run: bool = False):
         """Connect to Maya using MayaConnection.
 
-        By default launches a NEW Maya instance to protect the user's session.
-        Pass --reuse on the CLI (or reuse_instance=True) to attach to an
-        already-running instance instead.
+        Always launches a NEW Maya instance: a user's session is never touched
+        (``--reuse`` keeps only the headless mayapys this tooling launched).
+
+        The Maya it launches runs on a private desktop, where it takes neither
+        the user's focus nor their input -- unless shown (--show), or left open
+        after the run (--keep-maya, or *outlives_run*: --no-wait): that Maya is
+        the user's from then on, and a hidden one would end with this process.
         """
         if not self.connection:
             print("[ERROR] MayaConnection not available")
             return False
 
-        force_new = not self.reuse_instance
-
-        if force_new:
-            print(
-                "[INFO] Launching a NEW Maya instance for testing "
-                "(user sessions will not be touched)."
-            )
-        else:
-            print(
-                "[WARNING] --reuse flag active: connecting to an EXISTING Maya "
-                "instance. The current scene WILL be modified/reset by tests!"
-            )
+        print(
+            "[INFO] Launching a NEW Maya instance for testing "
+            "(user sessions will not be touched)."
+        )
 
         # Tee the attempt: MayaConnection prints the only diagnosis there is
         # ("Maya process exited prematurely", "Timeout waiting for Maya Command
@@ -422,8 +507,9 @@ class MayaTestRunner:
                 mode="auto",
                 port=self.port,
                 host=self.host,
-                force_new_instance=force_new,
-                confirm_existing=not self.reuse_instance,
+                force_new_instance=True,
+                confirm_existing=True,
+                hidden=not (self.show or self.keep_maya or outlives_run),
             ):
                 print(f"[OK] Connected to Maya in {self.connection.mode} mode")
                 if not self.verify_connection():
@@ -800,6 +886,68 @@ except Exception as e:
 
     #: Seconds a killed chunk gets to exit before it is abandoned (:meth:`_reap`).
     REAP_TIMEOUT = 30
+    #: Seconds a kept mayapy (--reuse) waits for the next chunk before it ends
+    #: by itself, freeing its licence seat.
+    KEEP_SECONDS = 900
+    #: Seconds a kept mayapy has to stop a cancelled chunk before it is killed:
+    #: the driver never looks at a cancel, so this is how long a kill waits.
+    KEEP_GRACE = 5
+    #: Kept mayapys a run may look past while other runs on this checkout hold
+    #: theirs (each run claims its own; none left: fresh chunks).
+    SPARE_SLOTS = 4
+
+    def _keep_sessions(self) -> list:
+        """The kept mayapy of each --jobs slot (--reuse), one per checkout and
+        mayapy: a session keyed by this checkout's root and the interpreter, so
+        two worktrees never share one, nor a run naming another Maya (--mayapy). Made before the run isolates its temp, which would put the
+        session's folder in the run's throwaway root. ``[]`` with no mayapy.
+        """
+        mayapy = self.mayapy or find_mayapy()
+        if not mayapy:
+            return []
+        import pythontk as ptk
+
+        checkout = hashlib.sha1(
+            os.path.normcase(f"{SCRIPTS_ROOT}|{os.path.abspath(mayapy)}").encode("utf-8")
+        ).hexdigest()[:10]
+        batch = ptk.BatchOperationHost(
+            mayapy,
+            scene_files="mayatk:MayaSceneFiles",
+            packages=("mayatk",),
+            env=self._child_env(),
+            timeout=None,  # the runner's own per-module budget decides a hang
+            grace=self.KEEP_GRACE,
+        )
+        sessions = []
+        index = 0
+        while len(sessions) < self.jobs and index < self.jobs + self.SPARE_SLOTS:
+            session = ptk.SessionOperationHost(
+                batch,
+                f"tests-{checkout}-{index}",
+                "maya",
+                keep=self.KEEP_SECONDS,
+                reload=[str(SCRIPTS_ROOT / "mayatk")],
+            )
+            index += 1
+            if not session.claim():  # another run on this checkout is using it
+                continue
+            # The runner's licence trap decides a stalled start, not the session.
+            session.START_TIMEOUT = self.init_timeout + self.init_grace + 60
+            self._free_slots.put(len(sessions))
+            sessions.append(session)
+        return sessions
+
+    def _kept_chunk(self, slot: int, cfg_path: Path, log_path: Path) -> "_KeptChunk":
+        """One chunk as a call in slot *slot*'s kept mayapy (--reuse)."""
+        log_path.write_text("", encoding="utf-8")
+        code = (
+            "import importlib.util as _util\n"
+            f"_spec = _util.spec_from_file_location('_mayatk_suite_driver', {str(DRIVER_PATH)!r})\n"
+            "_driver = _util.module_from_spec(_spec)\n"
+            "_spec.loader.exec_module(_driver)\n"
+            f"_driver.run_job({str(cfg_path)!r}, {str(log_path)!r})\n"
+        )
+        return _KeptChunk(self._sessions[slot], code, log_path)
 
     def _hang_timeout(self, module: Optional[str]) -> int:
         """Seconds without progress before *module*'s chunk counts as hung:
@@ -837,7 +985,32 @@ except Exception as e:
         module_paths: Dict[str, str],
         extended: bool,
     ) -> Tuple[bool, List[str]]:
-        """Run one chunk, resuming in a fresh mayapy after any native crash."""
+        """Run one chunk, resuming in a fresh mayapy after any native crash.
+
+        With kept mayapys (--reuse) it takes a free slot's for the whole chunk:
+        a crash or a hang stops that mayapy, and the rest resume in the fresh
+        one its next call starts.
+        """
+        slot = self._free_slots.get() if self._sessions else None
+        try:
+            return self._run_chunk_in(
+                mayapy, idx, n_chunks, chunk_modules, module_paths, extended, slot
+            )
+        finally:
+            if slot is not None:
+                self._free_slots.put(slot)
+
+    def _run_chunk_in(
+        self,
+        mayapy: str,
+        idx: int,
+        n_chunks: int,
+        chunk_modules: List[str],
+        module_paths: Dict[str, str],
+        extended: bool,
+        slot: Optional[int],
+    ) -> Tuple[bool, List[str]]:
+        """:meth:`_run_chunk` in slot *slot*'s kept mayapy, or ``None``: a fresh one."""
         tag = f"chunk {idx + 1}/{n_chunks}"
         pending = list(chunk_modules)
         deferred: List[str] = []
@@ -878,34 +1051,38 @@ except Exception as e:
                 self._spawn_gate.acquire()
                 gate_held = True
 
-                log_file = open(log_path, "w", encoding="utf-8", errors="replace")
-                # Driver + config paths ride in the env, not on the command line:
-                # mayapy decodes that in the ANSI code page, so a checkout under a
-                # folder with a non-ASCII letter named files that do not exist.
-                from pythontk import AppLauncher
+                if slot is not None and not self._reuse_broken:
+                    proc = self._kept_chunk(slot, cfg_path, log_path)
+                else:
+                    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+                    # Driver + config paths ride in the env, not on the command
+                    # line: mayapy decodes that in the ANSI code page, so a
+                    # checkout under a folder with a non-ASCII letter named
+                    # files that do not exist.
+                    from pythontk import AppLauncher
 
-                shim_args, child_env = AppLauncher.python_args_via_env(
-                    [str(DRIVER_PATH), str(cfg_path)], self._child_env()
-                )
-                try:
-                    proc = subprocess.Popen(
-                        [mayapy, *shim_args],
-                        stdout=log_file,
-                        # Closed stdin: a chunk that inherits the launching
-                        # console reads as interactive, and the exporter's
-                        # console consent would then wait on a [y/N] nobody
-                        # types (blendertk's harness lost test_smart_bake to
-                        # exactly that, 2026-09-04). No suite may wait on a human.
-                        stdin=subprocess.DEVNULL,
-                        stderr=subprocess.STDOUT,
-                        cwd=self._child_cwd(),
-                        env=child_env,
+                    shim_args, child_env = AppLauncher.python_args_via_env(
+                        [str(DRIVER_PATH), str(cfg_path)], self._child_env()
                     )
-                except OSError as e:
-                    print(
-                        f"[ERROR] Failed to launch mayapy: {e} — deferring to GUI pass"
-                    )
-                    return True, pending
+                    try:
+                        proc = subprocess.Popen(
+                            [mayapy, *shim_args],
+                            stdout=log_file,
+                            # Closed stdin: a chunk that inherits the launching
+                            # console reads as interactive, and the exporter's
+                            # console consent would then wait on a [y/N] nobody
+                            # types (blendertk's harness lost test_smart_bake to
+                            # exactly that, 2026-09-04). No suite may wait on a human.
+                            stdin=subprocess.DEVNULL,
+                            stderr=subprocess.STDOUT,
+                            cwd=self._child_cwd(),
+                            env=child_env,
+                        )
+                    except OSError as e:
+                        print(
+                            f"[ERROR] Failed to launch mayapy: {e} — deferring to GUI pass"
+                        )
+                        return True, pending
 
                 start = time.monotonic()
                 last_activity = start
@@ -1003,6 +1180,19 @@ except Exception as e:
                         pass
 
             started, finished, done, _ = _split_markers(_read_markers(prog_path))
+
+            why = proc.could_not_start() if isinstance(proc, _KeptChunk) else None
+            if why and not started:
+                # Never took the call: this run goes on in fresh mayapys, and
+                # the chunk starts over in one.
+                self._reuse_broken = why
+                self._emit(
+                    f"  ({tag}) [REUSE] the kept mayapy could not start ({why}); "
+                    "continuing in fresh mayapy chunks"
+                )
+                for p in (cfg_path, prog_path):
+                    p.unlink(missing_ok=True)
+                continue
 
             self._merge_into_master(res_path)
 
@@ -1170,8 +1360,7 @@ except Exception as e:
             "=" * 70,
             f"GUI DEFERRAL DIAGNOSTICS -- {reason}",
             "=" * 70,
-            f"requested   : {self.host}:{self.port} "
-            + ("(reuse)" if self.reuse_instance else "(new instance)"),
+            f"requested   : {self.host}:{self.port} (new instance)",
             f"connection  : mode={getattr(conn, 'mode', None)!r} "
             f"connected={getattr(conn, 'is_connected', None)!r} "
             f"port={getattr(conn, 'port', None)!r} launched_pid={launched_pid!r}",
@@ -1211,7 +1400,7 @@ except Exception as e:
         extended: bool,
         no_wait: bool = False,
     ):
-        """Run modules inside a (new or reused) GUI Maya over the command port.
+        """Run modules inside a new GUI Maya over the command port.
 
         Returns True / False, or the string "nowait" for fire-and-forget.
         """
@@ -1225,7 +1414,7 @@ except Exception as e:
             # listed the modules — skip the per-module reason spam.
             print("  (module list in the banner above)")
 
-        if not self.connect_to_maya():
+        if not self.connect_to_maya(outlives_run=no_wait):
             self._defer_gui_modules(gui_modules, "GUI connection failed")
             return False
 
@@ -1233,13 +1422,10 @@ except Exception as e:
         cfg_path = base.with_suffix(".json")
         res_path = base.with_suffix(".txt")
         # A session this runner did not launch -- the user's own, in-session
-        # (Script Editor) or attached with --reuse -- may hold stale modules,
-        # so it reloads; and it is sandboxed for the run only, since a
-        # sandbox left up would outlive the run there.
-        users_session = bool(
-            self.reuse_instance
-            or (self.connection and self.connection.mode == "interactive")
-        )
+        # (Script Editor) -- may hold stale modules, so it reloads; and it is
+        # sandboxed for the run only, since a sandbox left up would outlive
+        # the run there.
+        users_session = bool(self.connection and self.connection.mode == "interactive")
         # A Maya the run leaves open (--keep-maya, --no-wait) goes on as the
         # user's: sandboxed for the run only too, or it refuses every browser
         # launch and keeps their settings in throwaway stores from then on.
@@ -1552,6 +1738,13 @@ finally:
         # in-session harness): nothing is spawned, and a redirect made here
         # would outlive the run there -- the driver's sandbox, up for the run
         # only, gives it a root of its own.
+        if self.reuse_instance and headless_modules and not (no_wait or in_session):
+            self._sessions = self._keep_sessions()  # before the temp isolation below
+            if self._sessions:
+                print(
+                    f"[REUSE] headless chunks run in kept mayapy(s); one ends "
+                    f"{self.KEEP_SECONDS}s after its last chunk"
+                )
         if not (no_wait or in_session):
             self._isolate_temp()
 
@@ -1823,6 +2016,7 @@ def main() -> int:
     no_badge = pop_flag("--no-badge")
     no_wait = pop_flag("--no-wait")
     keep_maya = pop_flag("--keep-maya")
+    show = pop_flag("--show")
     extended = pop_flag("--extended", "-e")
     mocks = pop_flag("--mocks")
     gui = pop_flag("--gui")
@@ -1846,8 +2040,6 @@ def main() -> int:
         print(f"Unknown option(s): {' '.join(unknown)}{hint}. See --help.")
         return EXIT_USAGE
 
-    # Reusing/attaching only makes sense through the port path.
-    gui = gui or reuse_instance
     if no_wait and not gui:
         print("[INFO] --no-wait only applies to --gui runs; ignoring.")
         no_wait = False
@@ -1862,6 +2054,7 @@ def main() -> int:
         wait_timeout=wait_timeout,
         keep_maya=keep_maya,
         patterns=patterns,
+        show=show,
     )
 
     if "--list" in args or "-l" in args:
@@ -1948,7 +2141,7 @@ def main() -> int:
     finally:
         if not keep_maya and runner.connection and runner.connection.is_connected:
             # shutdown() closes only the Maya this run launched (by its PID);
-            # a session --reuse attached to is the user's and stays open --
+            # one it did not launch (the in-session harness's) stays open --
             # only the connection state resets.
             launched = bool(getattr(runner.connection, "_launched_pid", None))
             print(

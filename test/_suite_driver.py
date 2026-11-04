@@ -8,6 +8,8 @@ result block per module to ``config["results_file"]``.  Owned by
 
 - Headless (default): ``mayapy _suite_driver.py <config.json>`` per chunk;
   ``__main__`` initializes ``maya.standalone`` first.
+- Headless, reused (``--reuse``): :func:`run_job` per chunk, called in a
+  mayapy pythontk's ``SessionOperationHost`` keeps between runs.
 - GUI / command port: a small payload sent over the port imports this module
   inside the target Maya and calls :func:`run_suite`.
 
@@ -915,27 +917,10 @@ def _run_modules(config):
     return totals
 
 
-def main(argv):
-    if len(argv) < 2:
-        print("Usage: mayapy _suite_driver.py <config.json>")
-        return 2
-
-    with open(argv[1], encoding="utf-8") as f:
-        config = json.load(f)
-
-    _reconfigure_streams()
+def _run_chunk(config):
+    """One chunk, Maya's standalone session already up: the markers around
+    :func:`run_suite`, its totals printed and returned."""
     progress_file = config.get("progress_file")
-
-    # Initialize standalone only if we aren't already inside a Maya session.
-    try:
-        import maya.cmds as cmds
-
-        cmds.about(version=True)
-    except Exception:
-        import maya.standalone
-
-        maya.standalone.initialize(name="python")
-
     _progress(progress_file, "INIT_DONE")
 
     # Some test modules construct Qt widgets; give them an application object.
@@ -954,6 +939,63 @@ def main(argv):
 
     if _sandbox_dir:
         shutil.rmtree(_sandbox_dir, ignore_errors=True)
+    return totals
+
+
+def run_job(config: str, log: str = "") -> dict:
+    """Run one chunk in a mayapy the runner keeps (``run_tests.py --reuse``).
+
+    The call pythontk's ``SessionOperationHost`` makes for each chunk, in a
+    mayapy whose standalone session its ``MayaSceneFiles`` started: the chunk
+    a fresh mayapy runs from ``main``, but the process stays for the next
+    one, so nothing here exits. The instance imports this module, mayatk and
+    the test modules afresh for every chunk (the session reloads the mayatk
+    checkout), so each chunk runs the code as it is on disk.
+
+    Parameters:
+        config: The chunk's config file (see the module docstring).
+        log: A file the chunk's output also goes to, as a fresh chunk's does.
+
+    Returns:
+        The chunk's totals: tests, failures, errors, skipped, modules.
+    """
+    with open(config, encoding="utf-8") as f:
+        settings = json.load(f)
+    _reconfigure_streams()
+    if not log:
+        return _run_chunk(settings)
+    # Line-buffered: a chunk that crashes leaves its last lines in the log.
+    with open(log, "a", encoding="utf-8", errors="replace", buffering=1) as handle:
+        saved_out, saved_err = sys.stdout, sys.stderr
+        sys.stdout = _TeeStream(saved_out, handle)
+        sys.stderr = _TeeStream(saved_err, handle)
+        try:
+            return _run_chunk(settings)
+        finally:
+            sys.stdout, sys.stderr = saved_out, saved_err
+
+
+def main(argv):
+    if len(argv) < 2:
+        print("Usage: mayapy _suite_driver.py <config.json>")
+        return 2
+
+    with open(argv[1], encoding="utf-8") as f:
+        config = json.load(f)
+
+    _reconfigure_streams()
+
+    # Initialize standalone only if we aren't already inside a Maya session.
+    try:
+        import maya.cmds as cmds
+
+        cmds.about(version=True)
+    except Exception:
+        import maya.standalone
+
+        maya.standalone.initialize(name="python")
+
+    totals = _run_chunk(config)
     sys.stdout.flush()
     sys.stderr.flush()
     code = 0 if (totals["failures"] == 0 and totals["errors"] == 0) else 1

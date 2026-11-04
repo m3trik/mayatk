@@ -17,7 +17,9 @@ from mayatk.env_utils.maya_connection import MayaConnection
 try:  # the probe every `skipUnless(MAYA_AVAILABLE)` test below reads
     import maya.cmds as cmds
 
-    MAYA_AVAILABLE = True
+    # Under pytest with no Maya, conftest's MagicMock answers the import: not a
+    # Maya. Read as one, test_ensure_connection launched a real Maya and left it.
+    MAYA_AVAILABLE = not isinstance(cmds, MagicMock)
 except ImportError:
     cmds = None
     MAYA_AVAILABLE = False
@@ -520,6 +522,45 @@ class TestMayaConnectionMocked(unittest.TestCase):
             env = MockAppLauncher.launch.call_args.kwargs.get("env") or {}
             with self.subTest(qpa=qpa):
                 self.assertEqual("QT_QPA_PLATFORM" in env, kept, env)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_maya_gui_hides_only_when_asked(self, MockAppLauncher):
+        """A Maya a run drives over its port starts on the private desktop
+        (``AppLauncher.launch(hidden=True)``), where it can take neither the
+        user's focus nor their input; one not asked to hide shows as always."""
+        MockAppLauncher.launch.return_value = MagicMock()
+        conn = MayaConnection()
+        for kwargs, hidden in (({"hidden": True}, True), ({}, False)):
+            with patch("socket.socket") as MockSocket:
+                MockSocket.return_value.connect_ex.return_value = 0
+                conn._launch_maya_gui(port=7002, **kwargs)
+            with self.subTest(hidden=hidden):
+                self.assertIs(
+                    MockAppLauncher.launch.call_args.kwargs.get("hidden"), hidden
+                )
+
+    def test_connect_hidden_launches_and_relaunches_hidden(self):
+        """``connect(hidden=True)`` reaches the launch, and a relaunch after the
+        port died (``ensure_connection``) starts its Maya the same way."""
+        conn = MayaConnection()
+
+        def fake_connect(host, port):
+            conn.mode, conn.port, conn.is_connected = "port", port, True
+            return True
+
+        with (
+            patch.object(MayaConnection, "get_available_port", return_value=7002),
+            patch.object(MayaConnection, "_connect_via_port", side_effect=fake_connect),
+            patch.object(
+                MayaConnection, "_launch_maya_gui", return_value=7002
+            ) as mock_launch,
+        ):
+            self.assertTrue(conn.connect(mode="port", port=7002, hidden=True))
+            self.assertIs(mock_launch.call_args.kwargs.get("hidden"), True)
+            with patch.object(MayaConnection, "_port_alive", return_value=False):
+                self.assertTrue(conn.ensure_connection())
+            self.assertEqual(mock_launch.call_count, 2)
+            self.assertIs(mock_launch.call_args.kwargs.get("hidden"), True)
 
     # ---- context manager -------------------------------------------------
 

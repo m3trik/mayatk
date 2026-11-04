@@ -3,10 +3,11 @@
 Tests need the real Maya runtime (`maya.cmds`) and can't run under plain `pytest` /
 the workspace `.venv` — **except** `mock_tests/`, which mocks `maya.cmds` via its
 own `conftest.py` and runs under plain `pytest`. See the root
-[`CLAUDE.md`](../../CLAUDE.md) hard rule: never connect to an existing Maya
-session (`--reuse` / `force_new_instance=False` are forbidden outside mock-only
-unit tests) — every run uses **fresh** Maya processes (chunked `mayapy` by
-default; the GUI pass launches a **new** Maya).
+[`AGENTS.md`](../../AGENTS.md) hard rule: never connect to a Maya session the
+tooling did not launch (`force_new_instance=False` is forbidden outside mock-only
+unit tests) — a run uses **fresh** Maya processes (chunked `mayapy` by default;
+the GUI pass launches a **new** Maya), or with `--reuse` mayapys this tooling
+launched and keeps between runs.
 
 ## Layout
 
@@ -100,4 +101,34 @@ class TestSomething(MayaTkTestCase):
 No `pymel` — mayatk is fully migrated to `maya.cmds` (see root `CLAUDE.md`).
 One test file per production module; new `test_*.py` files are picked up
 automatically, no registration needed. Reproduction/debug scripts go in
-`test/temp_tests/`, not the main suite.
+`test/temp_tests/`, not the main suite. A test that writes project files opens
+a project of its own under its temp dir
+(`cmds.workspace(path, openWorkspace=True)`, restored through `addCleanup`, the
+temp delete registered first so it runs last), never the active one.
+
+## Probes
+
+A probe that needs Maya launches its own (the hard rule above) and is run by
+whoever is debugging, never handed to the user unless the repro needs a human
+hand. Beyond the general verification rules ([CODE_STANDARD §9](../../m3trik/docs/CODE_STANDARD.md#9-tests)):
+
+- A one-off `mayapy` script leaves through `ptk.ProcessExit.hard_exit`:
+  `os._exit` still runs Maya's faulting DLL detach and files a crash dump and
+  an `untitled[Recovered]` scene in the temp folder.
+- A payload sent over the command port runs with separate globals and locals:
+  wrap its whole body in one function (a module-level name is invisible to
+  nested functions and generator expressions), send it with
+  `wait_for_response=True` before anything that quits Maya, and have it write
+  a UTF-8 file rather than print (Maya's console output can fault the driver's
+  codec).
+- A live panel probe that edits widgets writes the user's real panel state
+  unless it sandboxes first: launch with `MAYA_SKIP_USERSETUP_PY=1` and call
+  `uitk.testing.TestSandbox.activate()` before opening the panel.
+- A visual or material claim needs pixels: grab the widget
+  (`viewport().grab()`), or playblast the viewport with a marker object in
+  frame so the image's orientation reads.
+- Only a Maya whose PID your own run logged (`Maya launched (PID: N)`) is
+  yours; a port in its title, port ownership or a start time near the run
+  prove nothing. After an aborted run (a stopped background task can leave its
+  `mayapy` runner alive), confirm nothing your run started is left before
+  starting another, and report any other Maya rather than closing it.

@@ -25,11 +25,11 @@ dependencies = [
     # 0.9.25 floor: task_manager.py reads MapOptimizer.SIZE_CLAMP_TEMPLATE in a
     # CLASS BODY, so an older pythontk is an AttributeError at import, not at
     # first use. Also AppSpec.path/.available and the HandoffBridge scratch trio.
-    "pythontk>=0.19.0",
+    "pythontk>=0.20.0",
     # 1.5.3 floor: every panel's Reset attaches ResetGesture(button) with no
     # state= (older uitk requires it); the Marmoset panel's require_output_dir(mode)
     # has needed >=1.3.85 since before.
-    "uitk>=1.9.0",
+    "uitk>=1.10.0",
 ]
 
 # No Unity extra: the Unity delivery is extapps' Unity Workflow app, which tentacle
@@ -39,6 +39,14 @@ Homepage = "https://github.com/m3trik/mayatk"
 Repository = "https://github.com/m3trik/mayatk"
 Changelog = "https://github.com/m3trik/mayatk/blob/main/CHANGELOG.md"
 Issues = "https://github.com/m3trik/mayatk/issues"
+
+# Operations (``python -m pythontk ops``): mayatk's declarations, and the
+# runner that gives each ``host="maya"`` call a fresh mayapy.
+[project.entry-points."pythontk.operations"]
+mayatk = "mayatk.operations"
+
+[project.entry-points."pythontk.operation_hosts"]
+maya = "mayatk:MayaSceneFiles.operation_host"
 
 [tool.setuptools.dynamic]
 version = {attr = "mayatk.__version__"}

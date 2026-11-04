@@ -1633,12 +1633,21 @@ class TestPairByName(QuickTestCase):
 
 
 class TestRetiredNames(QuickTestCase):
-    def test_constant_attrs_reads_the_shader_maps_table_for_one_release(self):
-        """``TextureTransfer.CONSTANT_ATTRS`` moved to
-        :attr:`ShaderAttributeMap.CONSTANT_ATTRS` with no alias left behind."""
-        with self.assertWarns(DeprecationWarning):
-            table = TextureTransfer.CONSTANT_ATTRS
-        self.assertIs(table, ShaderAttributeMap.CONSTANT_ATTRS)
+    def test_constant_attrs_lives_on_the_shader_map_alone(self):
+        """``TextureTransfer.CONSTANT_ATTRS`` outlived its window (0.23.0): the
+        table is :attr:`ShaderAttributeMap.CONSTANT_ATTRS` alone, and the
+        removed name's ``MOVED_NAMES`` row names that home."""
+        import mayatk
+
+        self.assertFalse(hasattr(TextureTransfer, "CONSTANT_ATTRS"))
+        self.assertTrue(ShaderAttributeMap.CONSTANT_ATTRS)
+        self.assertEqual(
+            mayatk.MOVED_NAMES["TextureTransfer.CONSTANT_ATTRS"],
+            (
+                "mayatk.mat_utils.shader_attribute_map.ShaderAttributeMap.CONSTANT_ATTRS",
+                "0.31.0",
+            ),
+        )
 
 
 class TestLightmapTransfer(MayaTkTestCase):

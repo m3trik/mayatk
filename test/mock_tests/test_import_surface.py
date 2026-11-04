@@ -1,5 +1,5 @@
 # coding=utf-8
-"""The mayatk surface imports without Maya (``mayatk/CLAUDE.md``, *Imports*).
+"""The mayatk surface imports without Maya (``mayatk/AGENTS.md``, *Imports*).
 
 Every module try-guards its ``maya.*`` imports so the registry, docs tooling
 and these mock tests can load it on a machine with no Maya. The probe runs in a

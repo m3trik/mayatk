@@ -1208,7 +1208,12 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         keyed away from zero, a spin about its own Z writes all three. Give
         the axis a prop spins about the first letter ("zyx" for a Z spin),
         and the axis it turns least the middle one: the order locks
-        (gimbal) when the middle channel reaches +/-90.
+        (gimbal) when the middle channel reaches +/-90. Take that axis from
+        the scene, never from a description of the problem ("it rotates on
+        Z" often names a world or parent axis): measure the prop's own axes
+        against what it engages at the keyed pose (a socket coaxial with its
+        bolt), or let ``"auto"`` read it off the keys, then prove the choice
+        with a turn about that axis that changes exactly one channel.
 
         With *preserve*, an unkeyed transform is re-solved in place (``xform
         -preserve``), and a keyed one has every rotate key re-solved in the new

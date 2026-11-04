@@ -183,3 +183,32 @@ The header's refresh button rebuilds the sequencer from the scene.
 | Audio tracks | Maya audio nodes | Sequencer sound strips |
 | Tangent types | Maya's (Auto, Spline, Clamped, Linear, Flat, Stepped, Plateau, ...) | Handle types and interpolation modes |
 | Weighted tangents | Weighted / Non-Weighted in the graph menu | Always weighted (a handle carries its length) |
+
+## Design rules
+
+For anyone changing the gestures. Keep the legends (`TrackEditor.gestures`,
+`GraphEditor.gestures`) and this page true together.
+
+- **A shot's own edge never moves its keys**; only Shift retimes them, and a
+  retime scales the content, never the member list. The modifier decides what
+  else moves. Plain: the neighbours ripple rigidly, each with its keys and the
+  gap after it (a bound change also carries what sits in its own trailing
+  gap). Ctrl: nothing else moves; the bound pushes into the neighbour, whose
+  facing bound gives way (keeping at least one frame), and an object moving in
+  the frames that change hands changes shots with them.
+- **A plain grow never claims the keys it passes over** (that is Ctrl's job);
+  a plain shrink stops at the shot's content, and a slide stops where its
+  content would enter the neighbour.
+- **The caps are bounds, not gaps.** Before the first shot and after the last,
+  a drag moves that shot's own bound and never slides the shot.
+- **Modifiers**: Shift wins over Ctrl. A shot edge reads them at the press; a
+  tangent handle reads them on every move, so the curve under the cursor is
+  what commits. Alt stays the tangent break, never a selection toggle. An
+  unbroken key's other side swings in the preview as the host will write it.
+- **Extend to Keys is one global mode** (the header toggle and its distance,
+  -1 for any), never a per-shot menu row or an unbounded button. It acts after
+  the membership pass (a freshly keyed object is a member before its keys
+  count), as its own undo step, and stays quiet when nothing is in reach. It is
+  the one grow that keeps what it reaches: it ripples from the new bound.
+  Operations that move content into a shot (Move To Shot) still extend that
+  shot implicitly.

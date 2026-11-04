@@ -4908,6 +4908,31 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertIn("audio", attrs)
         self.assertIn("footstep", cmds.getAttr(f"{DataNodes.EXPORT}.audio"))
 
+    def test_a_leftover_carrier_the_publish_removes_leaves_the_export_set(self):
+        """A plain import's ``data_export1`` holding nothing a reader takes goes
+        at the commit (``ptk.SceneStoreBase.migrate``) and leaves the export
+        set with it: left there, the write warned it "no longer exists".
+        Added: 2026-10-28
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        DataNodes.ensure_export()
+        # A real copy: a carrier is told by its locator shape, not its name.
+        stale = cmds.createNode("transform", name="data_export1", skipSelect=True)
+        cmds.createNode(
+            "locator", name="data_export1Shape", parent=stale, skipSelect=True
+        )
+        cmds.addAttr(stale, longName="handoff", dataType="string")
+        cmds.setAttr(f"{stale}.handoff", '{"version": 1}', type="string")
+        self.tm.objects = self.tm.objects + cmds.ls(stale, long=True)
+
+        self.tm.export_data_node()
+
+        self.assertFalse(cmds.objExists("data_export1"))
+        self.assertNotIn("|data_export1", self.tm.objects)
+        self.assertEqual(sorted(self.tm._live_objects()), sorted(self.tm.objects))
+        self.assertIn("|data_export", self.tm.objects)
+
     def test_a_run_stopped_after_the_publish_unstages_the_write(self):
         """``export_data_node`` stages the write (the curve proxies; a preview
         stands down) so the checks after it see what ships, and only the

@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.30.0"
+__version__ = "0.31.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -148,6 +148,7 @@ DEFAULT_INCLUDE = {
     # Environment utilities
     "env_utils.devtools": "*",
     "env_utils.maya_connection": "MayaConnection",
+    "env_utils.maya_scene_files": "MayaSceneFiles",
     "env_utils.workspace_manager": "WorkspaceManager",
     "env_utils.workspace_map": "WorkspaceMap",
     "env_utils.namespace_sandbox": "NamespaceSandbox",
@@ -268,6 +269,18 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
+    # Moved beside the one plug-in door (2026-10-03); their window closed. The
+    # bare rows answer the flat names the wildcard ``EnvUtils`` exposed.
+    "EnvUtils.is_plugin_loaded": ("mayatk.Plugins.is_loaded", "0.31.0"),
+    "EnvUtils.load_plugin": ("mayatk.Plugins.load", "0.31.0"),
+    "is_plugin_loaded": ("mayatk.Plugins.is_loaded", "0.31.0"),
+    "load_plugin": ("mayatk.Plugins.load", "0.31.0"),
+    # The constant-attribute table, its window closed (2026-11-03): read it
+    # through ShaderAttributeMap.read_constant.
+    "TextureTransfer.CONSTANT_ATTRS": (
+        "mayatk.mat_utils.shader_attribute_map.ShaderAttributeMap.CONSTANT_ATTRS",
+        "0.31.0",
+    ),
     # The lightmap tier alias and the Get Scene Info section key, their
     # deprecation windows closed (2026-11-01): a tier name is looked up as
     # given, and the removed key's table is the Materials section.

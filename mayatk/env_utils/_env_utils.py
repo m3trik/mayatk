@@ -356,19 +356,6 @@ class EnvUtils(ptk.HelpMixin):
                 sys.path.append(path)
 
     @staticmethod
-    @ptk.Deprecation.symbol("Plugins.is_loaded", remove_in="0.23.0", since="2026-10-03")
-    def is_plugin_loaded(plugin_name) -> bool:
-        """Moved to :meth:`Plugins.is_loaded`, beside the one plug-in door."""
-        return Plugins.is_loaded(plugin_name)
-
-    @classmethod
-    @ptk.Deprecation.symbol("Plugins.load", remove_in="0.23.0", since="2026-10-03")
-    def load_plugin(cls, plugin_name):
-        """Moved to :meth:`Plugins.load`, the one door every plug-in load goes
-        through; it raises ``Plugins.LoadError``, a ``ValueError`` as before."""
-        Plugins.load(plugin_name)
-
-    @staticmethod
     def vray_plugin(load=False, unload=False, query=False):
         """Load/Unload/Query the Maya Vray Plugin.
 

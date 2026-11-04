@@ -29,12 +29,14 @@ class _ShadingNetworkInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
     @staticmethod
-    def _rename_mat(material, name):
+    def _rename_mat(material, name, ctx=None):
         """Body of :meth:`MatUtils.rename_mat`."""
         material = str(material)
         if not cmds.objExists(material):
             raise ValueError(f"No material named '{material}'.")
-        return cmds.rename(material, name)
+        if ctx is None or ctx.should_change(material, f"rename to {name}"):
+            return cmds.rename(material, name)
+        return name
 
     @staticmethod
     def _delete_mats(materials):

@@ -1,0 +1,86 @@
+{
+  "format": 1,
+  "provider": "mayatk",
+  "operations": [
+    {
+      "id": "maya.python.exec",
+      "title": "Run Python in Maya",
+      "summary": "Run *code* in the console namespace, as the next snippet typed into a console.",
+      "effect": "code",
+      "host": "maya",
+      "target": "pythontk:PythonConsole.run",
+      "dry_run": false,
+      "args": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Python source: statements, then optionally an expression whose value comes back. Names it defines stay for later calls."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ]
+      },
+      "result": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "maya.scene.view",
+      "title": "An image of the scene",
+      "summary": "An image of the scene: a playblast of the current frame to a PNG in pythontk's temp root, with the scene left as it was (the persp camera, the selection, the undo queue and the unsaved-changes flag).",
+      "effect": "read",
+      "host": "maya",
+      "target": "mayatk:CamUtils.capture_view",
+      "dry_run": true,
+      "args": {
+        "type": "object",
+        "properties": {
+          "objects": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The objects to frame, through the persp camera's view (default: the whole scene). Ignored with *camera*.",
+            "default": null
+          },
+          "camera": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A camera to look through (its transform or shape) instead.",
+            "default": null
+          },
+          "width": {
+            "type": "integer",
+            "description": "The image's width, in pixels.",
+            "default": 960
+          },
+          "height": {
+            "type": "integer",
+            "description": "The image's height, in pixels.",
+            "default": 540
+          }
+        },
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "string"
+      }
+    }
+  ]
+}

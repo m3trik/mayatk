@@ -857,6 +857,130 @@ class TestRecordMigration(MayaTkTestCase):
         self.assertEqual(key, ptk.SceneRecords.SHOTS.key)
 
 
+class TestLeftoverCarriers(MayaTkTestCase):
+    """A carrier a plain import left beside the scene's own -- never merged,
+    so read and refreshed by nothing -- is settled by ``migrate``
+    (``ptk.SceneStoreBase._drop_leftover_carriers``).
+
+    REGRESSION (2026-10-28): a production assembly held ``data_export1``, an
+    imported module's carrier with a pre-rename ``lightmap_metadata`` and a
+    version-1 handoff; every export shipped both, and the deliverable
+    verifier failed the file on them. Added: 2026-10-28"""
+
+    STALE = {
+        "lightmap_metadata": {"version": 1, "objects": [{"name": "BASEBOARD_A"}]},
+        "handoff": {"version": 1, "reads": {}},
+    }
+
+    def _leftover(self, records=None, name="data_export1"):
+        """A module's carrier as a plain import leaves it: name-locked, its
+        locator shape below it."""
+        node = TestCarrierCrossings._carrier(
+            "transform", name, self.STALE if records is None else records
+        )
+        cmds.createNode("locator", name=f"{name}Shape", parent=node)
+        cmds.lockNode(node, lock=False, lockName=True)
+        return node
+
+    def test_opening_a_scene_removes_a_copy_holding_derived_records(self):
+        """What the production scene needed: the open's migration removes it
+        and leaves the scene's own carrier as it was -- no edit, as the key
+        moves are none."""
+        store = ptk.TempArtifacts("mtk_dn_leftover", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.addCleanup(cmds.file, new=True, force=True)  # off the file first
+        path = os.path.join(store.dir_path(), "assembly.ma")
+        own = '{"version": 2, "objects": []}'
+        DataNodes.write(DELIVERABLE, ptk.SceneRecords.LIGHTMAPS.key, own)
+        self._leftover()
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        DataNodes.install_path_rebase()
+        self.addCleanup(DataNodes.remove_path_rebase)
+        cmds.file(path, open=True, force=True)
+        self.assertFalse(cmds.objExists("data_export1"))
+        self.assertEqual(
+            DataNodes.read(DELIVERABLE, ptk.SceneRecords.LIGHTMAPS.key), own
+        )
+        self.assertFalse(cmds.file(query=True, modified=True))
+
+    def test_an_export_commit_removes_it_and_ships_none(self):
+        DataNodes.write(DELIVERABLE, "lightmaps", '{"version": 2, "objects": []}')
+        self._leftover()
+        ptk.ExportSnapshot.publish(DataNodes, {})
+        self.assertFalse(cmds.objExists("data_export1"))
+        self.assertEqual(DataNodes.get_export_nodes(), ["|data_export"])
+
+    def test_one_the_scene_has_no_own_carrier_beside_goes_too(self):
+        """The scene's own was deleted after the import: the copy is still no
+        carrier a tool writes, and the next publish makes the scene's own."""
+        self._leftover()
+        DataNodes.migrate()
+        self.assertFalse(cmds.objExists("data_export1"))
+
+    def test_a_private_copy_holding_what_a_merge_keeps_stays(self):
+        DataNodes.ensure_internal()
+        TestCarrierCrossings._carrier(
+            "network", "data_internal1", {"audio_file_map": {"2": "b.wav"}}
+        )
+        with self.assertLogs("pythontk.core_utils.engines.scene_export", "WARNING"):
+            DataNodes.migrate()
+        self.assertTrue(cmds.objExists("data_internal1"))
+
+    def test_a_copy_holding_a_keyed_weight_stays(self):
+        DataNodes.ensure_export()
+        node = self._leftover()
+        cmds.addAttr(node, longName="emissive_glow", attributeType="double")
+        cmds.setKeyframe(node, attribute="emissive_glow", time=1, value=0.5)
+        with self.assertLogs("pythontk.core_utils.engines.scene_export", "WARNING"):
+            DataNodes.migrate()
+        self.assertTrue(cmds.objExists(node))
+
+    def test_a_copy_parenting_other_nodes_stays(self):
+        DataNodes.ensure_export()
+        node = self._leftover()
+        cmds.createNode("transform", name="ARTIST_GRP", parent=node)
+        DataNodes.migrate()
+        self.assertTrue(cmds.objExists(node))
+
+    def test_a_mesh_or_joint_named_like_a_copy_is_no_carrier(self):
+        """A copy is a carrier by its shape, not its name alone: a user's
+        mesh and joint named as numbered copies survive the migration, while
+        the real copy beside them goes.
+
+        REGRESSION (review, 2026-11-03): ``_leftover_carriers`` took every
+        transform-typed node named ``data_export<N>`` -- a joint is one -- and
+        holding no record, a polyCube ``data_export1`` and a joint
+        ``data_export2`` were deleted at open and at every export commit.
+        Added: 2026-11-03"""
+        DataNodes.ensure_export()
+        mesh = cmds.polyCube(name="data_export1")[0]
+        joint = cmds.createNode("joint", name="data_export2", skipSelect=True)
+        copy = self._leftover(name="data_export3")
+        DataNodes.migrate()
+        self.assertTrue(cmds.objExists(mesh), "a mesh named like a copy was deleted")
+        self.assertTrue(cmds.objExists(joint), "a joint named like a copy was deleted")
+        self.assertFalse(cmds.objExists(copy), "the real copy was kept")
+
+    def test_a_referenced_modules_carrier_is_its_files(self):
+        store = ptk.TempArtifacts("mtk_dn_leftover_ref", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.addCleanup(cmds.file, new=True, force=True)
+        path = os.path.join(store.dir_path(), "module.ma")
+        # Shaped as a carrier, so only the reference keeps it from the list.
+        node = TestCarrierCrossings._carrier("transform", "data_export", self.STALE)
+        cmds.createNode("locator", name="data_exportShape", parent=node)
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        DataNodes.ensure_export()
+        cmds.file(path, reference=True, namespace="MOD")
+        DataNodes.migrate()
+        self.assertTrue(cmds.objExists("MOD:data_export"))
+        self.assertEqual(DataNodes._leftover_carriers(), {})
+
+
 class TestProjectRelativePaths(MayaTkTestCase):
     """BACKLOG 2026-09-22, decided 2026-09-23: the path records are spelled
     from the scene FILE's own project -- ``../`` chains included -- so a Save As

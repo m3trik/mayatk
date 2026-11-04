@@ -2,6 +2,8 @@
 # coding=utf-8
 from __future__ import annotations
 
+from typing import List, Optional
+
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
@@ -579,6 +581,152 @@ class CamUtils(ptk.HelpMixin):
             if parent:
                 cameras.extend(cmds.ls(parent[0]) or [])
         return cameras
+
+    #: The camera attributes a capture through another camera borrows for
+    #: persp (and puts back after): its lens, film back and clipping.
+    CAPTURE_ATTRS = (
+        "focalLength",
+        "horizontalFilmAperture",
+        "verticalFilmAperture",
+        "filmFit",
+        "orthographic",
+        "orthographicWidth",
+        "nearClipPlane",
+        "farClipPlane",
+        "centerOfInterest",
+    )
+
+    @staticmethod
+    def capture_view(
+        objects: Optional[List[str]] = None,
+        camera: Optional[str] = None,
+        width: int = 960,
+        height: int = 540,
+    ) -> str:
+        """An image of the scene: a playblast of the current frame to a PNG in
+        pythontk's temp root, with the scene left as it was (the persp camera,
+        the selection, the undo queue and the unsaved-changes flag). It needs
+        no window, so it works in mayapy. Twin of blendertk's
+        ``CamUtils.capture_view`` (a Workbench render there).
+
+        Not ``PlayblastExporter``'s still capture
+        (``MayaPlayblastHost.capture_still``): its camera override retargets a
+        model panel, which a batch mayapy lacks, so there it drops the camera
+        named; this aims the persp camera itself (CODE_STANDARD section 15).
+
+        Parameters:
+            objects: The objects to frame, through the persp camera's view
+                (default: the whole scene). Ignored with *camera*.
+            camera: A camera to look through (its transform or shape) instead.
+            width: The image's width, in pixels.
+            height: The image's height, in pixels.
+
+        Returns:
+            The PNG's path (the temp root sweeps it by age).
+
+        Raises:
+            ValueError: *camera* names no camera.
+        """
+        persp = "persp"
+        source = None
+        if camera is not None:
+            if not cmds.objExists(camera):
+                raise ValueError(f"No camera named {camera!r}.")
+            if cmds.nodeType(camera) == "camera":
+                source = camera
+            else:
+                source = (
+                    cmds.listRelatives(
+                        camera, shapes=True, type="camera", fullPath=True
+                    )
+                    or [None]
+                )[0]
+            if source is None:
+                raise ValueError(f"{camera!r} is no camera.")
+        shape = cmds.listRelatives(persp, shapes=True, type="camera", fullPath=True)[0]
+        path = ptk.TempArtifacts("view_capture", max_age_days=1).path(extension=".png")
+        modified = cmds.file(query=True, modified=True)
+        undo = cmds.undoInfo(query=True, stateWithoutFlush=True)
+        selection = cmds.ls(selection=True, long=True) or []
+        matrix = cmds.xform(persp, query=True, worldSpace=True, matrix=True)
+        lens = {a: cmds.getAttr(f"{shape}.{a}") for a in CamUtils.CAPTURE_ATTRS}
+        panel = panel_camera = None
+        cmds.undoInfo(stateWithoutFlush=False)  # a read: nothing to undo
+        try:
+            if source is not None:
+                owner = cmds.listRelatives(source, parent=True, fullPath=True)[0]
+                cmds.xform(
+                    persp,
+                    worldSpace=True,
+                    matrix=cmds.xform(owner, query=True, worldSpace=True, matrix=True),
+                )
+                for attr in CamUtils.CAPTURE_ATTRS:
+                    cmds.setAttr(f"{shape}.{attr}", cmds.getAttr(f"{source}.{attr}"))
+            elif objects:
+                cmds.select(objects, replace=True)
+                cmds.viewFit(persp, fitFactor=0.9)
+            else:
+                cmds.viewFit(persp, allObjects=True, fitFactor=0.9)
+            options = {}
+            if not cmds.about(
+                batch=True
+            ):  # a GUI Maya blasts a panel: look through persp there
+                panel = next(
+                    (
+                        p
+                        for p in cmds.getPanel(visiblePanels=True) or []
+                        if cmds.getPanel(typeOf=p) == "modelPanel"
+                    ),
+                    None,
+                )
+                if panel:
+                    panel_camera = cmds.modelPanel(panel, query=True, camera=True)
+                    cmds.modelPanel(panel, edit=True, camera=persp)
+                    options.update(editorPanelName=panel, offScreen=True)
+            cmds.playblast(
+                frame=[cmds.currentTime(query=True)],
+                format="image",
+                compression="png",
+                completeFilename=path,
+                forceOverwrite=True,
+                viewer=False,
+                showOrnaments=False,
+                widthHeight=(int(width), int(height)),
+                percent=100,
+                **options,
+            )
+        finally:
+            # Each put back on its own: one that fails (a locked attribute)
+            # never keeps the undo queue off or the scene marked changed.
+            restores = [
+                lambda: (
+                    cmds.modelPanel(panel, edit=True, camera=panel_camera)
+                    if panel and panel_camera
+                    else None
+                ),
+                lambda: cmds.xform(persp, worldSpace=True, matrix=matrix),
+            ]
+            restores += [
+                lambda a=attr, v=value: cmds.setAttr(f"{shape}.{a}", v)
+                for attr, value in lens.items()
+            ]
+            restores += [
+                lambda: (
+                    cmds.select(selection, replace=True)
+                    if selection
+                    else cmds.select(clear=True)
+                ),
+                lambda: cmds.undoInfo(stateWithoutFlush=undo),
+                lambda: cmds.file(modified=modified),
+            ]
+            for restore in restores:
+                try:
+                    restore()
+                except Exception as exc:
+                    print(
+                        f"capture_view: could not put the scene back as it was: {exc}"
+                    )
+        return path
 
     @staticmethod
     @CoreUtils.undoable

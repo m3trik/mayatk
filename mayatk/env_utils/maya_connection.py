@@ -426,6 +426,8 @@ class MayaConnection:
         # PID of the Maya instance THIS connection launched (None if we only
         # ever attached). Session safety: it is the only PID we may kill.
         self._launched_pid: Optional[int] = None
+        # Whether a launch (and a relaunch, ensure_connection) hides its Maya.
+        self._launch_hidden: bool = False
 
     def connect(
         self,
@@ -438,6 +440,7 @@ class MayaConnection:
         launch_args: Optional[List[str]] = None,
         confirm_existing: bool = True,
         auto_cleanup: bool = False,
+        hidden: bool = False,
     ) -> bool:
         """
         Connect to Maya using the specified mode.
@@ -478,10 +481,18 @@ class MayaConnection:
                 when the caller can't wrap connection use in a ``with`` block.
                 The handler is idempotent across repeated ``connect()`` calls
                 on the same instance and a no-op once shut down.
+            hidden: Launch the Maya on a private desktop
+                (``ptk.AppLauncher.launch(hidden=True)``; Windows, elsewhere a
+                no-op): it runs as usual -- viewport, Qt, focus within it -- but
+                takes neither the user's focus nor their input, and it closes
+                with this process. For a run that drives Maya over its port and
+                closes it (a test pass); a Maya meant to stay open after this
+                process shows. A relaunch (:meth:`ensure_connection`) hides too.
 
         Returns:
             bool: True if connection successful
         """
+        self._launch_hidden = hidden
         if force_new_instance:
             port = self.get_available_port(start_port=port)
             launch = True
@@ -539,7 +550,7 @@ class MayaConnection:
                     f"[MayaConnection] {why}. Launching Maya on port {launch_port}..."
                 )
                 actual = self._launch_maya_gui(
-                    launch_port, app_path, extra_args=launch_args
+                    launch_port, app_path, extra_args=launch_args, hidden=hidden
                 )
                 if actual:
                     connected = self._connect_via_port(host, actual)
@@ -598,8 +609,12 @@ class MayaConnection:
         port: int,
         app_path: Optional[str] = None,
         extra_args: Optional[List[str]] = None,
+        hidden: bool = False,
     ) -> Optional[int]:
         """Launch Maya GUI with command port enabled.
+
+        *hidden*: on the private desktop (``AppLauncher.launch(hidden=True)``),
+        bound to this process; the window-title discovery below reads it there.
 
         Returns:
             The port the launched Maya actually opened (it may self-heal to a
@@ -662,17 +677,18 @@ class MayaConnection:
         if self._is_headless_qpa(env.get("QT_QPA_PLATFORM")):
             env.pop("QT_QPA_PLATFORM", None)
 
+        how = " (hidden: a private desktop)" if hidden else ""
         if app_path:
             print(
-                f"[MayaConnection] Launching specific Maya: {app_path} with args: {args}"
+                f"[MayaConnection] Launching specific Maya{how}: {app_path} with args: {args}"
             )
             process = AppLauncher.launch(
-                app_path, args=args, cwd=cwd, detached=True, env=env
+                app_path, args=args, cwd=cwd, detached=True, env=env, hidden=hidden
             )
         else:
-            print(f"[MayaConnection] Launching Maya with args: {args}")
+            print(f"[MayaConnection] Launching Maya{how} with args: {args}")
             process = AppLauncher.launch(
-                "maya", args=args, cwd=cwd, detached=True, env=env
+                "maya", args=args, cwd=cwd, detached=True, env=env, hidden=hidden
             )
 
             if not process:
@@ -683,7 +699,7 @@ class MayaConnection:
                 found = AppLauncher.resolve_app_path(**self.MAYA_DISCOVERY)
                 if found:
                     process = AppLauncher.launch(
-                        found, args=args, cwd=cwd, detached=True, env=env
+                        found, args=args, cwd=cwd, detached=True, env=env, hidden=hidden
                     )
 
         if not process:
@@ -791,6 +807,12 @@ class MayaConnection:
             )
         else:
             print("[MayaConnection] Timeout waiting for Maya Command Port.")
+            if hidden:
+                print(
+                    "[MayaConnection] It ran hidden: a dialog it opened (a license "
+                    "or crash prompt) waits where no one sees it. Launch it shown "
+                    "to answer it."
+                )
 
         return None
 
@@ -1057,7 +1079,9 @@ class MayaConnection:
         # which case relaunching on it guarantees another failure.
         launch_port = self.get_available_port(start_port=self.port)
         print(f"[MayaConnection] Relaunching Maya on port {launch_port}...")
-        actual = self._launch_maya_gui(launch_port, app_path, extra_args=launch_args)
+        actual = self._launch_maya_gui(
+            launch_port, app_path, extra_args=launch_args, hidden=self._launch_hidden
+        )
         if actual:
             return self._connect_via_port(self.host, actual)
         return False

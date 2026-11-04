@@ -10,9 +10,11 @@ Tests for CamUtils class functionality including:
 - Current camera queries
 """
 
+import struct
 import unittest
 import maya.cmds as cmds
 import mayatk as mtk
+import pythontk as ptk
 from base_test import MayaTkTestCase
 
 
@@ -434,6 +436,49 @@ class TestCameraVisibility(MayaTkTestCase):
         cmds.select(self.cam)
         with self.assertRaises(ValueError):
             CameraVisibility.set_exclusive()
+
+
+class TestCaptureView(MayaTkTestCase):
+    """capture_view: an image of the scene, with the scene left as it was."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="capture_cube")[0]
+        cmds.setAttr(f"{self.cube}.t", 5, 0, 0)
+
+    @staticmethod
+    def png_size(path):
+        with open(path, "rb") as handle:
+            head = handle.read(24)
+        assert head[:8] == b"\x89PNG\r\n\x1a\n", head[:8]
+        return struct.unpack(">II", head[16:24])
+
+    def test_a_png_of_the_size_asked_and_the_scene_as_it_was(self):
+        persp = cmds.xform("persp", query=True, worldSpace=True, matrix=True)
+        focal = cmds.getAttr("perspShape.focalLength")
+        cmds.select(clear=True)
+        cmds.file(modified=False)
+        path = mtk.CamUtils.capture_view(objects=[self.cube], width=320, height=180)
+        self.assertEqual(self.png_size(path), (320, 180))
+        self.assertTrue(ptk.TempArtifacts.contains(path))
+        after = cmds.xform("persp", query=True, worldSpace=True, matrix=True)
+        for was, now in zip(persp, after):
+            self.assertAlmostEqual(was, now, places=4)
+        self.assertAlmostEqual(cmds.getAttr("perspShape.focalLength"), focal, places=4)
+        self.assertEqual(cmds.ls(selection=True), [])
+        self.assertFalse(cmds.file(query=True, modified=True))
+
+    def test_the_whole_scene_by_default(self):
+        self.assertEqual(self.png_size(mtk.CamUtils.capture_view(width=64, height=48)), (64, 48))
+
+    def test_through_a_camera(self):
+        camera = cmds.camera(name="capture_cam")[0]
+        cmds.setAttr(f"{camera}.t", 0, 2, 20)
+        self.assertEqual(self.png_size(mtk.CamUtils.capture_view(camera=camera, width=64, height=64)), (64, 64))
+
+    def test_an_unknown_camera_raises(self):
+        with self.assertRaises(ValueError):
+            mtk.CamUtils.capture_view(camera="no_such_camera")
 
 
 if __name__ == "__main__":
