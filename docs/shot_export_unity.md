@@ -139,8 +139,8 @@ reader:
 
 ## Unity side
 
-A ready-to-use **`ShotMetadataController.cs`** ships in `unitytk/templates/ShotMetadata/`
-(runtime component + an `AssetPostprocessor` that parses `animation`, attaches
+A ready-to-use **`ShotMetadataController.cs`** ships in unitytk's `Packages/com.m3trik.unitytk/Features/ShotMetadata/Runtime/`
+(the runtime component; its importer in `Editor/` is an `AssetPostprocessor` that parses `animation`, attaches
 the controller to the prefab root, and joins records to clips by name). Deploy it
 as part of the full compile-coupled set — `UnitytkSettings.cs` provides the shared
 `ImportGate`/`CarrierImport` (`unitytk.TemplateDeployer.deploy_package(project_root)`

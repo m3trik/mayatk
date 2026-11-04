@@ -288,7 +288,7 @@ curves.
 4. **Read by Unity?** Add the channel to `UnitytkSettings.cs` and `"unity"` to
    `consumers`, then read it as an FBX user property on the `data_export`
    GameObject -- see
-   [unitytk's templates README](https://github.com/m3trik/unitytk/blob/main/unitytk/templates/README.md).
+   [unitytk's package README](https://github.com/m3trik/unitytk/blob/main/Packages/com.m3trik.unitytk/README.md).
 5. Run `python m3trik/scripts/sync_scene_records.py`: these tables,
    `DELIVERABLE_FORMAT.md`, the generated JS and C# readers, and the gates
    (Unity's channels, the two DCCs' producer tables).
