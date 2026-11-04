@@ -285,8 +285,16 @@ curves.
    `merge_key` for a list, `respell=False` for a payload naming no scene node,
    `portable=True` to ride a hand-off, `paths=True` for path values. State kept
    beside it? One `DataNodes.OWNERS` row per DCC.
-4. **Read by Unity?** Add the channel to `UnitytkSettings.cs` and `"unity"` to
-   `consumers`, then read it as an FBX user property on the `data_export`
+4. **Read by Unity?** Add `"unity"` to `consumers`, then, in unitytk (its
+   [feature guide](https://github.com/m3trik/unitytk/blob/main/docs/parts/feature.md)):
+   the record's key on its line in `Core/UnitytkRecords.cs`, naming the importer
+   that reads it (`// channel → <Importer>`); the channel's settings key in
+   `Core/PersistedStrings.cs` (a channel a record rides is keyed by the record's
+   key), which the importer's `Channel` constant reads and its gate asks
+   (`Settings.ShouldImport(assetPath, <Importer>.Channel)`); and the channel
+   declared once beside the importer for the settings page,
+   `[assembly: SettingsChannel(<Importer>.Channel, "<Label>", "<what it does>")]`.
+   The importer reads the record as an FBX user property on the `data_export`
    GameObject -- see
    [unitytk's package README](https://github.com/m3trik/unitytk/blob/main/Packages/com.m3trik.unitytk/README.md).
 5. Run `python m3trik/scripts/sync_scene_records.py`: these tables,

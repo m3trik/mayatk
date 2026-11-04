@@ -142,9 +142,11 @@ reader:
 A ready-to-use **`ShotMetadataController.cs`** ships in unitytk's `Packages/com.m3trik.unitytk/Features/ShotMetadata/Runtime/`
 (the runtime component; its importer in `Editor/` is an `AssetPostprocessor` that parses `animation`, attaches
 the controller to the prefab root, and joins records to clips by name). Deploy it
-as part of the full compile-coupled set — `UnitytkSettings.cs` provides the shared
-`ImportGate`/`CarrierImport` (`unitytk.TemplateDeployer.deploy_package(project_root)`
-writes the whole set as the embedded `com.m3trik.unitytk` UPM package).
+with the core it compiles against — the kernel's `Settings.ShouldImport` gates the
+import, and the carrier feature's `CarrierImport` (`Features/Carrier/Editor/`, served
+through the `IRecordSource` contract) reads the record
+(`unitytk.TemplateDeployer.deploy_package(project_root)` writes the whole set as the
+embedded `com.m3trik.unitytk` UPM package).
 Verified end-to-end by `unitytk/test/test_shot_metadata_integration.py`:
 every frame of every shot clip against Maya, in each Animation Clips mode.
 
