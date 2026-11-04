@@ -48,6 +48,12 @@ ADAPTERS = (
         "TransferHost",
         _adapter("mayatk.uv_utils.texture_combine._transfer_host", "MayaTransferHost"),
     ),
+    (
+        "OperationHost",  # the ``maya`` runner mayatk registers (mayapy found per call)
+        lambda: importlib.import_module(
+            "mayatk.env_utils.maya_scene_files"
+        ).MayaSceneFiles.operation_host(),
+    ),
 )
 
 
