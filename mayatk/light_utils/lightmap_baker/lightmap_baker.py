@@ -1556,7 +1556,7 @@ class LightmapBaker(ptk.LoggingMixin):
         ``<scene>_Probe.exr`` and recorded (:meth:`LightmapRecords.commit_probe`);
         the lightmap manifest carries it into the GLB
         (``ptk.MeshConvert.apply_glb_lightmaps``) and Unity (unitytk's
-        ``LightmapMetadataApplier``).
+        ``Lightmaps.Apply``).
 
         Parameters:
             maps: ``{object: map path}`` this bake wrote; the probe lands in the
