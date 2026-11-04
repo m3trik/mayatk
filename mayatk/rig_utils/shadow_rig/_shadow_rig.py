@@ -78,7 +78,7 @@ class ShadowRig(ptk.LoggingMixin):
        (produced fresh at export time: ``FbxUtils.PRODUCERS``). For
        File > Export, the Game Exporter and the bridges, bake first with
        ShadowRig.bake() (or the panel's Bake to Keyframes button).
-    3. In Unity: with unitytk's ShadowPlaneController.cs deployed, the
+    3. In Unity: with unitytk's ShadowPlane feature deployed, the
        import is automatic (unlit-transparent material bound to the
        silhouette, shadow casting/receiving + probes off). The silhouette
        PNG is an ordinary material texture, so Embed Textures ships it.
@@ -2259,7 +2259,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         has no shadow planes -- the ``ptk.SceneRecords.SHADOWS`` producer
         (``FbxUtils.PRODUCERS``).  Pure: it reads the planes' stamps and never
         writes.  The payload joins Unity-side by GameObject name (unitytk's
-        ``ShadowPlaneController.cs``):
+        ``ShadowPlaneImporter``):
 
         ``{"version": 2, "unit_scale": <m per unit>, "planes": [...]}``
 
