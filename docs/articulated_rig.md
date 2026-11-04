@@ -269,7 +269,7 @@ the importer attaches it from the record and adds a convex collider to each
 grabbed part without one; a grab API independent of any input system
 (`BeginGrab` / `UpdateGrab` / `EndGrab` / `ReturnToAnimation`, `grabRotation`
 Hand / Keep / Free), `ArticulatedRigPointerGrab` for the mouse, and an XR
-Interaction Toolkit 3 adapter (`ArticulatedRig/XR/`) compiled only when that
+Interaction Toolkit 3 adapter (`Features/ArticulatedRig/XRI/`, a door) compiled only when that
 package is present. A held pose is re-applied in `LateUpdate`, after the
 Animator. Measured on the magnifier's real Maya export in Unity 6000.3 and
 2022.3: the rest pose through the model matches the imported transforms to
