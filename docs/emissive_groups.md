@@ -12,9 +12,10 @@ engine in `region_masks.py`) driven through the host's half (`MayaEmissiveGroups
 `BlenderEmissiveGroups`); its records are rows in each library's FBX and
 record-store tables. The panel is tentacle's (`ui/tools/emissive_groups.ui` +
 `slots/tools/emissive_groups.py`, one Slots class for both hosts, reaching the API
-through `self.tk`). The Unity side is the
-`EmissiveGroupController.cs` / `EmissiveGroups.hlsl` / `EmissiveGroupsLit.shader`
-templates in `unitytk/templates/`.
+through `self.tk`). The Unity side is unitytk's EmissiveGroup feature
+(`Packages/com.m3trik.unitytk/Features/EmissiveGroup/`): `Runtime/` holds
+`EmissiveGroupController.cs`, `EmissiveGroups.hlsl` and `EmissiveGroupsLit.shader`,
+`Editor/` the importer.
 
 ## Panel
 
@@ -140,7 +141,7 @@ Transport per DCC:
 
 ## Unity side
 
-- `EmissiveGroupImporter` (in `EmissiveGroupController.cs`) parses the FBX user
+- `EmissiveGroupImporter` (`Features/EmissiveGroup/Editor/EmissiveGroupImporter.cs`) parses the FBX user
   property, attaches a populated `EmissiveGroupController` to the prefab root,
   and enforces mask-texture import settings (`*_EMask*`: linear, HQ
   compression). Runtime: weights pack into `_GroupWeights` (Vector4) applied
