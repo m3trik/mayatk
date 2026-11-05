@@ -13,7 +13,7 @@ engine in `region_masks.py`) driven through the host's half (`MayaEmissiveGroups
 record-store tables. The panel is tentacle's (`ui/tools/emissive_groups.ui` +
 `slots/tools/emissive_groups.py`, one Slots class for both hosts, reaching the API
 through `self.tk`). The Unity side is unitytk's EmissiveGroup feature
-(`Packages/com.m3trik.unitytk/Features/EmissiveGroup/`): `Runtime/` holds
+(`com.m3trik.unitytk/Features/EmissiveGroup/`): `Runtime/` holds
 `EmissiveGroupController.cs`, `EmissiveGroups.hlsl` and `EmissiveGroupsLit.shader`,
 `Editor/` the importer.
 
