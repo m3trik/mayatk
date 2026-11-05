@@ -482,8 +482,8 @@ class RenderEffects(ptk.LoggingMixin):
     #: Unity importer rebinds and deletes them.
     PROXY_MARKER = ptk.MeshConvert.CURVE_PROXY_MARKER
     #: ``<node leaf>__<channel>``: the Unity importer parses the parent path
-    #: and the channel name off the leaf.
-    PROXY_SEPARATOR = "__"
+    #: and the channel name off the leaf (``ptk.SceneRecords.TRANSPORT``).
+    PROXY_SEPARATOR = ptk.SceneRecords.TRANSPORT.separator
 
     @classmethod
     def stage_export_proxies(cls) -> List[str]:
