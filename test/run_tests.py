@@ -114,7 +114,7 @@ SUITE_COMPLETE_MARKER = "# SUITE COMPLETE"
 
 #: Ecosystem package roots, pinned for both this process's ``sys.path`` and the
 #: mayapy children's PYTHONPATH (``_child_env``) -- one list so the two can't drift.
-ECOSYSTEM_PKGS = ("mayatk", "pythontk", "uitk", "tentacle", "unitytk")
+ECOSYSTEM_PKGS = ("mayatk", "pythontk", "uitk", "tentacle")
 
 # Ensure mayatk is in path -- the PACKAGE roots, not the monorepo root.
 # SCRIPTS_ROOT alone shadows the package: `<root>/mayatk/` is the repo dir and

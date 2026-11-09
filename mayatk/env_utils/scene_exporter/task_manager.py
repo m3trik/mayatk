@@ -15,6 +15,11 @@ post-write API (``create_glb``, ``write_scene_data_sidecar``,
 import os
 from typing import Optional, Dict, Any
 
+try:
+    import maya.cmds as cmds
+except ImportError:
+    cmds = None
+
 import pythontk as ptk
 from pythontk import TaskFactory
 
@@ -132,11 +137,6 @@ class TaskManager(
                 # GLB Key Tolerance: the deviation bound, or None for the
                 # converter's per-frame keys.
                 key_tolerance=self.run.glb_key_tolerance,
-                # Which clips survive the rebuild. Decided by the Animation
-                # Clips row and stashed by apply_declared_takes; "both" when
-                # that task never ran, which is the shape every export had
-                # before the row existed.
-                clip_mode=self._clip_mode,
                 progress=lambda message: self._report_progress(None, None, message),
                 logger=self.logger,
             )
@@ -195,10 +195,10 @@ class TaskManager(
         try:
             from mayatk.node_utils.data_nodes import DataNodes
 
-            if not any(
-                str(o).split("|")[-1] == DataNodes.EXPORT for o in (self.objects or [])
-            ):
-                return {}
+            own = DataNodes.get_export_node(create=False)
+            own = (cmds.ls(own, long=True) or [None])[0] if own else None
+            if own is None or own not in set(cmds.ls(list(self.objects or []), long=True) or []):
+                return {}  # the scene's own carrier (root level) did not ship
             return DataNodes.dump(decode=True).get(DataNodes.EXPORT) or {}
         except Exception:
             self.logger.debug("data_export snapshot skipped.", exc_info=True)
@@ -250,11 +250,11 @@ class TaskManager(
         leaves no sidecar.
 
         With a GLB written, its ``lightmaps`` is recorded as the GLB
-        ships it: the GLB build corrects the manifest to the encoded map and
-        the scalar restoring the bake range (its report's
-        ``lightmap_manifest``), while the scene's still names the pre-encode
-        ``.exr`` at 1.0. The FBX carries the scene's copy in-band; the GLB
-        states its lightmaps once, in ``extras.lightmaps``.
+        ships it: the record as it stands, in the GLB's root ``extras`` (its
+        report's ``lightmap_manifest``), its probe drawn where the record has
+        lights. The FBX carries the scene's copy in-band; the GLB states its
+        lightmaps once, in ``extras.lightmaps``, each file the record names
+        riding it as the bufferView of its name.
 
         Parameters:
             glb_path: The GLB this export wrote, if any.

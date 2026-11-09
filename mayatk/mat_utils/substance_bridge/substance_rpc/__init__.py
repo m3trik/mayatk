@@ -2,29 +2,29 @@
 # coding=utf-8
 """Substance Painter RPC -- client, installer, and Painter-side plugin.
 
-Lives inside :mod:`mayatk.mat_utils.substance_bridge` as its
+Lives inside the Substance bridge package (``substance_bridge``) as its
 "talk to a running Painter" subset. Mirrors the layout of
-:mod:`mayatk.mat_utils.marmoset_bridge.marmoset_rpc`:
+the Marmoset bridge's ``marmoset_rpc``:
 
 * The parent :mod:`substance_bridge` -- file-based handoff. Exports
   selection to FBX and launches a templated Painter session. Safe by
   default; never reaches into a live session uninvited.
-* :mod:`substance_bridge.substance_rpc` (this module) -- targets a
-  Painter that is *already running* with the ``substance_rpc`` Python
-  plugin loaded (``plugin_src/substance_rpc``, installed into Painter's
-  user plugin folder by :class:`Installer`; the bridge installs it
-  automatically on send).
+* :mod:`substance_bridge.substance_rpc` (this module) -- reaches a
+  Painter running the ``substance_rpc`` Python plugin
+  (``plugin_src/substance_rpc``): one the bridge launched (it loads the
+  plugin from :meth:`Installer.launch_root`), or the person's own once
+  they installed it (*Install in Painter*, :class:`Installer`) and ticked
+  it in Painter's Python menu. Each serving Painter is found by its
+  instance record (:meth:`PainterRpcClient.painters`).
 
 Stock Painter binds no RPC port of its own (``--enable-remote-scripting``
-is a no-op; verified 2026-05-18) -- the plugin is what makes the
-``reimport`` / ``render`` / ``bake_lighting`` templates dispatchable.
+is a no-op; verified 2026-05-18) -- the plugin is what runs a script in
+Painter (``script.start``).
 
-**Vendored twin -- keep code-identical.** This whole subpackage (client,
-installer, README and ``plugin_src/``) is duplicated under
-``mayatk/mat_utils/substance_bridge/substance_rpc/`` (the SSoT: edit it
-there) and ``blendertk/mat_utils/substance_bridge/substance_rpc/``; mirror
-every change into both. Drift -- a changed file, or one present on one
-side only -- fails ``extapps/test/test_vendor_sync.py``. The plugin's
+**Vendored copy -- keep byte-identical.** This whole subpackage (client, installer, README and ``plugin_src/``) ships in each host
+library's Substance bridge and in the standalone Substance Scripts app; the
+Maya library's copy is the source (edit it there, then mirror it). Drift
+fails the vendor guard (``test_vendor_sync.py``). The plugin's
 ``_rpc_core.py`` is in turn a staged copy of
 ``pythontk.net_utils.rpc.plugin_core`` (``m3trik/scripts/sync_rpc_core.py``).
 """
@@ -33,5 +33,5 @@ from pythontk.core_utils.module_resolver import lazy_exports
 
 lazy_exports(
     globals(),
-    {"client": ("PainterRpcClient", "DEFAULT_RPC_PORT"), "installer": "Installer"},
+    {"client": "PainterRpcClient", "installer": "Installer"},
 )

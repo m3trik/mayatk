@@ -3,34 +3,51 @@
 """Drive Substance 3D Painter from the outside -- the DCC-free half of the bridge.
 
 :class:`SubstanceEngine` is everything the Painter hand-off does that needs no
-DCC: template discovery and metadata parsing, the Painter command line and the
-RPC op list rendered from them, Painter discovery / launch / attach and the
-managed-instance registry, the Painter-side ``substance_rpc`` plugin install,
-texture staging (packed-map unpacking, the Texture Affix, the mesh-map filter)
-and the result it hands back. It is a :class:`pythontk.HandoffBridge` whose
-produce step is written against a few scene hooks (the *DCC hooks* section of
-the class); each DCC's ``SubstanceBridge`` subclasses it and supplies only
-those -- the mesh writers, the selection, the material manifest, the textures
-assigned to the selection, the bake-source export, and where the scene keeps
-the path of its last export.
+DCC: script discovery and header parsing, finding the Painter a script runs in
+(by its instance record, or a launch), texture staging (packed-map unpacking,
+the Texture Affix, the mesh-map filter) and the result it hands back. It is a
+:class:`pythontk.HandoffBridge` whose produce step is written against a few
+scene hooks (the *DCC hooks* section of the class); each DCC's
+``SubstanceBridge`` subclasses it and supplies only those -- the mesh writers,
+the selection, the material manifest, the textures assigned to the selection,
+the bake-source export, and where the scene keeps the path of its last export.
+A host-free caller (the standalone Substance Scripts app) names a mesh file instead
+(``send(..., mesh=path)``) and needs none of them.
 
-Marmoset's templates are Python scripts executed by Toolbag's ``-run`` flag.
-Painter has no analogous CLI; its automation surface is ``--mesh`` at launch
-plus the HTTP endpoint served by our Painter-side ``substance_rpc`` plugin
-(see :mod:`substance_bridge.substance_rpc`; installed automatically on send).
-So Substance templates are *descriptive* (metadata constants parsed via
-:mod:`ast`, not executed) and the engine translates them into a launch +
-optional RPC dispatch (structured ``RPC_OPS`` and/or a legacy-JS
-``RPC_SCRIPT`` routed through ``substance_painter.js.evaluate``).
+A script is a Python file run inside Painter as written (``templates/*.py``,
+or the person's own in ``ptk.ScriptTemplate.user_dir("substance")``, which
+shadows a built-in of its name), its values given as ``args``
+(``substance_rpc``'s ``script.start``). Its header, read without running it::
 
-**Vendored copy -- keep byte-identical.** This file is duplicated at
-``mayatk/mat_utils/substance_bridge/_substance_engine.py`` (the SSoT: edit it
-there) and ``blendertk/mat_utils/substance_bridge/_substance_engine.py``. The
-two DCC packages cannot import each other and pythontk names no product, so the
+    \"\"\"Bake Lighting to Diffuse: Iray AO composited onto Base Color.\"\"\"
+    WORKS_ON = "project"
+    # Rows: __PAINTER_SAVE__ __PAINTER__
+    # Row: __AO_RAYS__ int 64 "AO Rays" min=1 max=256
+
+* ``WORKS_ON`` -- what it runs on, which decides the Painter: ``"new"`` a new
+  project from the sent mesh (a Painter with no project open, else a launched
+  one), ``"mesh"`` the project made from the sent mesh (the Painter holding
+  it), ``"project"`` the Project row's ``.spp`` (the Painter holding it, else
+  one it opens in) or, with none named, the project open in Painter.
+* ``__KEY__`` tokens show the panel's rows; ``Row:`` lines declare the
+  script's own (``ptk.ScriptTemplate.declared_rows``). Every value arrives in
+  ``args`` by key, beside what the send made: ``MESH``, ``HIGH_POLY``,
+  ``MANIFEST``, ``MESH_MAPS``, ``MESH_MAP_FILES``, ``STAGED_TEXTURES``,
+  ``OUTPUT_DIR``, ``IMAGES_DIR``, ``TEXTURES_DIR``, ``PROJECT``.
+* ``BUILD_MANIFEST``, ``REUSE_RECORDED_EXPORT``, ``FBX_OPTIONS`` and
+  ``BRIDGE_MODES`` -- the host export's options, as before.
+
+A send queues the script and returns its job (``result["job"]``);
+:meth:`SubstanceEngine.wait` follows it to the end (a ``round_trip`` send
+waits there itself).
+
+**Vendored copy -- keep byte-identical.** This file ships in each host
+library's Substance bridge and in the standalone Substance Scripts app; the
+Maya library's copy is the source (edit it there, then mirror it). Drift
+fails the vendor guard (``test_vendor_sync.py``).
+The packages cannot import each other and pythontk names no product, so the
 Painter half has no shared importable home. It imports pythontk and its own
 siblings (relatively) only -- never a DCC, never its host package by name.
-Mirror every change into both copies; drift fails
-``extapps/test/test_vendor_sync.py``.
 """
 
 import ast
@@ -38,102 +55,70 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import pythontk as ptk
 from pythontk import StrUtils
 
 from .connection import APP, SubstanceConnection
-from .substance_rpc import DEFAULT_RPC_PORT
+from .substance_rpc.client import PainterRpcClient
+from .substance_rpc.installer import PLUGIN_SPEC
 
 logger = logging.getLogger(__name__)
 
 _PKG_DIR = Path(__file__).resolve().parent
 _TEMPLATE_DIR = _PKG_DIR / "templates"
+#: A person's own Painter scripts (``ptk.ScriptTemplate.user_dir``): one folder
+#: every host and the standalone app read, where a script named like a bundled
+#: one runs in its place.
+_SCRIPTS_APP = "substance"
 
 
-# The mode vocabulary a template's ``BRIDGE_MODES`` tuple may name -- taken from
-# ``script_template``, never spelled here. These strings are an ON-DISK contract shared by
-# every bridge in the ecosystem, so a local copy is a second dialect of a file format, and
-# that is exactly how this module's old ``roundtrip`` drifted from the canonical
-# ``round_trip``. Templates carrying the old spelling still load: ``declared_modes`` folds
-# it to the canon on the way in (``script_template._MODE_ALIASES``).
+# The mode vocabulary a script's ``BRIDGE_MODES`` tuple may name -- taken from
+# ``script_template``, never spelled here (an ON-DISK contract every bridge
+# shares; ``declared_modes`` folds the old ``roundtrip`` spelling to the canon).
 SEND_TO = ptk.SEND_TO
 ROUND_TRIP = ptk.ROUND_TRIP
 _MODES = (SEND_TO, ROUND_TRIP)
 
-# Allowed values for a template's ``TARGET_INSTANCE`` field and the
-# matching ``target=`` kwarg on ``SubstanceBridge.send``.
-#
-# - ``"auto"``  -- reuse an existing managed instance if one is live, else launch.
-# - ``"new"``   -- always launch a fresh Painter (current default).
-# - ``"current"`` -- require a live managed instance; error if none.
-#
-# ``target=<int>`` on ``send()`` is a fourth shape -- attach to that specific
-# RPC port. It maps to "current"-style constraints (no fresh launch).
-TARGET_AUTO = "auto"
-TARGET_NEW = "new"
-TARGET_CURRENT = "current"
-_TARGETS = (TARGET_AUTO, TARGET_NEW, TARGET_CURRENT)
+#: What a script runs on (its ``WORKS_ON``): see the module docstring.
+WORKS_NEW = "new"
+WORKS_MESH = "mesh"
+WORKS_PROJECT = "project"
+_WORKS_ON = (WORKS_NEW, WORKS_MESH, WORKS_PROJECT)
+
+#: The Painter row's fixed choices; any other value is an instance record's id.
+PAINTER_AUTO = "auto"
+PAINTER_NEW = "new"
 
 
-# -- Template introspection ------------------------------------------------
+# -- Script header ---------------------------------------------------------
 
 _TEMPLATE_FIELDS = (
     "BRIDGE_MODES",
-    "LAUNCH_ARGS",
-    "RPC_SCRIPT",
-    "RPC_OPS",
+    "WORKS_ON",
     "BUILD_MANIFEST",
-    "TARGET_INSTANCE",
     "FBX_OPTIONS",
-    "EXPORT_FBX",
     "REUSE_RECORDED_EXPORT",
-    "NO_CONNECTION_HINT",
 )
 _TEMPLATE_DEFAULTS: Dict[str, Any] = {
     "BRIDGE_MODES": (SEND_TO,),
-    "LAUNCH_ARGS": [],
-    # Legacy-JS body dispatched via the plugin's ``js.evaluate`` op
-    # (Painter's ``substance_painter.js.evaluate`` -- the ``alg.*`` API).
-    "RPC_SCRIPT": "",
-    # Structured RPC calls: ``[("op.name", {"kwarg": value}), ...]``.
-    # Dispatched (in order, before RPC_SCRIPT) via the substance_rpc
-    # plugin's ``{op, kwargs}`` wire. String kwarg values get the same
-    # ``__KEY__`` substitution as LAUNCH_ARGS (raw, unquoted).
-    "RPC_OPS": [],
+    "WORKS_ON": WORKS_PROJECT,
     "BUILD_MANIFEST": False,
-    "TARGET_INSTANCE": TARGET_AUTO,
     "FBX_OPTIONS": {},
-    # When False, skip the host's mesh export entirely -- the template targets
-    # an existing Painter project (e.g. render-current-view) and doesn't care
-    # about the host selection. The slot also relaxes its "nothing selected"
-    # guard in that case.
-    "EXPORT_FBX": True,
     # When True, the export overwrites the mesh path recorded on the host
     # scene (Maya ``fileInfo``, a Blender scene custom property) by the
-    # previous send instead of re-deriving it -- so a reimport hits the exact
-    # file the open Painter project points at, surviving host restarts and
-    # Output Dir drift.
+    # previous send instead of re-deriving it -- so an Update Mesh hits the
+    # exact file the open Painter project points at, surviving host restarts
+    # and Output Dir drift.
     "REUSE_RECORDED_EXPORT": False,
-    # Logged (after __KEY__ substitution) when the template needs a live
-    # Painter connection and none is reachable. Turns a dead-end error
-    # into user instructions -- e.g. "reload the mesh manually".
-    "NO_CONNECTION_HINT": "",
 }
-
-
 _TEMPLATE_TYPES: Dict[str, type] = {
     "BRIDGE_MODES": (tuple, list),  # normalized to tuple below
-    "LAUNCH_ARGS": list,
-    "RPC_SCRIPT": str,
-    "RPC_OPS": list,
+    "WORKS_ON": str,
     "BUILD_MANIFEST": bool,
-    "TARGET_INSTANCE": str,
     "FBX_OPTIONS": dict,
-    "EXPORT_FBX": bool,
     "REUSE_RECORDED_EXPORT": bool,
-    "NO_CONNECTION_HINT": str,
 }
 
 
@@ -145,25 +130,18 @@ class SubstanceEngine(ptk.HandoffBridge):
 
     A :class:`pythontk.HandoffBridge`: the shared skeleton (``resolve -> preflight
     -> produce -> deliver``) drives the flow, with this class supplying all four
-    steps. Unlike the simpler bridges its delivery (Painter launch/attach + JSON-RPC
-    round-trip + managed-instance registry) is deeply stateful and unique, so the
-    engine is its own deliverer (it overrides :meth:`_deliver`/:meth:`_preflight`
-    rather than plugging in a shared :class:`pythontk.Deliverer`).
+    steps. Its delivery is finding the Painter a script runs in and queueing it
+    there, so the engine is its own deliverer.
 
     The produce step reads and writes the host scene only through the *DCC
-    hooks* at the bottom of the class, which a subclass implements: the mesh
-    writers (:meth:`_export_model_fbx` / :meth:`_export_model_usd`), the
-    selection, the material manifest, the textures assigned to the selection,
-    the bake-source export, and the scene-side record of the last export path.
-    A subclass also sets :attr:`payload_prefix` (the scratch namespace a send
-    with no Output Dir lands in) and :attr:`DEFAULT_FBX_OPTIONS`.
-
-    Two operating modes per template (declared via ``BRIDGE_MODES``):
-
-    * ``send_to`` -- launch Painter interactively, fire-and-forget.
-    * ``roundtrip`` -- launch Painter with remote scripting, send the
-      template's ``RPC_SCRIPT`` body, and wait for the call to complete.
+    hooks* at the bottom of the class, which a subclass implements. A subclass
+    also sets :attr:`payload_prefix` (the scratch namespace a send with no
+    Output Dir lands in) and :attr:`DEFAULT_FBX_OPTIONS`.
     """
+
+    #: The plugin in Painter (``pythontk.RpcPluginSpec``): a panel over this
+    #: engine offers *Install in Painter* / *Uninstall from Painter* for it.
+    RPC_PLUGIN = PLUGIN_SPEC
 
     #: Executable discovery for this bridge's target app (:class:`pythontk.AppSpec`),
     #: re-exposed from the connection module so callers reach it through the class
@@ -171,8 +149,8 @@ class SubstanceEngine(ptk.HandoffBridge):
     #: ``<Bridge>.APP.available`` and shows ``APP.not_found_message`` when unmet.
     APP = APP
 
-    # Some templates (e.g. render-current-view) operate on an already-loaded
-    # Painter project and export nothing -- so an empty selection is allowed.
+    # A script that runs on a project exports nothing -- so an empty selection
+    # is allowed.
     requires_objects = False
 
     # Both carriers: Painter creates a project from USD (8.3+) beside FBX. Flat
@@ -181,21 +159,24 @@ class SubstanceEngine(ptk.HandoffBridge):
     carriers = ("fbx", "usd")
     usd_flattens_instances = True
 
-    #: The host exporter's FBX options tuned for Painter -- the base a template's
+    #: The host exporter's FBX options tuned for Painter -- the base a script's
     #: ``FBX_OPTIONS`` and the caller's ``fbx_options`` merge over. Host-specific
     #: vocabulary (Maya ``FBXExport*`` flags, Blender ``export_scene.fbx``
     #: kwargs), so the DCC subclass sets it; read-only here.
     DEFAULT_FBX_OPTIONS: Optional[Dict[str, Any]] = None
 
     #: Scene key holding the last exported mesh path (saved with the scene, so
-    #: a reimport from a later session still finds it).
+    #: an Update Mesh from a later session still finds it).
     EXPORT_RECORD_KEY = "substance_bridge_last_fbx"
+
+    #: Seconds a launched Painter has to start serving.
+    LAUNCH_TIMEOUT = 180.0
 
     def __init__(self, painter_path: Optional[str] = None):
         super().__init__()
         self._painter_path = painter_path
-        # Managed Painter instances launched by this bridge, in insertion
-        # order (oldest -> newest). Pruned of dead entries on each lookup.
+        # Painters this bridge launched, oldest first: the only ones it may
+        # end, and the first reused by an Auto send. Dead ones are pruned.
         self._instances: List[SubstanceConnection] = []
 
     # -- Painter path resolution ------------------------------------------
@@ -219,147 +200,155 @@ class SubstanceEngine(ptk.HandoffBridge):
         """Path to Painter's application ``log.txt``, or *None* if absent."""
         return self.resolve_painter_log_path(self.painter_path)
 
-    # -- Managed-instance registry ----------------------------------------
+    # -- Painters ----------------------------------------------------------
 
     @property
     def instances(self) -> List[SubstanceConnection]:
-        """Live snapshot of managed connections (oldest -> newest, dead pruned)."""
+        """The Painters this bridge launched that still run (oldest first)."""
         self._instances = [c for c in self._instances if c.is_alive()]
         return list(self._instances)
 
-    def find_live_managed(self) -> Optional[SubstanceConnection]:
-        """Return the most-recently-launched managed instance whose RPC pings.
-
-        Prunes dead entries from the registry as a side effect.
-        """
-        self._instances = [c for c in self._instances if c.is_alive()]
-        for conn in reversed(self._instances):
-            if conn.rpc and conn.rpc.ping(timeout=0.5):
-                return conn
-        return None
-
-    # -- Target resolution ------------------------------------------------
+    @staticmethod
+    def painters() -> List[Dict[str, Any]]:
+        """Every running Painter serving the plugin (its instance record):
+        what the Painter row lists beside Auto and New."""
+        return PainterRpcClient.painters()
 
     @staticmethod
-    def _validate_target(template_target: str, user_target: Any) -> None:
-        """Raise :class:`ValueError` if *user_target* is incompatible.
+    def painter_label(record: Dict[str, Any]) -> str:
+        """*record*'s Painter as a person reads it: its project, else "no project"."""
+        project = (record.get("state") or {}).get("project") or {}
+        name = project.get("name") or (os.path.basename(project["file_path"]) if project.get("file_path") else "")
+        paused = ", paused" if (record.get("state") or {}).get("paused") else ""
+        return f"Painter: {name or 'no project'} (pid {record.get('pid')}{paused})"
 
-        *template_target* is one of :data:`_TARGETS`; *user_target* is the
-        caller's ``target=`` kwarg -- either a member of :data:`_TARGETS`
-        or an ``int`` port.
-        """
-        if isinstance(user_target, int):
-            if template_target == TARGET_NEW:
-                raise ValueError(
-                    "Template declares TARGET_INSTANCE='new'; cannot target "
-                    f"specific port {user_target} (would skip the launch)."
-                )
-            return
-        if user_target not in _TARGETS:
-            raise ValueError(
-                f"Invalid target={user_target!r}; expected one of {_TARGETS} "
-                "or an int RPC port."
-            )
-        if template_target == TARGET_NEW and user_target == TARGET_CURRENT:
-            raise ValueError(
-                "Template declares TARGET_INSTANCE='new'; cannot target "
-                "'current' (template requires a fresh launch)."
-            )
-        if template_target == TARGET_CURRENT and user_target == TARGET_NEW:
-            raise ValueError(
-                "Template declares TARGET_INSTANCE='current'; cannot target "
-                "'new' (template requires an existing instance)."
-            )
-
-    def _resolve_connection(
-        self,
-        target: Union[str, int],
-        launch_args: List[str],
-        wants_rpc: bool,
-        painter_exe: Optional[str] = None,
-    ) -> Optional[SubstanceConnection]:
-        """Return the connection that the current :meth:`send` should use.
-
-        Pure routing logic; does not export FBX or send RPC. Returns
-        ``None`` on error (after logging). New launches register in
-        :attr:`_instances`; explicit-port attaches also register so a
-        subsequent ``target="auto"`` can reuse them.
-
-        - ``target=<int>``: attach to that port. Error if no RPC responds.
-        - ``target="new"``: always launch a new Painter.
-        - ``target="current"``: reuse a managed instance; error if none.
-        - ``target="auto"``: reuse a managed instance if available, else launch.
-        """
-        if isinstance(target, int):
-            try:
-                conn = SubstanceConnection.attach(port=target)
-            except ConnectionRefusedError as e:
-                self.logger.error(str(e))
-                return None
-            self._instances.append(conn)
-            return conn
-
-        if target == TARGET_NEW:
-            return self._launch_new(launch_args, wants_rpc, painter_exe)
-
-        # auto / current: try the registry first.
-        live = self.find_live_managed()
-        if live is not None:
-            self.logger.info(
-                "Reusing managed Painter instance on port %d.", live.rpc_port
-            )
-            return live
-
-        # Registry miss: probe the default RPC port. A Painter with the
-        # substance_rpc plugin answers here even when this bridge (or this
-        # host session) didn't launch it -- the discovery that makes
-        # "current" work across host restarts and user-launched Painters.
+    def _connection_for(self, record: Dict[str, Any]) -> Optional[SubstanceConnection]:
+        """This bridge's own connection to *record*'s Painter, else an attach."""
+        for conn in self.instances:
+            if conn.record and conn.record.get("id") == record.get("id"):
+                return conn
         try:
-            conn = SubstanceConnection.attach(port=DEFAULT_RPC_PORT, verify_timeout=1.0)
-        except ConnectionRefusedError:
-            conn = None
-        if conn is not None:
-            self.logger.info(
-                "Attached to running Painter on port %d.", DEFAULT_RPC_PORT
-            )
-            self._instances.append(conn)
-            return conn
-
-        if target == TARGET_CURRENT:
-            self.logger.error(
-                "No running Painter with the substance_rpc plugin is "
-                "reachable. Launch one first (e.g. send the 'import' "
-                "template) or pass target='new'."
-            )
+            return SubstanceConnection.attach(record)
+        except ConnectionRefusedError as e:
+            # Its process is gone, or its PID now names another one: the
+            # record goes, so the next run does not pick it again.
+            ptk.RpcInstances.remove(record.get("label") or PainterRpcClient.LABEL, record.get("id"))
+            self.logger.error(str(e))
             return None
 
-        # target == auto, nothing reachable: launch.
-        return self._launch_new(launch_args, wants_rpc, painter_exe)
-
-    def _launch_new(
-        self,
-        launch_args: List[str],
-        wants_rpc: bool,
-        painter_exe: Optional[str] = None,
+    def _start_painter(
+        self, painter_exe: Optional[str] = None, gui: bool = True, hidden: bool = False
     ) -> Optional[SubstanceConnection]:
-        """Launch a fresh Painter and register it in the managed list.
-
-        *painter_exe* overrides the bridge's default ``_painter_path``
-        for this launch only -- no instance state mutation.
-        """
-        conn = SubstanceConnection(
-            mesh_path=None,  # template owns --mesh via LAUNCH_ARGS
-            exe=painter_exe or self._painter_path,
-            enable_remote=wants_rpc,
-            extra_args=launch_args,
-        )
+        """Start a Painter (it loads the plugin; *hidden*: on a private desktop,
+        :attr:`SubstanceConnection.hidden`), not yet serving (:meth:`_served`)."""
+        conn = SubstanceConnection(exe=painter_exe or self._painter_path, gui=gui, hidden=hidden)
         try:
             conn.open()
         except FileNotFoundError as e:
             self.logger.error(str(e))
             return None
-        self._instances.append(conn)
+        self.logger.info("Waiting for the launched Painter to start ...")
         return conn
+
+    def _served(self, conn: SubstanceConnection) -> str:
+        """Wait for a started Painter to serve and keep it, saying nothing (safe
+        off the UI thread): ``""``, else why it never served (it is ended)."""
+        if not conn.wait_ready(timeout=self.LAUNCH_TIMEOUT):
+            conn.close(terminate=True)
+            return "The launched Painter never served (see its log)."
+        self._instances.append(conn)
+        return ""
+
+    def _launch_new(
+        self, painter_exe: Optional[str] = None, gui: bool = True, hidden: bool = False
+    ) -> Optional[SubstanceConnection]:
+        """Launch a Painter, wait for it to serve, and keep it."""
+        conn = self._start_painter(painter_exe, gui, hidden)
+        error = self._served(conn) if conn is not None else "no Painter started"
+        if conn is not None and error:
+            self.logger.error(error)
+        return None if error else conn
+
+    @staticmethod
+    def _holds(record: Dict[str, Any], key: str, path: Optional[str]) -> bool:
+        project = (record.get("state") or {}).get("project") or {}
+        return PainterRpcClient._same_file(project.get(key), path)
+
+    @staticmethod
+    def _empty(record: Dict[str, Any]) -> bool:
+        """A free Painter: no project open, and not paused in Painter."""
+        state = record.get("state") or {}
+        return not state.get("project") and not state.get("paused")
+
+    def pick_painter(
+        self,
+        works_on: str,
+        choice: str = PAINTER_AUTO,
+        project: Optional[str] = None,
+        mesh: Optional[str] = None,
+        painter_exe: Optional[str] = None,
+        gui: bool = True,
+        hidden: bool = False,
+        launch: bool = True,
+    ) -> Optional[SubstanceConnection]:
+        """The Painter a script that *works_on* runs in; ``None`` (said) when none fits.
+
+        *choice* is the Painter row: :data:`PAINTER_NEW` launches one; a record
+        id is that Painter; :data:`PAINTER_AUTO` takes, for a new project, a
+        Painter with none open (one this bridge launched first) else a launch;
+        for the sent mesh's project, the Painter whose project was made from
+        *mesh*; for a named *project*, the Painter holding it, else one with
+        no project open, else a launch; for the open project, this bridge's
+        latest Painter, else the only one serving. A Painter paused in Painter
+        is never taken as a free one. Without *launch*, where it would launch
+        one it returns :data:`PAINTER_NEW` (the caller launches).
+        """
+        launch = (lambda: self._launch_new(painter_exe, gui, hidden)) if launch else (lambda: PAINTER_NEW)  # noqa: E731
+        if choice == PAINTER_NEW:
+            return launch()
+        records = self.painters()
+        if choice and choice != PAINTER_AUTO:
+            record = next((r for r in records if r.get("id") == choice), None)
+            if record is None:
+                self.logger.error("That Painter is no longer running: pick another (Refresh).")
+                return None
+            if works_on == WORKS_NEW and not self._empty(record):
+                self.logger.error(f"{self.painter_label(record)} has a project open: a new project needs a Painter with none.")
+                return None
+            if works_on == WORKS_MESH and not self._holds(record, "mesh_path", mesh):
+                self.logger.error(f"{self.painter_label(record)} does not hold the project made from {mesh}.")
+                return None
+            return self._connection_for(record)
+
+        own = [c.record for c in self.instances if c.record]
+        own_ids = {r.get("id") for r in own}
+        ordered = [r for r in records if r.get("id") in own_ids] + [r for r in records if r.get("id") not in own_ids]
+        if works_on == WORKS_NEW:
+            found = next((r for r in ordered if self._empty(r)), None)
+            return self._connection_for(found) if found else launch()
+        if works_on == WORKS_MESH:
+            found = next((r for r in ordered if self._holds(r, "mesh_path", mesh)), None)
+            if found is None:
+                self.logger.warning(
+                    "No running Painter has the project made from this mesh open "
+                    f"({mesh}). Open it in Painter, or run New Project first."
+                )
+            return self._connection_for(found) if found else None
+        if project:
+            found = next((r for r in ordered if self._holds(r, "file_path", project)), None)
+            found = found or next((r for r in ordered if self._empty(r)), None)
+            return self._connection_for(found) if found else launch()
+        if own:
+            return self._connection_for(own[-1])
+        if len(records) == 1:
+            return self._connection_for(records[0])
+        self.logger.error(
+            "No project to run on: open one in Painter (with the plugin ticked), "
+            "name one in Project, or pick the Painter."
+            if not records
+            else "Several Painters are running: pick the one to run in (Painter)."
+        )
+        return None
 
     # -- Public API -------------------------------------------------------
 
@@ -368,7 +357,7 @@ class SubstanceEngine(ptk.HandoffBridge):
         objects: Optional[List[Any]],
         template: str,
         mode: str,
-        target: Union[str, int],
+        target: Any,
         params: Optional[Dict[str, Any]],
         legacy_kwargs: Dict[str, Any],
         **extras: Any,
@@ -376,23 +365,19 @@ class SubstanceEngine(ptk.HandoffBridge):
         """Pack one ``send()`` call into a :class:`pythontk.HandoffRequest` and run it.
 
         The shared body of each DCC's public ``send``, whose signature -- the host's
-        own export knobs among its keywords -- stays on the DCC class. *legacy_kwargs*
-        is that method's ``**`` catch-all: the pre-restructure ``headless`` /
-        ``enable_remote`` are swallowed, anything else is logged as ignored.
-        *extras* (``output_dir``, ``painter_exe``, the host's export options, ...)
-        ride in :attr:`pythontk.HandoffRequest.extras` beside *target*.
+        own export knobs among its keywords -- stays on the DCC class. *target*
+        is the Painter (the Painter row's value: ``"auto"``, ``"new"`` or an
+        instance record's id); *legacy_kwargs* is that method's ``**``
+        catch-all: the pre-restructure ``headless`` / ``enable_remote`` are
+        swallowed, anything else is logged as ignored. *extras*
+        (``output_dir``, ``painter_exe``, ``mesh``, the host's export options,
+        ...) ride in :attr:`pythontk.HandoffRequest.extras`.
         """
-        # Swallow legacy kwargs without surprises.
         legacy_kwargs = dict(legacy_kwargs)
         legacy_kwargs.pop("headless", None)
         legacy_kwargs.pop("enable_remote", None)
         if legacy_kwargs:
-            self.logger.warning(
-                "Unknown send() kwargs ignored: %s", list(legacy_kwargs)
-            )
-
-        # Pack the Painter-specific knobs into the request extras and run the
-        # shared skeleton (resolve -> preflight -> produce -> deliver).
+            self.logger.warning("Unknown send() kwargs ignored: %s", list(legacy_kwargs))
         request = ptk.HandoffRequest(
             template=template,
             mode=mode,
@@ -408,41 +393,29 @@ class SubstanceEngine(ptk.HandoffBridge):
         return objects
 
     def _preflight(self, objects, request) -> bool:
-        """Validate the template / mode / target before exporting."""
-        template_path = _TEMPLATE_DIR / f"{request.template}.py"
+        """Refuse before exporting: a script that is missing, does not compile,
+        or does not run in the requested mode."""
+        template_path = SubstanceEngine.template_path(request.template)
         if not template_path.is_file():
             available = sorted(p.stem for p in self.list_templates())
-            self.logger.error(
-                f"Template '{request.template}' not found at {template_path}. "
-                f"Available: {available}"
-            )
+            self.logger.error(f"No script '{request.template}' at {template_path}. Available: {available}")
             return False
-
-        meta = self.parse_template(template_path)
-        if request.mode not in meta["BRIDGE_MODES"]:
-            self.logger.error(
-                f"Template '{request.template}' does not support mode "
-                f"'{request.mode}'. Declared modes: {meta['BRIDGE_MODES']}"
-            )
-            return False
-
         try:
-            self._validate_target(meta["TARGET_INSTANCE"], request.get("target"))
-        except ValueError as e:
-            self.logger.error(str(e))
+            compile(template_path.read_text(encoding="utf-8-sig"), str(template_path), "exec")
+        except SyntaxError as e:
+            self.logger.error(f"{template_path.name} does not compile (line {e.lineno}): {e.msg}")
             return False
-
-        # Narrow the default "auto" to the template's declared target so a
-        # 'current'-only template (e.g. reimport) never silently launches a
-        # fresh Painter, and a 'new'-only template never grabs a stale one.
-        # An explicit user choice (validated compatible above) still wins.
-        if request.get("target") == TARGET_AUTO and meta["TARGET_INSTANCE"] in (
-            TARGET_NEW,
-            TARGET_CURRENT,
-        ):
-            request.extras["target"] = meta["TARGET_INSTANCE"]
-
-        # Carry the parsed metadata + path forward (parsed once).
+        meta = self.parse_template(template_path)
+        if request.mode != SEND_TO and request.mode not in meta["BRIDGE_MODES"]:
+            self.logger.error(
+                f"Script '{request.template}' does not run in mode '{request.mode}'. "
+                f"Declared modes: {meta['BRIDGE_MODES']}"
+            )
+            return False
+        mesh = request.get("mesh")
+        if meta["WORKS_ON"] in (WORKS_NEW, WORKS_MESH) and mesh and not os.path.isfile(mesh):
+            self.logger.error(f"No mesh file at {mesh!r}.")
+            return False
         request.extras["_meta"] = meta
         request.extras["_template_path"] = template_path
         return True
@@ -467,9 +440,11 @@ class SubstanceEngine(ptk.HandoffBridge):
 
     def _produce(self, objects, request) -> Optional[ptk.Payload]:
         """Export the mesh (FBX or USD), stage textures, and build the material
-        manifest."""
+        manifest -- for a script that works on a mesh. A host-free send names
+        the mesh instead (``mesh=``): it is used as it is, nothing exported."""
         meta = request.extras["_meta"]
         template_path = request.extras["_template_path"]
+        given_mesh = request.get("mesh")
 
         # No Output Dir: the hand-off (manifest, staged texture copies) is the
         # run's detached scratch in the ``payload_prefix`` namespace -- Painter
@@ -483,14 +458,17 @@ class SubstanceEngine(ptk.HandoffBridge):
         output_dir = named_dir or self._scratch_dir(request, "handoff")
         mesh_dir = named_dir or self._mesh_cache_dir() or output_dir
 
-        # Reimport-style templates overwrite the exact file the open Painter
+        # An Update Mesh-style script overwrites the exact file the open Painter
         # project was created from -- the path recorded on the scene by the
         # previous send -- rather than re-deriving it (which would drift if the
         # Output Dir resolves differently this session).
         recorded_fbx = (
             self._recorded_export_path() if meta.get("REUSE_RECORDED_EXPORT") else None
         )
-        if recorded_fbx:
+        if given_mesh:
+            fbx_path = given_mesh
+            base = os.path.splitext(os.path.basename(given_mesh))[0]
+        elif recorded_fbx:
             fbx_path = recorded_fbx
             recorded_dir = os.path.dirname(recorded_fbx)
             if recorded_dir:
@@ -520,7 +498,7 @@ class SubstanceEngine(ptk.HandoffBridge):
         os.makedirs(os.path.dirname(fbx_path), exist_ok=True)
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
 
-        # Which knobs this template claims, and their effective values. Read
+        # Which rows this script claims, and their effective values. Read
         # before the export because the high-poly leg below is gated on them
         # (a stale panel value must not pollute a template that never asked
         # for the widget -- e.g. ``render.py``).
@@ -533,11 +511,11 @@ class SubstanceEngine(ptk.HandoffBridge):
         merged_params.update(request.params or {})
 
         # -- Mesh export ---------------------------------------------------
-        # Templates that operate on an already-loaded Painter project (e.g.
-        # render the current view) declare EXPORT_FBX=False and skip this
-        # phase entirely. Defaults to True for compat with import/reimport.
+        # A script that works on a project (WORKS_ON "project") exports
+        # nothing; a host-free send's mesh is already a file.
         high_poly_path: Optional[str] = None
-        if meta.get("EXPORT_FBX", True):
+        exports = meta["WORKS_ON"] in (WORKS_NEW, WORKS_MESH) and not given_mesh
+        if exports:
             # Precedence: defaults < template FBX_OPTIONS < caller's fbx_options.
             merged_options = dict(self.DEFAULT_FBX_OPTIONS or {})
             merged_options.update(meta.get("FBX_OPTIONS", {}))
@@ -569,23 +547,22 @@ class SubstanceEngine(ptk.HandoffBridge):
             high_poly_path = self._export_bake_source(
                 fbx_path, merged_options, referenced, request
             )
-        else:
-            self.logger.info(
-                "Template declares EXPORT_FBX=False; skipping the mesh export."
-            )
+        elif not given_mesh:
+            self.logger.info("The script works on a Painter project; nothing exported.")
 
         # -- Stage textures assigned to the selection's materials --------
         # Only when the active template claims the PAINTER_INCLUDE_TEXTURES
         # widget AND the user left it on -- otherwise a stale value in the
         # panel doesn't pollute an unrelated template (e.g. ``render.py``).
-        include_textures = "PAINTER_INCLUDE_TEXTURES" in referenced and bool(
+        include_textures = exports and "PAINTER_INCLUDE_TEXTURES" in referenced and bool(
             merged_params.get("PAINTER_INCLUDE_TEXTURES", True)
         )
         # Resolve scope once -- shared by texture staging and manifest build.
         # Skipped entirely when neither needs it so render.py-style templates
         # don't pay for a needless selection round-trip.
         scope_objects: List[Any] = []
-        if include_textures or meta["BUILD_MANIFEST"]:
+        build_manifest = exports and meta["BUILD_MANIFEST"]
+        if include_textures or build_manifest:
             scope_objects = objects or self._selected_objects()
         texture_prefix, texture_suffix = _params.Parameters.affix_parts(
             merged_params.get("PAINTER_TEXTURE_AFFIX")
@@ -600,8 +577,8 @@ class SubstanceEngine(ptk.HandoffBridge):
             )
 
         # -- Optional material manifest -----------------------------------
-        has_mesh_map_wiring = False
-        if meta["BUILD_MANIFEST"]:
+        mesh_maps: Dict[str, Dict[str, str]] = {}
+        if build_manifest:
             self.logger.info("Building material manifest ...")
             manifest = self._material_manifest(scope_objects)
             if staged_textures:
@@ -618,7 +595,6 @@ class SubstanceEngine(ptk.HandoffBridge):
             )
             if mesh_maps:
                 manifest["mesh_maps"] = mesh_maps
-                has_mesh_map_wiring = True
             with open(manifest_path, "w", encoding="utf-8") as fh:
                 json.dump(manifest, fh, indent=2)
             self.logger.info(
@@ -647,224 +623,273 @@ class SubstanceEngine(ptk.HandoffBridge):
                 "staged_textures": staged_textures,
                 "referenced": referenced,
                 "high_poly_path": high_poly_path,
-                "has_mesh_map_wiring": has_mesh_map_wiring,
+                "manifest_built": build_manifest,
+                "mesh_maps": mesh_maps,
             },
         )
 
-    def _deliver(self, payload, request) -> Optional[Dict[str, Any]]:
-        """Render the launch args, resolve the Painter connection, dispatch RPC."""
+    def script_args(self, payload: ptk.Payload, request: ptk.HandoffRequest) -> Dict[str, Any]:
+        """The values a script gets as ``args``: the rows (the registry's
+        defaults under the request's), then what the send made."""
         from . import parameters as _params
 
+        values = _params.Parameters.defaults()
+        values.update(request.params or {})
+        extras = payload.extras
+        manifest = extras["manifest_path"] if extras.get("manifest_built") else ""
+        mesh = payload.primary if extras["meta"]["WORKS_ON"] in (WORKS_NEW, WORKS_MESH) else ""
+        values.update(
+            {
+                "MESH": (mesh or "").replace("\\", "/"),
+                "HIGH_POLY": (extras.get("high_poly_path") or "").replace("\\", "/"),
+                "MANIFEST": manifest.replace("\\", "/"),
+                "MESH_MAPS": extras.get("mesh_maps") or {},
+                "MESH_MAP_FILES": [p.replace("\\", "/") for p in self.mesh_map_files(extras.get("staged_textures") or [])],
+                "STAGED_TEXTURES": [p.replace("\\", "/") for p in extras.get("staged_textures") or []],
+                "OUTPUT_DIR": extras["output_dir"].replace("\\", "/"),
+                "IMAGES_DIR": (extras.get("images_dir") or extras["output_dir"]).replace("\\", "/"),
+                "TEXTURES_DIR": (extras.get("textures_dir") or extras["output_dir"]).replace("\\", "/"),
+                "PROJECT": (request.get("project") or values.get("PAINTER_PROJECT") or "").replace("\\", "/"),
+            }
+        )
+        return values
+
+    def _deliver(self, payload, request) -> Optional[Dict[str, Any]]:
+        """Find the Painter the script runs in, open its project when it is
+        named and not open, and queue the script there (waiting on it for a
+        ``round_trip``).
+
+        The waits (a launched Painter starting to serve, a project opening)
+        run in the request's ``background`` when it has one -- ``(work, then)``:
+        *work* off the UI thread, then ``then(work())`` back on it (a panel's
+        ``BackgroundTask``) -- and the result says ``pending``; the request's
+        ``on_queued`` then gets the result once the script is queued (or the
+        run stopped). Everything said is said on the caller's thread.
+        """
         meta = payload.extras["meta"]
-        fbx_path = payload.primary
-        manifest_path = payload.extras["manifest_path"]
-        output_dir = payload.extras["output_dir"]
-        staged_textures = payload.extras["staged_textures"]
-        referenced = payload.extras["referenced"]
-        high_poly_path = payload.extras.get("high_poly_path")
-        mode = request.mode
-
-        merged_params = _params.Parameters.defaults()
-        merged_params.update(request.params or {})
-
-        # -- Render placeholders ------------------------------------------
-        cli_ctx, js_ctx = self._build_contexts(
-            fbx_path=fbx_path,
-            manifest_path=manifest_path,
-            output_dir=output_dir,
-            params=request.params,
-            high_poly_path=high_poly_path,
-            images_dir=payload.extras.get("images_dir"),
-            textures_dir=payload.extras.get("textures_dir"),
-        )
-        launch_args = self._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
-        # Dynamic argv extensions that don't fit the static __KEY__ shape:
-        # - ``--mesh-map <path>`` per staged texture (variable-length).
-        # - ``--split-by-udim`` as a bare presence flag (no value follows).
-        if "--mesh" in launch_args:
-            # Only genuine mesh maps: Painter files these by filename suffix
-            # and has no slot for a base-color or roughness map, so handing
-            # it the whole staged set (as this did) was noise at best. The
-            # material channels still ship -- they ride the FBX's embedded
-            # textures and the manifest.
-            for tex_path in self.mesh_map_files(staged_textures):
-                launch_args.extend(["--mesh-map", tex_path])
-            if "PAINTER_SPLIT_BY_UDIM" in referenced and bool(
-                merged_params.get("PAINTER_SPLIT_BY_UDIM", False)
-            ):
-                launch_args.append("--split-by-udim")
-        rpc_script = StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
-        # Project-setup ops are added per-run rather than declared in the
-        # template, because they must not exist when the user hasn't asked
-        # for them: an empty RPC_OPS is what lets a plain ``import`` launch
-        # Painter without waiting on the plugin's endpoint first.
-        #
-        # They go FIRST, not last. ``mesh.reload`` (reimport) is
-        # asynchronous -- it returns ``{"started": True}`` and finishes via
-        # callback -- so appending would mutate texture sets while a reload
-        # is in flight. Ahead of it, they act on a settled project, and
-        # baking parameters survive the reload that follows.
-        rpc_ops = self._project_setup_ops(
-            high_poly_path,
-            referenced,
-            merged_params,
-            manifest_path=(
-                manifest_path if payload.extras.get("has_mesh_map_wiring") else None
-            ),
-        ) + self._render_rpc_ops(meta["RPC_OPS"], cli_ctx)
-        no_connection_hint = StrUtils.replace_delimited(
-            meta.get("NO_CONNECTION_HINT", ""), cli_ctx
-        ).strip()
-
-        # RPC needs the Painter-side substance_rpc plugin. Install (or
-        # refresh) it now so any Painter launched below -- and every future
-        # launch -- serves the endpoint. Idempotent and cheap when present.
-        wants_rpc = mode == ROUND_TRIP or bool(rpc_script.strip()) or bool(rpc_ops)
-        self.ensure_rpc_plugin()
-
-        # -- Resolve target connection ------------------------------------
-        # The template's LAUNCH_ARGS is authoritative for any fresh launch.
-        # ``_resolve_connection`` decides between attach / reuse / launch
-        # based on *target* (and the template's TARGET_INSTANCE constraint
-        # already validated in preflight). The per-call ``painter_exe``
-        # overrides the bridge default only for fresh launches; reused/attached
-        # instances use whatever Painter is already running.
-        connection = self._resolve_connection(
-            request.get("target"),
-            launch_args,
-            wants_rpc,
-            painter_exe=request.get("painter_exe"),
-        )
-        if connection is None:
-            # A template that declares a fallback hint degrades gracefully:
-            # the produce phase already did its useful work (e.g. reimport's
-            # FBX overwrite), so surface the manual next step instead of
-            # discarding the run.
-            if no_connection_hint:
-                self.logger.warning(no_connection_hint)
-                self._announce_handoff(request.template, mode, fbx_path, output_dir)
-                return {
-                    "fbx": fbx_path,
-                    "mode": mode,
-                    "connection": None,
-                    "output_dir": output_dir,
-                    "delivered": False,
-                    **({"high_poly": high_poly_path} if high_poly_path else {}),
-                }
-            return None
-
+        works_on = meta["WORKS_ON"]
+        args = self.script_args(payload, request)
+        project = args["PROJECT"] if works_on == WORKS_PROJECT else ""
+        mesh = args["MESH"]
         result: Dict[str, Any] = {
-            "fbx": fbx_path,
-            "mode": mode,
-            "connection": connection,
-            "output_dir": output_dir,
-            "delivered": True,
+            "fbx": payload.primary,
+            "mode": request.mode,
+            "output_dir": payload.extras["output_dir"],
+            "connection": None,
+            "job": None,
+            "delivered": False,
         }
-        if high_poly_path:
-            result["high_poly"] = high_poly_path
-        if meta["BUILD_MANIFEST"]:
-            result["manifest"] = manifest_path
+        if payload.extras.get("high_poly_path"):
+            result["high_poly"] = payload.extras["high_poly_path"]
+        if payload.extras.get("manifest_built"):
+            result["manifest"] = payload.extras["manifest_path"]
 
-        # -- Optional RPC dispatch ----------------------------------------
-        # RPC_OPS first (structured {op, kwargs} calls), then RPC_SCRIPT
-        # (legacy-JS body via the plugin's js.evaluate shim).
-        if (rpc_ops or rpc_script.strip()) and connection.rpc is not None:
-            self.logger.info("Waiting for Painter RPC to become ready ...")
-            if not connection.rpc.wait_until_ready(timeout=60):
-                self.logger.error(
-                    "Painter RPC never came up. The substance_rpc plugin is "
-                    "installed but not active in this Painter: tick it once "
-                    "in Painter's Python menu (use Python > Reload Plugins "
-                    "Folder if it isn't listed yet) -- Painter remembers it."
+        background = request.get("background")
+        self.refresh_rpc_plugin()
+        picked = self.pick_painter(
+            works_on,
+            request.get("target") or PAINTER_AUTO,
+            project=project or None,
+            mesh=mesh or None,
+            painter_exe=request.get("painter_exe"),
+            gui=request.get("gui", True),
+            hidden=request.get("hidden", False),
+            launch=background is None,
+        )
+        if picked is None:
+            if works_on == WORKS_MESH and os.path.isfile(payload.primary):
+                self.logger.warning(
+                    f"The mesh is updated on disk ({payload.primary}): in Painter, Edit > "
+                    "Project Configuration > Select that file > OK reloads it."
                 )
-                if no_connection_hint:
-                    self.logger.warning(no_connection_hint)
-                result["delivered"] = False
-                if mode == ROUND_TRIP:
-                    connection.close()
-                    return None
-            else:
-                # Each op is isolated. They are independent knobs, and the
-                # cosmetic one (resolution) goes first -- sharing one ``try``
-                # meant a Painter that couldn't serve it never got asked to
-                # apply the mesh maps either, so one stale op took the whole
-                # hand-off down. A roundtrip still aborts: its later steps
-                # are written assuming the earlier ones landed.
-                for op_name, op_kwargs in rpc_ops:
-                    self.logger.info(f"RPC: {op_name} ...")
-                    try:
-                        result.setdefault("rpc_results", []).append(
-                            connection.rpc.invoke(op_name, **op_kwargs)
-                        )
-                    except Exception as e:
-                        self.logger.error(f"RPC {op_name} failed: {e}")
-                        result.setdefault("rpc_failed", []).append(op_name)
-                        result["delivered"] = False
-                        if mode == ROUND_TRIP:
-                            connection.close()
-                            return None
-                if rpc_script.strip():
-                    self.logger.info("Sending template RPC script ...")
-                    try:
-                        result["rpc_result"] = connection.rpc.eval_js(rpc_script)
-                    except Exception as e:
-                        self.logger.error(f"RPC script failed: {e}")
-                        result.setdefault("rpc_failed", []).append("RPC_SCRIPT")
-                        result["delivered"] = False
-                        if mode == ROUND_TRIP:
-                            connection.close()
-                            return None
-                if result.get("rpc_failed"):
-                    self.logger.warning(
-                        "Painter did not apply: %s. If these read as unknown "
-                        "ops, the running Painter is serving a stale "
-                        "substance_rpc -- use Python > Reload Plugins Folder "
-                        "(or relaunch Painter) and send again.",
-                        ", ".join(result["rpc_failed"]),
-                    )
+            return result
 
-        self._announce_handoff(request.template, mode, fbx_path, output_dir)
-        return result
+        ctx = request.get("ctx")
+        label = self.label(request.template)
+        to_open = project if works_on != WORKS_NEW and project else ""
+        if picked == PAINTER_NEW:
+            started = None  # launched below: it holds no project yet
+        else:
+            started = picked
+            if works_on != WORKS_NEW:
+                held = picked.project()
+                if project and held and not PainterRpcClient._same_file(held.get("file_path"), project):
+                    # Opening would close the person's project (unsaved edits and all).
+                    self.logger.error(
+                        f"{self.painter_label(picked.record or {})} has another project open "
+                        f"({held.get('name') or held.get('file_path')}): save and close it there, "
+                        "or pick a Painter with none (Painter)."
+                    )
+                    return result
+                to_open = project if project and not held else ""
+        if to_open and ctx is not None and not ctx.should_change(to_open, "open it in Painter"):
+            return result
+        if ctx is not None and not ctx.should_change(project or "Painter", f"run {label} in Painter"):
+            return result
+        if started is None:
+            started = self._start_painter(request.get("painter_exe"), request.get("gui", True), request.get("hidden", False))
+            if started is None:
+                return result
+        if to_open:
+            self.logger.info(f"Opening {to_open} in Painter ...")
+        launched = picked == PAINTER_NEW
+
+        def bring_up() -> str:
+            """The waits, saying nothing and never raising: ``""``, else why the
+            run stops (said by ``queue``, on the caller's thread)."""
+            try:
+                error = self._served(started) if launched else ""
+            except Exception as e:  # noqa: BLE001
+                return f"The launched Painter never served: {e}"
+            if error or not to_open:
+                return error
+            try:
+                started.rpc.invoke("project.open", path=to_open, timeout=600)
+            except Exception as e:  # noqa: BLE001 -- the run cannot go on
+                return f"Painter could not open {to_open}: {e}"
+            return ""
+
+        def queue(error: str) -> Dict[str, Any]:
+            if error:
+                self.logger.error(error)
+                return result
+            result["connection"], result["painter"] = started, started.record
+            expect = None
+            if works_on != WORKS_NEW:
+                held = started.project()
+                if held is None:
+                    self.logger.error("Painter has no project open to run this script on.")
+                    return result
+                expect = {"uuid": held.get("uuid"), "path": held.get("file_path")}
+            template_path = request.extras["_template_path"]
+            try:
+                job = started.rpc.run_script(
+                    template_path.read_text(encoding="utf-8-sig"),
+                    path=str(template_path),
+                    args=args,
+                    expect=expect,
+                    label=label,
+                )
+            except Exception as e:  # noqa: BLE001 -- the plugin's refusal, said
+                self.logger.error(f"Painter refused {label}: {e}")
+                return result
+            result.update(job=job, delivered=True)
+            self.logger.info(f"{label} queued in {self.painter_label(started.record or {})}.")
+            if request.mode == ROUND_TRIP:
+                status = self.wait(result)
+                result["status"] = status
+                result["delivered"] = status.get("state") == "done"
+            self._announce_handoff(request.template, request.mode, payload.primary, payload.extras["output_dir"])
+            return result
+
+        if background is None or not (launched or to_open):
+            return queue(bring_up())
+        on_queued = request.get("on_queued") or (lambda _result: None)
+        background(bring_up, lambda error: on_queued(queue(error)))
+        return dict(result, pending=True)
+
+    def wait(self, result: Dict[str, Any], timeout: float = 3600.0, on_status=None) -> Dict[str, Any]:
+        """Follow a send's job to its end (:meth:`follow`) and say how it ended
+        (:meth:`report`); its last status."""
+        status = self.follow(result, timeout, on_status)
+        self.report(status)
+        return status
+
+    def cancel(self, result: Dict[str, Any]) -> bool:
+        """Ask Painter to stop a send's job: one still queued never starts, a
+        running one stops at its next check (a bake under way stops). True
+        when Painter took the request."""
+        connection, job = result.get("connection"), result.get("job")
+        if connection is None or not job:
+            return False
+        try:
+            connection.rpc.cancel(job)
+        except Exception as e:  # noqa: BLE001 -- said; the job may already have ended
+            self.logger.warning(f"Painter did not take the cancel: {e}")
+            return False
+        self.logger.info("Asked Painter to stop the script.")
+        return True
+
+    @staticmethod
+    def follow(result: Dict[str, Any], timeout: float = 3600.0, on_status=None) -> Dict[str, Any]:
+        """Wait for a send's job to end, saying nothing (safe off the UI thread);
+        its last status (``state``, ``report``, ``console``, ``error``).
+        *on_status* gets each status on the way (a panel's progress)."""
+        connection, job = result.get("connection"), result.get("job")
+        if connection is None or not job:
+            return {"state": "failed", "error": "Nothing was queued."}
+        try:
+            return connection.rpc.wait(job, timeout=timeout, on_status=on_status)
+        except (TimeoutError, ConnectionError) as e:
+            return {"job": job, "state": "failed", "error": str(e)}
+
+    def conclude(self, task: Any) -> Dict[str, Any]:
+        """A panel's end of a background :meth:`follow` (on the UI thread): the
+        finished *task*'s status (a failed one when it raised), said
+        (:meth:`report`)."""
+        try:
+            status = task.result()
+        except Exception as error:  # noqa: BLE001 -- said, the panel stays up
+            status = {"state": "failed", "error": str(error)}
+        self.report(status)
+        return status
+
+    @classmethod
+    def painter_choices(cls) -> List[Tuple[str, str]]:
+        """The Painter row's entries: Auto, New Painter, and every running
+        Painter serving the plugin, by the project it holds."""
+        try:
+            records = cls.painters()
+        except Exception:  # noqa: BLE001 -- an unreadable record folder lists none
+            records = []
+        return [("Auto", PAINTER_AUTO), ("New Painter", PAINTER_NEW)] + [
+            (cls.painter_label(r), r.get("id")) for r in records
+        ]
+
+    def report(self, status: Dict[str, Any]) -> bool:
+        """Log a finished job: its report lines, then how it ended. True when it ran."""
+        for line in status.get("report") or ():
+            self.logger.info(line)
+        name = status.get("label") or "The script"
+        if status.get("state") == "done":
+            self.logger.info(f"{name} finished in Painter.")
+            return True
+        if status.get("state") == "cancelled":
+            self.logger.warning(f"{name} was cancelled.")
+        else:
+            self.logger.error(f"{name} failed in Painter: {status.get('error')}")
+        return False
+
+    @staticmethod
+    def label(script: str) -> str:
+        """*script*'s name as a person reads it: ``bake_lighting`` -> ``Bake Lighting``."""
+        small = {"a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to"}
+        words = [w for w in script.replace("-", "_").split("_") if w]
+        return " ".join(w if i and w.lower() in small else w[:1].upper() + w[1:] for i, w in enumerate(words)) or script
 
     # -- Helpers ----------------------------------------------------------
 
-    def ensure_rpc_plugin(self) -> None:
-        """Install -- or refresh -- the Painter-side substance_rpc plugin.
-
-        Gated on *content*, not presence. Without Developer Mode the
-        install is a copytree snapshot, so an install predating a package
-        update keeps serving the ops it shipped with: the bridge dispatches
-        ``project.set_resolution``, that Painter has never heard of it, and
-        the panel's Map Resolution silently does nothing while the project
-        stays at Painter's own default. Re-checking each hand-off is cheap
-        (a content compare of a handful of small files) and self-heals.
-
-        Failure is non-fatal -- the send continues and RPC-dependent steps
-        fall back to their hints -- but is logged so the user knows why a
-        one-click reimport didn't happen.
-        """
+    def refresh_rpc_plugin(self) -> None:
+        """Bring the person's install of the plugin up to date when it has
+        drifted (a copy predating this package serves stale ops); never install
+        one -- that is the person's act (:meth:`install_rpc_plugin`)."""
         try:
-            from .substance_rpc import Installer
-
-            if Installer.is_current():
-                return
-            refreshed = Installer.is_installed()
-            dest = Installer.install()
-            if dest is None:
-                self.logger.warning(
-                    "Could not resolve Painter's plugins folder; install the "
-                    "substance_rpc plugin manually (see substance_rpc/installer.py)."
+            dest = ptk.PluginInstaller.refresh(self.RPC_PLUGIN)
+            if dest is not None:
+                self.logger.info(
+                    f"Refreshed Painter's substance_rpc plugin: {dest}. A Painter already "
+                    "open serves it after Python > Reload Plugins Folder."
                 )
-                return
-            self.logger.info(
-                f"{'Refreshed' if refreshed else 'Installed'} Painter RPC "
-                f"plugin: {dest}. To activate it: in Painter, use Python > "
-                "Reload Plugins Folder (or relaunch Painter), then ensure "
-                "'substance_rpc' is ticked in the Python menu -- Painter "
-                "remembers it after the first time."
-            )
-        except Exception as e:  # noqa: BLE001 -- never block the handoff
-            self.logger.warning(f"substance_rpc plugin install failed: {e}")
+        except Exception as e:  # noqa: BLE001 -- never block the hand-off
+            self.logger.warning(f"substance_rpc plugin refresh failed: {e}")
+
+    def install_rpc_plugin(self) -> Optional[str]:
+        """The person's *Install in Painter* (the shared installer,
+        :meth:`pythontk.PluginInstaller.install`): installed, ticked in
+        Painter's Python menu the first time (unless they set it either way),
+        and said. The plugin folder, or ``None``."""
+        dest = ptk.PluginInstaller.install(self.RPC_PLUGIN, logger=self.logger)
+        return None if dest is None else str(dest)
 
     #: :class:`pythontk.MapFactory` types Painter accepts as a **mesh map**
     #: (its baked-geometry inputs), mapped to the usage name it files them
@@ -957,149 +982,6 @@ class SubstanceEngine(ptk.HandoffBridge):
         """
         map_types = ptk.MapFactory.resolve_map_types(paths)
         return [p for p in paths if map_types[p] in cls.MESH_MAP_TYPES]
-
-    @staticmethod
-    def _project_setup_ops(
-        high_poly_path: Optional[str],
-        referenced: set,
-        params: Dict[str, Any],
-        manifest_path: Optional[str] = None,
-    ) -> List[Tuple[str, Dict[str, Any]]]:
-        """Ops that configure the Painter project once it exists.
-
-        None of these has a CLI equivalent -- Painter dropped
-        ``--resolution``, never had a high-poly flag, and ``--mesh-map`` can
-        only apply a map to every texture set at once -- so all three travel
-        over the ``substance_rpc`` plugin. The plugin applies them
-        immediately when a project is open and otherwise holds them until
-        one opens, which is what makes them work on a fresh launch where the
-        New Project wizard hasn't run yet at dispatch time.
-
-        Returns ``[]`` when the template claims none of the widgets or the
-        user left them all at their inert values, so an ordinary send never
-        pays for an RPC round-trip it doesn't need.
-        """
-        ops: List[Tuple[str, Dict[str, Any]]] = []
-        resolution = params.get("PAINTER_RESOLUTION") or 0
-        if "PAINTER_RESOLUTION" in referenced and int(resolution) > 0:
-            ops.append(("project.set_resolution", {"size": int(resolution)}))
-        if high_poly_path:
-            ops.append(
-                ("bake.set_high_poly", {"mesh_path": high_poly_path.replace("\\", "/")})
-            )
-        if manifest_path:
-            ops.append(
-                (
-                    "textures.apply_mesh_maps",
-                    {"manifest_path": manifest_path.replace("\\", "/")},
-                )
-            )
-        return ops
-
-    @staticmethod
-    def _render_rpc_ops(
-        rpc_ops: List[Tuple[str, Dict[str, Any]]], context: Dict[str, str]
-    ) -> List[Tuple[str, Dict[str, Any]]]:
-        """Render ``__KEY__`` placeholders inside each op's string kwargs.
-
-        Non-string kwarg values (bools, numbers, lists) pass through
-        untouched -- they're already typed JSON values on the wire.
-        """
-        rendered: List[Tuple[str, Dict[str, Any]]] = []
-        for op_name, op_kwargs in rpc_ops:
-            rendered.append(
-                (
-                    op_name,
-                    {
-                        k: (
-                            StrUtils.replace_delimited(v, context)
-                            if isinstance(v, str)
-                            else v
-                        )
-                        for k, v in op_kwargs.items()
-                    },
-                )
-            )
-        return rendered
-
-    def _build_contexts(
-        self,
-        fbx_path: str,
-        manifest_path: str,
-        output_dir: str,
-        params: Optional[Dict[str, Any]],
-        high_poly_path: Optional[str] = None,
-        images_dir: Optional[str] = None,
-        textures_dir: Optional[str] = None,
-    ) -> Tuple[Dict[str, str], Dict[str, str]]:
-        """Compose two placeholder contexts -- one CLI-raw, one JS-escaped.
-
-        ``IMAGES_DIR`` / ``TEXTURES_DIR`` are where a template's own output
-        falls back to (a render, a lighting bake); each defaults to
-        *output_dir*.
-
-        ``LAUNCH_ARGS`` substitution wants raw values (no quoting --
-        ``subprocess`` handles argv splitting). ``RPC_SCRIPT`` substitution
-        wants JS literals (quoted/escaped) so the rendered text drops cleanly
-        into a JavaScript body. The internal slot tokens (``FBX_PATH`` etc.)
-        appear unmodified in both contexts.
-        """
-        from . import parameters as _params
-
-        merged = _params.Parameters.defaults()
-        merged.update(params or {})
-
-        internal: Dict[str, str] = {
-            "FBX_PATH": fbx_path.replace("\\", "/"),
-            # Empty when no high poly was exported, so a template that
-            # references it degrades to an empty argv/JS slot rather than a
-            # path to a file that isn't there.
-            "HIGH_POLY_PATH": (high_poly_path or "").replace("\\", "/"),
-            "MANIFEST_PATH": manifest_path.replace("\\", "/"),
-            "OUTPUT_DIR": output_dir.replace("\\", "/"),
-            "IMAGES_DIR": (images_dir or output_dir).replace("\\", "/"),
-            "TEXTURES_DIR": (textures_dir or output_dir).replace("\\", "/"),
-            "PAINTER_HELPERS_DIR": str(_PKG_DIR).replace("\\", "/"),
-        }
-
-        cli_ctx = dict(internal)
-        cli_ctx.update(_params.Parameters.render_cli_context(merged))
-
-        js_ctx = dict(internal)
-        js_ctx.update(_params.Parameters.render_js_context(merged))
-        return cli_ctx, js_ctx
-
-    @staticmethod
-    def _render_launch_args(
-        launch_args: List[str], context: Dict[str, str]
-    ) -> List[str]:
-        """Render ``__KEY__`` placeholders inside each ``LAUNCH_ARGS`` entry.
-
-        Adjacent ``(--flag, "")`` pairs are dropped: a template can declare
-        an optional flag like ``["--template", "__PATH__"]`` and the user
-        leaving the value empty produces no argv entry rather than a
-        broken ``--template ""`` that Painter would reject.
-        """
-        rendered = [
-            StrUtils.replace_delimited(arg, context) if isinstance(arg, str) else arg
-            for arg in launch_args
-        ]
-        out: List[str] = []
-        i = 0
-        while i < len(rendered):
-            cur = rendered[i]
-            nxt = rendered[i + 1] if i + 1 < len(rendered) else None
-            if (
-                isinstance(cur, str)
-                and cur.startswith("-")
-                and isinstance(nxt, str)
-                and nxt == ""
-            ):
-                i += 2  # drop the flag and its empty value
-                continue
-            out.append(cur)
-            i += 1
-        return out
 
     def _stage_assigned_textures(
         self,
@@ -1340,9 +1222,8 @@ class SubstanceEngine(ptk.HandoffBridge):
     ) -> None:
         """Log clickable links to the output folder + Painter log.
 
-        The FBX link is only surfaced if the file actually exists --
-        EXPORT_FBX=False templates (e.g. ``render``) skip the export
-        and there's no file to point at.
+        The mesh link is only surfaced if the file actually exists -- a
+        script that works on a project exports nothing.
         """
         if os.path.isfile(fbx_path):
             self.logger.info(
@@ -1363,30 +1244,40 @@ class SubstanceEngine(ptk.HandoffBridge):
     # -- Templates --------------------------------------------------------
 
     @staticmethod
+    def template_dirs() -> Tuple[Path, ...]:
+        """Where a template name resolves, first match winning: the person's own
+        Painter templates, then the bundled ``templates/``."""
+        return ptk.ScriptTemplate.search_dirs(_TEMPLATE_DIR, _SCRIPTS_APP)
+
+    @staticmethod
+    def template_path(template: str) -> Path:
+        """The file *template* is read from (:meth:`template_dirs`); a name found
+        nowhere names the bundled path, which is then not a file."""
+        found = ptk.ScriptTemplate.find(SubstanceEngine.template_dirs(), template, ".py")
+        return found or _TEMPLATE_DIR / f"{template}.py"
+
+    @staticmethod
     def list_templates() -> List[Path]:
-        """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
-        return sorted(
-            p for p in _TEMPLATE_DIR.glob("*.py") if not p.stem.startswith("_")
-        )
+        """Return user-visible templates, the person's own first (skips underscore-prefixed)."""
+        return ptk.ScriptTemplate.list_templates(SubstanceEngine.template_dirs(), ".py")
 
     @staticmethod
     def parse_template(template_path: Path) -> Dict[str, Any]:
-        """Read a template's metadata constants without executing the file.
+        """Read a script's header constants without running it.
 
-        Returns a dict with ``BRIDGE_MODES`` / ``LAUNCH_ARGS`` / ``RPC_SCRIPT`` /
-        ``BUILD_MANIFEST`` keys, falling back to :data:`_TEMPLATE_DEFAULTS`
-        for any constant the template omits or sets to a wrong type.
+        Returns a dict with every :data:`_TEMPLATE_FIELDS` key, falling back to
+        :data:`_TEMPLATE_DEFAULTS` for any constant the script omits or sets to
+        a wrong type.
 
-        Parsing uses :func:`ast.literal_eval` so malformed templates can't
-        import-crash other templates. Each parsed value is type-checked against
-        :data:`_TEMPLATE_TYPES`; mismatches are logged and the default is used,
-        so a single bad template never silently produces a broken launch line.
+        Parsing uses :func:`ast.literal_eval`, so a broken script can't
+        import-crash the others. Each parsed value is type-checked against
+        :data:`_TEMPLATE_TYPES`; a mismatch is logged and the default is used.
         """
         out: Dict[str, Any] = dict(_TEMPLATE_DEFAULTS)
         try:
             tree = ast.parse(template_path.read_text(encoding="utf-8-sig"))
         except (OSError, SyntaxError) as e:
-            logger.warning("Could not parse template %s: %s", template_path, e)
+            logger.warning("Could not parse script %s: %s", template_path, e)
             return out
         for node in tree.body:
             if not isinstance(node, ast.Assign) or len(node.targets) != 1:
@@ -1397,16 +1288,12 @@ class SubstanceEngine(ptk.HandoffBridge):
             try:
                 value = ast.literal_eval(node.value)
             except (ValueError, SyntaxError):
-                logger.warning(
-                    "Template %s: %s is not a literal; using default.",
-                    template_path.name,
-                    target.id,
-                )
+                logger.warning("Script %s: %s is not a literal; using default.", template_path.name, target.id)
                 continue
             expected = _TEMPLATE_TYPES.get(target.id)
             if expected is not None and not isinstance(value, expected):
                 logger.warning(
-                    "Template %s: %s has type %s, expected %s; using default.",
+                    "Script %s: %s has type %s, expected %s; using default.",
                     template_path.name,
                     target.id,
                     type(value).__name__,
@@ -1414,60 +1301,24 @@ class SubstanceEngine(ptk.HandoffBridge):
                 )
                 continue
             out[target.id] = value
-        # Normalize BRIDGE_MODES to a tuple of valid mode strings. Legacy spellings are
-        # folded first, through the SAME alias table the shared template reader uses:
-        # this parser reads the file with ``ast`` rather than via ``declared_modes``, so
-        # without that step a template written against the old ``roundtrip`` would drop
-        # out of the filter below and quietly reduce to a one-way send.
-        modes = tuple(
-            m
-            for m in ptk.ScriptTemplate.normalize_modes(out.get("BRIDGE_MODES"))
-            if m in _MODES
-        )
+        # BRIDGE_MODES folds legacy spellings through the shared alias table
+        # (this parser reads the file with ``ast``, not ``declared_modes``).
+        modes = tuple(m for m in ptk.ScriptTemplate.normalize_modes(out.get("BRIDGE_MODES")) if m in _MODES)
         out["BRIDGE_MODES"] = modes or (SEND_TO,)
-        # LAUNCH_ARGS must be a list of strings -- coerce non-strings or fall back.
-        if not all(isinstance(a, str) for a in out["LAUNCH_ARGS"]):
+        if out["WORKS_ON"] not in _WORKS_ON:
             logger.warning(
-                "Template %s: LAUNCH_ARGS contains non-string entries; using default.",
+                "Script %s: WORKS_ON=%r is not one of %s; using %r.",
                 template_path.name,
+                out["WORKS_ON"],
+                _WORKS_ON,
+                _TEMPLATE_DEFAULTS["WORKS_ON"],
             )
-            out["LAUNCH_ARGS"] = list(_TEMPLATE_DEFAULTS["LAUNCH_ARGS"])
-        # RPC_OPS must be a list of (op_name, kwargs_dict) pairs -- normalize
-        # list-shaped pairs to tuples; any malformed entry voids the field so
-        # a half-broken template can't dispatch a partial op sequence.
-        ops_norm: List[Tuple[str, Dict[str, Any]]] = []
-        for entry in out["RPC_OPS"]:
-            if (
-                isinstance(entry, (tuple, list))
-                and len(entry) == 2
-                and isinstance(entry[0], str)
-                and isinstance(entry[1], dict)
-            ):
-                ops_norm.append((entry[0], dict(entry[1])))
-            else:
-                logger.warning(
-                    "Template %s: RPC_OPS entry %r is not an "
-                    "(op_name, kwargs_dict) pair; ignoring RPC_OPS.",
-                    template_path.name,
-                    entry,
-                )
-                ops_norm = []
-                break
-        out["RPC_OPS"] = ops_norm
-        # Normalize TARGET_INSTANCE to a known mode; fall back to default.
-        if out["TARGET_INSTANCE"] not in _TARGETS:
-            logger.warning(
-                "Template %s: TARGET_INSTANCE=%r is not one of %s; using default.",
-                template_path.name,
-                out["TARGET_INSTANCE"],
-                _TARGETS,
-            )
-            out["TARGET_INSTANCE"] = _TEMPLATE_DEFAULTS["TARGET_INSTANCE"]
+            out["WORKS_ON"] = _TEMPLATE_DEFAULTS["WORKS_ON"]
         return out
 
     @staticmethod
     def list_template_modes() -> List[Tuple[str, str]]:
-        """Return ``[(stem, mode), ...]`` for every (template, mode) pairing."""
+        """Return ``[(stem, mode), ...]`` for every (script, mode) pairing."""
         out: List[Tuple[str, str]] = []
         for path in SubstanceEngine.list_templates():
             for mode in SubstanceEngine.parse_template(path)["BRIDGE_MODES"]:

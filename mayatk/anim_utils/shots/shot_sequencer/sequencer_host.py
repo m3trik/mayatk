@@ -344,6 +344,16 @@ class SequencerHost:
         return _SceneWatch(busy, on_keys_edited, on_time_changed, on_scene_changed, cap)
 
     @staticmethod
+    def transient_edit():
+        """``ptk.ShotStore.transient_edit`` the scene watcher hears whole.
+
+        Maya's keyframe callbacks fire as the edit happens, so the bracket is
+        the shared one as it stands; blendertk's twin evaluates the view layer
+        before it closes, since Blender reports an edit at the next evaluation.
+        """
+        return ptk.ShotStore.transient_edit()
+
+    @staticmethod
     def newly_keyed_members(edited: Iterable[str], shot, sequencer) -> List[str]:
         """The objects keyed in *shot*'s frames that are not its members yet.
 

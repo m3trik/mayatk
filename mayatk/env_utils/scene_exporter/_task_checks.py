@@ -277,7 +277,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             return True, log_messages
 
         foreign = ptk.MapFactory.foreign_packings(
-            ptk.MaterialFamilies.texture_files(ptk.MaterialFamilies.payload(entries)),
+            ptk.MaterialFamilies.source_files(entries),  # the authored maps, not the record's packed ORM
             workflow=template,
         )
         if not foreign:
@@ -1405,23 +1405,6 @@ class _TaskChecksMixin(_TaskDataMixin):
                 for obj, reason in hidden_objects
             ]
         return True, []
-
-    @ptk.Deprecation.symbol(
-        "UvUtils.find_uv_snapshots", remove_in="0.24.0", since="2026-10-08"
-    )
-    def check_uv_snapshots(self) -> tuple:
-        """Retired export check: report ``_uv_snap_*`` backup sets on the meshes.
-
-        ``UvUtils.uv_snapshot`` now takes the backup back on every exit, so no
-        export runs this; a direct call still reports what it used to.
-        """
-        from mayatk.uv_utils._uv_utils import UvUtils
-
-        found = UvUtils.find_uv_snapshots(self._live_objects())
-        return not found, [
-            f"Leftover UV snapshot '{snapshot}' on {shape}."
-            for shape, _, snapshot in found
-        ]
 
     def check_untied_keyframes(self) -> tuple:
         """Check if there are any untied keyframes on the specified objects."""

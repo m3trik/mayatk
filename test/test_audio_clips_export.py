@@ -15,10 +15,32 @@ from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
 
 
-def _event_set(manifest: str):
-    """Parse a v2 manifest into a comparable ``{(clip, frame, name)}`` set."""
+def _cue_set(manifest: str, fps: float = 24.0):
+    """Parse a v3 record into a comparable ``{(clip, sound, time, offset,
+    stop)}`` set, the seconds read back as frames at *fps*."""
     payload = json.loads(manifest)
-    return {(e["clip"], e["frame"], e["name"]) for e in payload["events"]}
+    return {
+        (
+            c["clip"],
+            c["sound"],
+            round(c["time"] * fps, 3),
+            round(c["offset"] * fps, 3),
+            round(c["stop"] * fps, 3),
+        )
+        for c in payload["cues"]
+    }
+
+
+def _write_wav(path: str, seconds: float = 0.5, rate: int = 8000) -> str:
+    """A silent mono 16-bit WAV of *seconds*."""
+    import wave
+
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(bytes(2) * int(rate * seconds))
+    return path
 
 
 class TestAudioClipsExport(MayaTkTestCase):
@@ -35,11 +57,13 @@ class TestAudioClipsExport(MayaTkTestCase):
 
     def _seed_tracks(self):
         """Create two keyed tracks on the canonical carrier."""
-        # Pin the playback range so the manifest offset is deterministic.
-        # prepare_for_export subtracts playbackOptions.min from each frame
-        # so the wire format aligns with how Unity reads the imported FBX
-        # (Maya frame ``min`` becomes Unity time 0).
+        # Something the file animates, keyed 1-60: a shotless file's one take
+        # holds those keys, so its cues count from frame 1 (an FBX with no
+        # animation has no clip to cue).
         cmds.playbackOptions(min=1, max=60)
+        mover = cmds.polyCube(name="mover")[0]
+        cmds.setKeyframe(mover, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(mover, attribute="translateX", time=60, value=5)
         audio_utils.write_key("footstep", frame=10, value=1)
         audio_utils.write_key("footstep", frame=15, value=0)
         audio_utils.write_key("jump", frame=24, value=1)
@@ -61,159 +85,157 @@ class TestAudioClipsExport(MayaTkTestCase):
             ),
             "manifest must not be authored on data_internal (derived artifact)",
         )
-        # v2 envelope: versioned JSON, unscoped events (no takes published),
-        # Maya frames 10/24 shifted by playback_min=1.
+        # v3: cues per clip in seconds (no takes published: the file's one
+        # take, from its first key at 1), each stopped at its OFF key, and no
+        # frame or rate leaves the DCC.
         payload = json.loads(stored)
         self.assertEqual(payload["version"], AudioClips.MANIFEST_VERSION)
-        # The frames' rate travels with them (2026-10-17: frames alone left a
-        # reader to guess it).
-        self.assertEqual(payload["fps"], audio_utils.get_fps())
+        self.assertEqual(set(payload), {"version", "cues"})
         self.assertEqual(
-            _event_set(stored),
-            {("", 9, "footstep"), ("", 23, "jump")},
+            _cue_set(stored),
+            {("", "footstep", 9, 0, 14), ("", "jump", 23, 0, 27)},
         )
 
-    @staticmethod
-    def _publish_clips(*clips):
-        """Publish the shot record as ``ShotStore.publish_export_view`` writes
-        it: each clip carrying its own range (``(name, start, end)``)."""
-        from mayatk.node_utils.data_nodes import DataNodes
+    def _publish_clips(self, *clips):
+        """Declare the scene's shots (``(name, start, end)``) in its shot
+        store: one take each, the take list an export scopes against
+        (``ShotStore.declared_takes``)."""
+        from mayatk.anim_utils.shots._shots import ShotStore
 
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes,
-            {
-                "shots": [
-                    {"clip": name, "start": start, "end": end, "objects": []}
-                    for name, start, end in clips
-                ]
-            },
-        )
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        for name, start, end in clips:
+            store.define_shot(name, start, end)
 
     def test_prepare_for_export_scopes_events_to_takes(self):
-        """With the shots published, events land in their clip, frames rebased
-        to the clip start — the same origin the imported AnimationClip counts
-        from. Events outside every clip are dropped."""
-        self._seed_tracks()  # footstep on @10, jump on @24
+        """With the shots published, each sound is cut per clip, counted from
+        the clip's start -- where the imported AnimationClip counts from; a
+        sound across a cut stops at it and plays on in the next clip from its
+        offset. Sounds no clip plays are dropped."""
+        self._seed_tracks()  # footstep 10-15, jump 24-28
         audio_utils.write_key("stray", frame=59, value=1)  # outside both takes
+        audio_utils.write_key("hum", frame=18, value=1)  # across the cut at 21
+        audio_utils.write_key("hum", frame=30, value=0)
         self._publish_clips(("Intro", 1, 20), ("Outro", 21, 50))
 
-        manifest = AudioClips.prepare_for_export()
+        with self.assertLogs(AudioClips.logger, level="WARNING") as logs:
+            manifest = AudioClips.prepare_for_export()
         self.assertEqual(
-            _event_set(manifest),
-            {("Intro", 9, "footstep"), ("Outro", 3, "jump")},
-        )
-
-    def test_scoping_skips_takes_missing_range(self):
-        """A published clip without start/end must scope nothing — the old
-        ``get(..., 0)`` defaults turned it into a phantom ``(0, 0)`` take
-        that swallowed frame-0 events (a clip without its range is not a
-        take at all)."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        self._seed_tracks()  # footstep @10, jump @24
-        audio_utils.write_key(
-            "boom", frame=0, value=1
-        )  # only the phantom (0,0) contains it
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes,
+            _cue_set(manifest),
             {
-                "shots": [
-                    {"clip": "Broken", "objects": []},  # no range — ignored
-                    {"clip": "Intro", "start": 1, "end": 30, "objects": []},
-                ]
+                ("Intro", "footstep", 9, 0, 14),
+                ("Intro", "hum", 17, 0, 19),
+                ("Outro", "hum", 0, 3, 9),
+                ("Outro", "jump", 3, 0, 7),
             },
         )
+        self.assertTrue(any("stray@59" in line for line in logs.output), logs.output)
 
-        manifest = AudioClips.prepare_for_export()
-        self.assertEqual(
-            _event_set(manifest),
-            {("Intro", 9, "footstep"), ("Intro", 23, "jump")},
-            "a range-less take must not capture events (boom@0 is outside "
-            "every real take and should be dropped)",
-        )
-
-    def test_scoping_falls_back_unscoped_when_no_take_has_a_range(self):
-        """When no published clip carries a usable range, a shot record
-        declares no take: bake unscoped rather than silently dropping every
-        event."""
+    def test_the_takes_are_the_stores_not_the_records(self):
+        """The ``animation`` record states no frames (v3): a record left from
+        an export before it, ranges and all, declares no take. With no shot
+        in the store the cues are the file's one take's. Added: 2026-11-05
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
         from mayatk.node_utils.data_nodes import DataNodes
 
         self._seed_tracks()
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes, {"shots": [{"clip": "Broken", "objects": []}]}
+        ShotStore.set_active(ShotStore())
+        self.addCleanup(ShotStore.clear_active)
+        DataNodes.write(
+            ptk.Scope.DELIVERABLE,
+            ptk.SceneRecords.SHOTS.key,
+            json.dumps(
+                {"version": 1, "fps": 24.0, "shots": [{"clip": "Intro", "start": 1, "end": 30}]}
+            ),
         )
 
         manifest = AudioClips.prepare_for_export()
-        self.assertTrue(manifest, "manifest should fall back to an unscoped bake")
         self.assertEqual(
-            _event_set(manifest),
-            {("", 9, "footstep"), ("", 23, "jump")},
+            _cue_set(manifest),
+            {("", "footstep", 9, 0, 14), ("", "jump", 23, 0, 27)},
         )
 
-    def test_a_full_sequence_export_ships_its_events_unscoped(self):
-        """Full Sequence Only splits nothing: the FBX carries ONE whole-timeline
-        take, so events scoped to the shots named clips the file does not have
-        and Unity's AudioEventController injected none of them. The shots
-        still ride as metadata; the events follow the take that ships.
-        Added: 2026-09-18
+    def test_a_shotless_take_counts_from_the_window_its_file_declares(self):
+        """Before a write, a shotless file's one take is the window Maya's
+        writer declares by itself: the playback range (measured on Maya 2025 /
+        FBX 2020.3.6, 2026-11-05: keys 10-100 under 1-120 declared 1-120, the
+        bake on or off), the bake flags and the plug-in unread. Once the file
+        is written its window is measured, fitted to the keys it holds
+        (``ptk.FbxMedia.fit_take_windows``), and the cues are cut over that
+        (``ctx.take_window``). Counted from a predicted span, a raw File >
+        Export declared 1-120 while its cues counted from the keys' 10: nine
+        frames early in Unity. Added: 2026-10-20; rule 2026-11-05
         """
-        self._seed_tracks()  # footstep on @10, jump on @24; playback min 1
-        self._publish_clips(("Intro", 1, 20), ("Outro", 21, 50))
-        full = AudioClips.export_record(ptk.ExportContext(clip_mode="full"))
-        self.assertEqual(
-            _event_set(full.text), {("", 9, "footstep"), ("", 23, "jump")}
-        )
-        for mode in ("shots", "both", None):
-            with self.subTest(clip_mode=mode):
-                split = AudioClips.export_record(ptk.ExportContext(clip_mode=mode))
-                self.assertEqual(
-                    _event_set(split.text),
-                    {("Intro", 9, "footstep"), ("Outro", 3, "jump")},
-                )
-
-    def test_an_unscoped_event_counts_from_the_first_frame_the_file_holds(self):
-        """An unscoped event's frame counts from the first frame the file's
-        animation holds: the clip origin the pipeline measured
-        (``ctx.clip_span``), else the range the write bakes, else the playback
-        start -- blendertk's chain, so one scene ships the same frames from
-        either DCC. Counted from the playback start alone, an export whose
-        playback range was not its exported range shipped every event off by
-        the difference. Added: 2026-10-20
-        """
-        self._seed_tracks()  # footstep on @10, jump on @24; playback min 1
-        measured = AudioClips.export_record(ptk.ExportContext(clip_span=(5.0, 60.0)))
-        self.assertEqual(
-            _event_set(measured.text), {("", 5, "footstep"), ("", 19, "jump")}
-        )
+        self._seed_tracks()  # footstep 10-15, jump 24-28; keys 1-60
+        cmds.playbackOptions(min=4, max=60)
         self.addCleanup(mel.eval, "FBXResetExport")
         mel.eval("FBXResetExport")
         mel.eval("FBXExportBakeComplexAnimation -v true")
-        mel.eval("FBXExportBakeComplexStart -v 8")
-        mel.eval("FBXExportBakeComplexEnd -v 60")
-        baked = AudioClips.export_record(ptk.ExportContext())
+        mel.eval("FBXExportBakeComplexStart -v -5")
+        mel.eval("FBXExportBakeResampleAnimation -v true")
+        declared = AudioClips.export_record(ptk.ExportContext())
         self.assertEqual(
-            _event_set(baked.text), {("", 2, "footstep"), ("", 16, "jump")}
+            _cue_set(declared.text),
+            {("", "footstep", 6, 0, 11), ("", "jump", 20, 0, 24)},
+            "unmeasured: the playback range the writer declares, whatever it bakes",
         )
-        mel.eval("FBXExportBakeComplexAnimation -v false")
-        played = AudioClips.export_record(ptk.ExportContext())
+        measured = AudioClips.export_record(ptk.ExportContext(take_window=(-5.0, 60.0)))
         self.assertEqual(
-            _event_set(played.text), {("", 9, "footstep"), ("", 23, "jump")}
+            _cue_set(measured.text),
+            {("", "footstep", 15, 0, 20), ("", "jump", 29, 0, 33)},
+            "measured: the window the written file declares",
+        )
+        self.assertIsNone(
+            AudioClips.export_record(ptk.ExportContext(animated=False)),
+            "a write that carries no animation has no clip to cue",
         )
 
-    def test_an_unscoped_event_before_the_first_frame_is_dropped_and_said_where(self):
-        """One before the first frame the file's animation holds can never
-        fire: dropped, and the warning says where it fell -- not "outside
-        every shot take" when no take ships. Added: 2026-10-20
+    def test_the_authoring_publish_loads_no_plug_in(self):
+        """An authoring publish writes nothing: it reads the tracks, the
+        shots and, shotless, the playback range -- never the FBX plug-in's
+        settings, and it never loads the plug-in to ask (after every track
+        edit). Added: 2026-11-05"""
+        self._seed_tracks()
+        try:
+            cmds.unloadPlugin("fbxmaya", force=True)
+        except RuntimeError:
+            self.skipTest("the FBX plug-in will not unload in this session")
+        self.addCleanup(cmds.loadPlugin, "fbxmaya", quiet=True)
+        manifest = AudioClips.prepare_for_export()
+        self.assertTrue(manifest)
+        self.assertFalse(
+            cmds.pluginInfo("fbxmaya", query=True, loaded=True),
+            "the authoring publish loaded the FBX plug-in",
+        )
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.assertIsNone(
+            FbxUtils.export_context().animated,
+            "a context outside an FBX write states no Animation include group",
+        )
+        self.assertFalse(cmds.pluginInfo("fbxmaya", query=True, loaded=True))
+
+    def test_a_sound_starting_before_the_take_plays_from_its_offset(self):
+        """A sound that starts before the shotless take does plays from its
+        offset into the sound; one wholly outside it is dropped, and the
+        warning says where. Added: 2026-10-20; cut 2026-11-05
         """
-        self._seed_tracks()  # footstep on @10, jump on @24
+        self._seed_tracks()  # keys 1-60
+        audio_utils.write_key("early", frame=-5, value=1)
+        audio_utils.write_key("early", frame=5, value=0)
+        audio_utils.write_key("gone", frame=-20, value=1)
+        audio_utils.write_key("gone", frame=-10, value=0)
+        with self.assertNoLogs(AudioClips.logger, level="WARNING"):
+            AudioClips.export_record(ptk.ExportContext())  # before a write: not yet dropped
         with self.assertLogs(AudioClips.logger, level="WARNING") as logs:
-            record = AudioClips.export_record(
-                ptk.ExportContext(clip_span=(12.0, 60.0))
-            )
-        self.assertEqual(_event_set(record.text), {("", 12, "jump")})
+            record = AudioClips.export_record(ptk.ExportContext(take_window=(1.0, 60.0)))
+        self.assertIn(("", "early", 0, 6, 4), _cue_set(record.text))
+        self.assertNotIn("gone", {c["sound"] for c in record.payload["cues"]})
         self.assertTrue(
             any(
-                "footstep@10" in line and "before" in line and "shot take" not in line
+                "gone@-20" in line and "one take" in line and "shot" not in line
                 for line in logs.output
             ),
             logs.output,
@@ -242,7 +264,7 @@ class TestAudioClipsExport(MayaTkTestCase):
         self._seed_tracks()
         manifest = AudioClips.prepare_for_export()
 
-        self.assertIn(("", 9, "footstep"), _event_set(manifest))
+        self.assertIn(("", "footstep", 9, 0, 14), _cue_set(manifest))
         self.assertEqual(ptk.SceneRecords.AUDIO.read_text(DataNodes), manifest)
         self.assertFalse(
             cmds.addAttr(
@@ -329,6 +351,216 @@ class TestAudioClipsExport(MayaTkTestCase):
             content,
             "manifest event name should appear inside the FBX user-property block",
         )
+
+
+class TestAudioClipsRealExport(MayaTkTestCase):
+    """The cues as a real Scene Exporter write ships them: the FBX's own take
+    windows and key extents (``ptk.FbxFile``) against its ``audio`` record,
+    and the GLB carrying that record as it stands. Each cue's time, added to
+    where its clip's take starts in the file, lands on the frame the sound
+    starts on in the scene. Added: 2026-11-05"""
+
+    def setUp(self):
+        super().setUp()
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("FBX plugin not available")
+        artifacts = ptk.TempArtifacts("audio_clips_export", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        self.out = artifacts.dir_path()
+        self.fps = audio_utils.get_fps()
+
+    def _export(self, name, objects, **tasks):
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False
+        written = exporter.perform_export(
+            export_dir=self.out,
+            objects=objects,
+            output_name=name,
+            tasks={"output_format": "fbx_glb", "export_data_node": True, **tasks},
+        )
+        self.assertTrue(written, f"the {name} export wrote nothing")
+        fbx = os.path.join(self.out, f"{name}.fbx")
+        glb = os.path.join(self.out, f"{name}.glb")
+        record = ptk.FbxMedia.record(fbx, ptk.SceneRecords.AUDIO.key)
+        self.assertEqual(ptk.SceneRecords.problems(ptk.SceneRecords.AUDIO, record), [])
+        with ptk.MeshConvert.open_glb(glb) as edit:
+            carried = (edit.gltf.get("extras") or {}).get(ptk.SceneRecords.AUDIO.key)
+        # As it stands, less 'media': the digests are of the sound files the
+        # FBX's dependency pass embeds, and a GLB embeds none -- a file
+        # written without that pass carries no 'media' (the record's rule).
+        self.assertEqual(
+            carried,
+            {k: v for k, v in record.items() if k != "media"},
+            "the GLB carries the FBX's record as it stands",
+        )
+        return ptk.FbxFile.load(fbx, span_arrays=("KeyTime",)), record
+
+    def _sound(self, track, start, stop):
+        wav = _write_wav(self.temp_path(f"{track}.wav"), seconds=(stop - start) / self.fps)
+        audio_utils.set_path(track, wav)
+        audio_utils.write_key(track, frame=start, value=1)
+        audio_utils.write_key(track, frame=stop, value=0)
+
+    def test_a_shotless_export_cues_from_where_its_take_starts(self):
+        """The S2 case: keys 0-100, the scene range 20-80, Bake Range "Scene
+        Animation Range", a sound at 50-60. The file's one take holds the
+        keys, 0-100, so the cue is 50 frames in -- counted from the bake
+        range's 20 it played 20 frames early."""
+        box = cmds.polyCube(name="box")[0]
+        cmds.setKeyframe(box, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(box, attribute="translateX", time=100, value=10)
+        cmds.playbackOptions(min=20, max=80, animationStartTime=20, animationEndTime=80)
+        self._sound("hit", 50, 60)
+
+        fbx, record = self._export("s2", [box], set_bake_animation_range="scene")
+        spans = fbx.take_spans()
+        self.assertEqual(len(spans), 1, spans)
+        self.assertEqual(fbx.take_windows(), spans, "the take declares what it holds")
+        (first, _last), = spans.values()
+        self.assertAlmostEqual(first * self.fps, 0.0, places=3, msg="the take holds the keys")
+        (cue,) = record["cues"]
+        self.assertEqual((cue["clip"], cue["sound"]), ("", "hit.wav"))
+        self.assertAlmostEqual((first + cue["time"]) * self.fps, 50.0, places=3)
+        self.assertAlmostEqual((first + cue["stop"]) * self.fps, 60.0, places=3)
+        self.assertEqual(cue["offset"], 0.0)
+        self.assertEqual(sorted(record.get("media") or {}), ["hit.wav"])
+
+    def _frames(self, fbx):
+        """``(declared windows, key spans)`` of *fbx*'s takes, in frames."""
+        frames = lambda spans: {
+            take: tuple(round(t * self.fps, 3) for t in span) for take, span in spans.items()
+        }
+        return frames(fbx.take_windows()), frames(fbx.take_spans())
+
+    def _cue_frames(self, path):
+        """Each cue of *path*'s record as ``(clip, start, offset, stop)``
+        frames, counted from where its clip's take window starts in the file."""
+        fbx = ptk.FbxFile.load(path, span_arrays=("KeyTime",))
+        windows = fbx.take_windows()
+        record = ptk.FbxMedia.record(path, ptk.SceneRecords.AUDIO.key)
+        self.assertEqual(ptk.SceneRecords.problems(ptk.SceneRecords.AUDIO, record), [])
+        return fbx, [
+            (
+                c["clip"],
+                round((windows[c["clip"] or "Take 001"][0] + c["time"]) * self.fps, 3),
+                round(c["offset"] * self.fps, 3),
+                round((windows[c["clip"] or "Take 001"][0] + c["stop"]) * self.fps, 3),
+            )
+            for c in record["cues"]
+        ]
+
+    def _hooked(self):
+        """The session hook on, as creating a track turns it on."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.enable_export_producer(ptk.SceneRecords.AUDIO)
+        self.addCleanup(FbxUtils.disable_export_producer, ptk.SceneRecords.AUDIO)
+        self.addCleanup(mel.eval, "FBXResetExport")
+        mel.eval("FBXResetExport")
+
+    def test_a_raw_shotless_export_declares_what_it_holds_and_cues_from_it(self):
+        """File > Export Selection (any ``cmds.file`` write), the session hook
+        on, no shots: keys 10-100 under a 1-120 playback range, a sound at
+        50-60. Maya's writer declares 1-120, which Unity cuts its clip by,
+        while the cues counted from the keys' 10: nine frames early. The
+        written file's window is measured and fitted to what it holds, and the
+        cue counts from it. Added: 2026-11-05"""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self._hooked()
+        box = cmds.polyCube(name="box")[0]
+        cmds.setKeyframe(box, attribute="translateX", time=10, value=0)
+        cmds.setKeyframe(box, attribute="translateX", time=100, value=10)
+        cmds.playbackOptions(min=1, max=120, animationStartTime=1, animationEndTime=120)
+        self._sound("hit", 50, 60)
+        DataNodes.ensure_export()
+        path = os.path.join(self.out, "raw.fbx")
+        cmds.select([box, DataNodes.EXPORT], replace=True)
+        cmds.file(path, force=True, options="v=0;", type="FBX export", exportSelected=True)
+
+        fbx, cues = self._cue_frames(path)
+        windows, spans = self._frames(fbx)
+        self.assertEqual(spans, {"Take 001": (10.0, 100.0)}, "the take holds the keys")
+        self.assertEqual(windows, spans, "and declares what it holds")
+        self.assertEqual(cues, [("", 50.0, 0.0, 60.0)])
+        self.assertEqual(
+            tuple(cmds.playbackOptions(q=True, **{f: True}) for f in ("min", "max")),
+            (1.0, 120.0),
+            "the scene's range is never moved",
+        )
+
+    def test_an_animated_ancestor_the_write_carries_along_sets_the_window(self):
+        """The plug-in ships the parents of what it is handed: a child
+        selected under a group keyed 0-100 (playback 20-80) ships the group's
+        keys, which a span predicted from the selection's subtree missed. The
+        file says what it holds. Added: 2026-11-05"""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self._hooked()
+        group = cmds.group(empty=True, name="rig_root")
+        cmds.setKeyframe(group, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(group, attribute="translateX", time=100, value=10)
+        leaf = cmds.ls(cmds.parent(cmds.polyCube(name="leaf")[0], group)[0], long=True)[0]
+        cmds.playbackOptions(min=20, max=80, animationStartTime=20, animationEndTime=80)
+        # Before the playback range: the writer's own window leaves it out, the
+        # group's keys hold it.
+        self._sound("hit", 5, 15)
+        DataNodes.ensure_export()
+
+        def raw(path):
+            cmds.select([leaf, DataNodes.EXPORT], replace=True)
+            cmds.file(path, force=True, options="v=0;", type="FBX export", exportSelected=True)
+
+        for name, write in (
+            ("exported", lambda path: FbxUtils.export(path, [leaf, DataNodes.EXPORT])),
+            ("raw", raw),
+        ):
+            with self.subTest(name):
+                path = os.path.join(self.out, f"ancestor_{name}.fbx")
+                write(path)
+                fbx, cues = self._cue_frames(path)
+                windows, spans = self._frames(fbx)
+                self.assertEqual(spans, {"Take 001": (0.0, 100.0)}, "the group's keys ship")
+                self.assertEqual(windows, spans)
+                self.assertEqual(cues, [("", 5.0, 0.0, 15.0)])
+
+    def test_a_shot_export_cuts_each_sound_at_its_takes(self):
+        """One take per shot, named after it: a sound across the cut is a cue
+        in each, counted from where each take starts in the file and stopped
+        at the cut; the next plays it on from its offset."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        mover = cmds.polyCube(name="mover")[0]
+        cmds.setKeyframe(mover, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(mover, attribute="translateX", time=40, value=10)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("ShotA", 1, 20, objects=[mover])
+        store.define_shot("ShotB", 21, 40, objects=[mover])
+        self._sound("hum", 15, 30)
+
+        fbx, record = self._export("cut", [mover])
+        windows = fbx.take_windows()
+        self.assertEqual(sorted(windows), ["ShotA", "ShotB"])
+        got = [
+            (
+                c["clip"],
+                round((windows[c["clip"]][0] + c["time"]) * self.fps, 3),
+                round(c["offset"] * self.fps, 3),
+                round((windows[c["clip"]][0] + c["stop"]) * self.fps, 3),
+            )
+            for c in record["cues"]
+        ]
+        self.assertEqual(got, [("ShotA", 15, 0, 20), ("ShotB", 21, 6, 30)])
+        spans = fbx.take_spans()
+        for clip, (start, _end) in windows.items():
+            self.assertAlmostEqual(spans[clip][0], start, places=4, msg=clip)
 
 
 if __name__ == "__main__":

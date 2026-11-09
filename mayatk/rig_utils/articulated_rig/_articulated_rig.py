@@ -22,7 +22,8 @@ builds four things from one plan:
   to the FK values: FK is its seed and the rig's base layer;
 - **the ``articulation`` record** (``ptk.SceneRecords.ARTICULATION``, produced
   at export by :meth:`ArticulatedRig.export_record`) that tells the runtimes
-  each joint's rest frame, channels and limits, and which parts a hand grabs.
+  each joint's rest frame, channels and limits, and which parts a hand grabs,
+  in metres, every joint on the identity anchor (it nests on its pivot).
 
 The plan comes from the parts' geometry (:meth:`ArticulatedRig.analyze` over
 ``ptk.ArticulationAnalysis``) or from the caller; either way it is stored on
@@ -2008,13 +2009,21 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             self._key_end(True)
 
     # ================================================================ record
-    def record(self) -> Dict[str, Any]:
+    def record(self, unit_scale: float = 1.0) -> Dict[str, Any]:
         """This rig's entry in the ``articulation`` record: its joints
-        (``ptk.ArticulationPlan.joint_records``) and the parts a hand grabs."""
+        (``ptk.ArticulationPlan.joint_records``, each on the identity anchor)
+        and the parts a hand grabs.
+
+        Parameters:
+            unit_scale: Metres per plan unit (the plan is in centimetres);
+                1 keeps the plan's own, the units this rig's solver poses in.
+        """
         # The part's name NOW (a runtime binds by it): a rename after the
         # build must not leave the record naming a node that is gone.
         return ptk.ArticulationPlan.record(
-            self.spec, lambda m: self._leaf(self._by_uuid(m["uuid"]) or m["name"])
+            self.spec,
+            lambda m: self._leaf(self._by_uuid(m["uuid"]) or m["name"]),
+            unit_scale,
         )
 
     def model(self) -> "ptk.ArticulationModel":
@@ -2027,34 +2036,45 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         rig -- the ``ptk.SceneRecords.ARTICULATION`` producer
         (``FbxUtils.PRODUCERS``). Pure: reads the rigs' plans, never writes.
 
-        ``{"version": 1, "rigs": [...]}``, one :meth:`record` per rig, its
-        lengths in the working unit (:meth:`_in_working_unit`) -- the one an
-        export writes the file in. No ``unit_scale``: a runtime measures its
-        scale against the rest pose (``ptk.ArticulationModel.scale_of``),
-        which also covers a scaled prop.
+        ``{"version": 2, "rigs": [...]}``, one :meth:`record` per rig in
+        glTF's frame (``ptk.SceneRecords.FRAME``): its lengths in metres as
+        the file's joint frames hold them (:meth:`unit_scale`), every joint on
+        the identity anchor -- a Maya rig nests each joint on its pivot, and
+        its MEL solver turns it there (``ptk.ArticulationPlan.joint_records``
+        refuses a plan joint that states another).
 
         Parameters:
-            ctx (ptk.ExportContext): The export's decisions (unused: the
-                record is a function of the rigs alone).
+            ctx (ptk.ExportContext): The export's decisions (unused: a joint's
+                frame is the same whatever the write's unit, :meth:`unit_scale`).
         """
-        rigs = [cls._in_working_unit(rig.record()) for rig in cls.scene_rigs()]
+        unit = cls.unit_scale(ctx)
+        rigs = [rig.record(unit) for rig in cls.scene_rigs()]
         if not rigs:
             return None
         return ptk.SceneRecords.ARTICULATION.make({"rigs": rigs})
 
-    @staticmethod
-    def _in_working_unit(entry: Dict[str, Any]) -> Dict[str, Any]:
-        """*entry* (:meth:`record`, in the plan's centimetres) with its
-        lengths in the working unit: each rest translate and each slide's
-        limits."""
-        out = copy.deepcopy(entry)
-        for joint in out["joints"]:
-            joint["t"] = Units.convert(joint["t"], "internal", "working")
-            for channel in joint["channels"]:
-                if channel["channel"].startswith("t"):
-                    channel["min"] = Units.convert(channel["min"], "internal", "working")
-                    channel["max"] = Units.convert(channel["max"], "internal", "working")
-        return out
+    #: Metres per plan unit (Maya's internal centimetre) in a joint's frame as
+    #: the record states it: the FBX's own value read as centimetres. Maya's
+    #: FBX writer writes every local in centimetres whatever the working unit
+    #: and the plug-in's unit conversion -- that converts by the ROOT's scale
+    #: and the file's UnitScaleFactor alone -- and FBX2glTF reads a local as
+    #: the file value x 0.01 whatever the UnitScaleFactor (measured
+    #: 2026-11-08, Maya 2025: the Scene Exporter at Units cm, m and mm, and
+    #: FBXExportConvertUnitString m and mm -- a joint at 24 in every file, at
+    #: 0.24 in every GLB). An FBX importer that converts the file's unit into
+    #: the locals instead (24 m from a metre file) scales the record by that
+    #: conversion. Mirror of blendertk's.
+    _FRAME_METRES = 0.01
+
+    @classmethod
+    def unit_scale(cls, ctx=None) -> float:
+        """Metres per plan unit -- the plan's centimetres (Maya's internal
+        unit) -- in the joints' frames as the record states them
+        (:attr:`_FRAME_METRES`): each joint in its parent's frame, below the
+        root that carries the write's unit, so *ctx*'s unit
+        (``ptk.ExportContext.unit_scale``, the scene's world size) does not
+        reach it. Mirror of blendertk's (signature included)."""
+        return cls._FRAME_METRES
 
     @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:

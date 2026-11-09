@@ -37,7 +37,7 @@ data_export                transform, name + channels locked,   DELIVERABLE -- r
 │                          hidden in the Outliner
 ├─ data_exportShape        locator, zero scale (never drawn)
 ├─ <record key>            string attr: the record's JSON       one per deliverable record
-└─ emissiveGroup_<name>    float attr 0-1, keyable              each emissive group's weight
+└─ <material>__emission    transform, curveProxy, for one write an animated material's emission weight
 ```
 
 - **A record is one string attribute named exactly for its key.** An
@@ -60,11 +60,13 @@ would otherwise delete the carrier with every record written since).
 input's source goes (cutting an audio track's last key once took every record
 with it). Names are locked, nodes are not; `ensure_export` heals a plain
 `data_export` to the full protection set, so *Optimize Scene Size* never
-deletes it. A duplicate short name resolves to the shallowest DAG path. A
-referenced module keeps its own `NS:data_export`:
-`get_export_nodes()` returns every carrier so an export ships them all, and a
-reader binds the scene's own copy of a record first
-(`ptk.FbxMedia.reader_records`).
+deletes it. The scene's carrier is the root-level `data_export`: one under a
+group is a grouped module's own, as a referenced module keeps its own
+`NS:data_export`, and the store never adopts, writes over or deletes either --
+a scene with only a module's makes its own at the root
+(`ptk.SceneStoreBase.is_scene_carrier`). `get_export_nodes()` returns every
+carrier so an export ships them all, and a reader binds the scene's own copy of
+a record first (`ptk.FbxMedia.reader_records`).
 
 ## What each record holds
 
@@ -84,15 +86,14 @@ deliverable's fields, in the FBX and the GLB:
 
 | Record | Version | Kind | Owner | Reads | Read by | GLB block | Holds |
 |---|---|---|---|---|---|---|---|
-| `materials` | 1 | derived, transient | Export | -- | unity, glb | -- | every material as glTF 2.0 states it: its factors, the embedded map behind each, alpha mode, double-sidedness and unlit |
-| `animation` | 1 | derived | Shots | -- | unity, glb, verifier | v2 | shot definitions -- per clip its frame range ('start'/'end', the take the clip is cut from) and any description; the scene fps and the declared clip mode; the clip name is the join key to the imported animation clip |
-| `audio` | 2 | derived | Audio Clips | `animation` | unity | -- | audio events with the frames they fire on, scoped to their clip, and 'fps', the rate those frames count at |
-| `lightmaps` | 2 | authored | Lightmap Baker | -- | unity, glb | v2 | per-object baked-lightmap records: map file name, uvIndex, scaleOffset, and the object's scene hierarchy (which tells apart objects that share a name); and the bake's reflection probe, when it captured one: its HDR's file name, capture point and projection box; and the lights the maps were baked from, for the highlights a lightmap cannot hold -- every length times unit_scale is metres |
-| `shadows` | 2 | authored | Shadow Rig | -- | unity, glb | v2 | projected-shadow planes: per plane its node name, type, silhouette texture and intensity, the source and contact it follows and the projection model's constants, and, when packed or baked, its atlas rect and horizon map -- every length times unit_scale is metres |
-| `articulation` | 1 | authored | Articulated Rig | -- | unity, glb | v1 | articulated rigs: per rig its joints (node name, parent, rest translate and orient, rotate order, channels with limits and grab weights) and the parts a hand grabs, each with the joint it rides |
-| `emissive_groups` | 2 | derived | Emissive Groups | -- | unity | -- | named emissive material groups and their weights |
-| `render_effects` | 1 | derived | Render Effects | `animation` | glb, verifier | -- | each node's keyed render effects: 'visibility' as stepped on/off frames, the authored 'opacity' ramp, and the 'highlight' ramp with its colour stops ('highlight_color', 'highlight_color_dim'); with 'fps' and each take's first/last authored frame ('clip_span'); on a shot scene keying none, the exporter's measured whole-timeline clip origin alone |
-| `handoff` | 3 | derived | Export | -- | unity, glb | -- | the standalone-reader contract: the approved scene part by part and the lighting it was approved under |
+| `materials` | 2 | derived, transient | Export | `lightmaps` | unity, glb | -- | every material as glTF 2.0 states it, literally: a glTF document of the file's materials, textures, images (by file name) and samplers -- metal and roughness packed into one image, KHR_texture_transform, KHR_materials_unlit and KHR_materials_emissive_strength |
+| `animation` | 3 | derived | Shots | -- | unity, glb, verifier | v3 | shot definitions -- per shot its clip name, the name of the file's take for it, and what a clip cannot hold: its description and its metadata -- and the scene's frame rate (a scene that animates and declares no shot states the rate alone); the clip name is the join key to the imported animation clip |
+| `audio` | 3 | derived | Audio Clips | `animation` | unity, glb | v3 | the scene's sounds cut into cues per clip: each the sound (the delivered audio file's name), when it starts and stops in seconds from the clip's start, and where in the sound it starts; the cues are the source's, and what a Unity user adds in the model importer's Events tab is Unity's |
+| `lightmaps` | 3 | authored | Lightmap Baker | -- | unity, glb | v3 | per-object baked-lightmap records: map file name, scaleOffset, and the object's scene hierarchy (which tells apart objects that share a name); the bake's reflection probe, when it captured one -- its HDR's file name, capture point and projection box -- with copies of it for groups of receivers; and the lights the maps were baked from -- every length times unit_scale is metres |
+| `shadows` | 3 | authored | Shadow Rig | -- | unity, glb | v3 | shadow planes: per plane its node name, the source and contact it follows, its horizon map, the projection model's constants and its fade's terms, and its projected silhouette (an extension) -- every length times unit_scale is metres |
+| `articulation` | 2 | authored | Articulated Rig | -- | unity, glb | v2 | articulated rigs: per rig its joints (node name, parent joint, rest translate and rotation, the anchor frame its channels turn and slide in, rotate order, channels with limits and grab weights) and the parts a hand grabs, each with the joint it rides -- in metres |
+| `render_effects` | 2 | derived | Render Effects | `animation` | unity, glb, verifier | v2 | which nodes carry an animated render effect -- 'visibility', 'opacity', 'highlight' with its colour stops 'highlight_color' and 'highlight_color_dim' -- and which materials an animated 'emission'; each curve rides the file's animated-value transport, per clip |
+| `handoff` | 3 | derived | Export | -- | glb | -- | the standalone-reader contract: the approved scene part by part and the lighting it was approved under |
 
 **`data_internal`** -- the private records:
 
@@ -102,7 +103,7 @@ deliverable's fields, in the FBX and the GLB:
 | `key_stash` | 1 (bare) | Key Stash | domain merge | the clip manifest of parked keys: per clip its id, label, objects, parked curves, source shot and metadata |
 | `smart_bake_sessions` | 2 (bare) | SmartBake | unites | LIFO stack of bake-session restore manifests, oldest first, each under its 'id': what the bake replaced, to put it back |
 | `hierarchy_baseline` | 1 (bare) | Hierarchy check | keeps its own | the export hierarchy baseline (a HierarchyBaseline record): the exported node paths, their hash and count, and the scene file that recorded them |
-| `emissive_registry` | 1 (bare) | Emissive Groups | domain merge, hand-off | the group registry: per group its slot, default weight and keyed attr, the membership encoding and the retired slots |
+| `emissive_registry` | 2 (bare) | Emissive Groups | unites, hand-off | what crosses a hand-off for the emissive groups: per group copy its group, base material, emission strength and emission keys (the old tool's slot registry, version 1, is converted and removed) |
 | `render_effects_bindings` | 1 (bare) | Render Effects | unites | legacy, Maya only: the bindings the retired viewport material mode left, per material channel its object and the authored values -- read to restore them, then cleared |
 | `texture_combine` | 1 (bare) | Texture Combine | unites | texture combines by name: per mesh its original UVs and face materials, the source maps read, the settings and overrides |
 | `light_rigs` | 1 (bare) | Light Rigs | unites | light rigs by group: the rig applied, its fingerprint, the plugs it overrides and the rig a swap replaced |
@@ -120,9 +121,9 @@ deliverable's fields, in the FBX and the GLB:
 | In the file | What |
 |---|---|
 | the `data_export` node | each non-empty deliverable record as a string user property (its JSON). `handoff` is stamped last, from what the node then holds, so it describes the rest; `materials` exists for that write alone |
-| `data_export.emissiveGroup_<name>` | each keyed group's weight curve (FBX animates only an exported node's attributes) |
-| each object with a keyed render effect | `opacity` / `highlight` (and `highlightColor` / `highlightColorDim`) properties, their curves on a child `<object>__opacity` / `<object>__highlight` node's `scale.x` -- staged for the write, removed after |
-| embedded media | every file a record names: material maps, lightmaps, the reflection probe and its highlight copies, shadow maps, each audio event's file |
+| each object with a keyed render effect | `opacity` / `highlight` (and `highlightColor` / `highlightColorDim`) properties, their curves on a child `<object>__opacity` / `<object>__highlight` / `<object>__visibility` node's `scale.x` (`ptk.SceneRecords.TRANSPORT`) -- staged for the write, removed after |
+| `data_export\|<material>__emission` | each animated material's emission weight (an emissive group's copy, keyed by the group's weight) on a curve proxy's `scale.x`, the proxy named by the material's leaf -- staged for the write, removed after |
+| embedded media | every file a record names: material maps, lightmaps, the reflection probe and its highlight copies, shadow maps, each audio cue's sound file |
 
 Never carried: `data_internal` (a `network` node never serialises into an
 FBX). The Scene Exporter and hand-offs narrow the `export_scoped` records
@@ -147,13 +148,14 @@ the file states each thing once:
 
 | Record | In the GLB |
 |---|---|
-| `animation` | the animations cut per shot (as the clip mode says), and `extras.animation`: every shot as the record states it, whatever clips the file holds -- a shot with no clip of its own (a `full` file) plays its window of the whole-timeline clip -- and each clip's `zero_frame` |
+| `animation` | one animation per take, so per shot, named after it (the FBX's takes, converted as they stand), and `extras.animation`: the record itself, verbatim -- every shot as it states it, whatever clips the file holds, joined to its animation by name, and the scene's `fps` |
 | `materials` | the glTF materials themselves |
-| `lightmaps` | each lightmap in its material's texture slot, the probe in a bufferView, and `extras.lightmaps` |
-| `shadows`, `articulation` | `extras.shadows`, `extras.articulation`, bound to node and texture indices |
-| `render_effects` | animation channels: a STEP `scale` for visibility, `KHR_animation_pointer` for opacity and highlight |
+| `lightmaps` | `extras.lightmaps`, the record itself, verbatim (its probe drawn with the bake's lights, as the FBX's), and each file it names -- each map, the probe, its highlight copies -- as the bufferView named by that file (`SceneRecords.GLB_MEDIA`); no material slot carries a map |
+| `shadows` | `extras.shadows`, the record itself, verbatim, and each file it names -- each plane's horizon map, its silhouette, the silhouette atlas -- as the bufferView named by that file (`SceneRecords.GLB_MEDIA`); nothing bound by index |
+| `articulation` | `extras.articulation`, bound to node indices |
+| `render_effects` | `extras.render_effects`, the record itself, and per clip from the FBX's own curve proxies: a STEP `scale` for presence (visibility, and opacity at 0), `KHR_animation_pointer` for opacity, highlight and a material's emission |
 | `handoff` | `extras.handoff`, in the GLB's addresses |
-| `audio`, `emissive_groups` | nothing -- Unity reads them from the FBX |
+| `audio` | `extras.audio`, the record itself, verbatim |
 
 ### USD
 
@@ -186,11 +188,11 @@ a classmethod that reads the scene and returns the record -- or `None`, which
 CLEARS it (deleting the last shot must not leave its takes riding into the
 next export): `animation` `ShotStore.produce_export_records`, `audio`
 `AudioClips`, `render_effects` `RenderEffects`, `shadows` `ShadowRig`,
-`articulation` `ArticulatedRig`, `emissive_groups` `EmissiveGroups`,
+`articulation` `ArticulatedRig`,
 `lightmaps` `LightmapRecords`, `materials` `MaterialRecords` (each
 `export_record(ctx)`). `ptk.ExportSnapshot.assemble` orders them by `after`
 and hands each the `ptk.ExportContext` -- the exporter's decisions as inputs
-(`clip_mode`, `clip_span`, `rendering`, `scope`), and, through
+(`rendering`, `scope`), and, through
 `ctx.record(spec, DataNodes)`, what the producers before it returned. `commit`
 writes every record in one pass, then stamps `handoff`. Publishing twice with
 one context produces the same records.
@@ -259,18 +261,18 @@ The rules, by *Crosses*:
   LIFO stack keeps this scene's newest on top.
 - **domain merge**: a codec in `ptk.SceneRecords.CODECS` -- the shot store
   renumbers incoming shots (a clashing name arrives numbered), the key stash
-  gives parked clips fresh ids and follows their shots, the emissive registry
-  re-slots a group whose slot is taken (and logs the binding to re-wire).
+  gives parked clips fresh ids and follows their shots.
 
 Each crossing returns a `ptk.TransferContext` whose `notes` are logged:
 nothing is renamed or dropped silently. What a record keeps **beside** itself
 belongs to its DCC owner, a row in `DataNodes.OWNERS` (shot store, key stash,
 SmartBake sessions, emissive registry) whose optional hooks the engine calls:
-`transfer_out` / `transfer_in` (the emissive groups send their face
-membership), `merge_carrier` / `discard_carrier` (a discarded stash's parked
-curves are deleted). The carrier's non-record attributes -- an audio track's
-keyed enum, a group's keyed weight -- move to this scene's carrier with their
-curves.
+`transfer_out` / `transfer_in` (the emissive groups send each copy's group,
+base material, strength and emission keys: an interchange file carries the
+materials and their faces, never their tags or the material animation),
+`merge_carrier` / `discard_carrier` (a discarded stash's parked curves are
+deleted). The carrier's non-record attributes -- an audio track's keyed enum
+-- move to this scene's carrier with their curves.
 
 ## Adding a record
 
@@ -288,13 +290,9 @@ curves.
 4. **Read by Unity?** Add `"unity"` to `consumers`, then, in unitytk (its
    [feature guide](https://github.com/m3trik/unitytk/blob/main/docs/parts/feature.md)):
    the record's key on its line in `Core/UnitytkRecords.cs`, naming the importer
-   that reads it (`// channel → <Importer>`); the channel's settings key in
-   `Core/PersistedStrings.cs` (a channel a record rides is keyed by the record's
-   key), which the importer's `Channel` constant reads and its gate asks
-   (`Settings.ShouldImport(assetPath, <Importer>.Channel)`); and the channel
-   declared once beside the importer for the settings page,
-   `[assembly: SettingsChannel(<Importer>.Channel, "<Label>", "<what it does>")]`.
-   The importer reads the record as an FBX user property on the `data_export`
+   that reads it (`// channel → <Importer>`); the importer's gate is the kernel's
+   one (`Imports.IsDelivery(assetPath)`: an FBX is a delivery), and past it the
+   feature acts when its record is present. The importer reads the record as an FBX user property on the `data_export`
    GameObject -- see
    [unitytk's package README](https://github.com/m3trik/unitytk/blob/main/com.m3trik.unitytk/README.md).
 5. Run `python m3trik/scripts/sync_scene_records.py`: these tables,
@@ -311,8 +309,8 @@ curves.
 | `ptk.SceneRecords.<RECORD>` | the declaration (`.key`, `.scope`, `.version`, `.kind`); `.load(DataNodes, default)`, `.save(DataNodes, payload)`, `.make(payload)`, `.is_present(DataNodes)`, `.clear(DataNodes)` |
 | `FbxUtils.publish_authored({spec: payload})` | commit records in hand (authoring time), `handoff` restamped; no stager runs |
 | `FbxUtils.publish(ctx=None, only=None)` | assemble every producer's record and commit once; returns the `ptk.ExportSnapshot` |
-| `FbxUtils.export_context(mode=PIPELINE, **decisions)` | a context with this scene's provenance; decisions `clip_mode`, `clip_span`, `rendering`, `scope` |
-| `FbxUtils.export_prepared(ctx=None, only=None, stagers=None, plan=None)` / `stage(names=None)` | the bracket: stage, publish (given a context or `only`), finish after the block; `stage` alone runs every `prepare` now |
+| `FbxUtils.export_context(mode=PIPELINE, **decisions)` | a context with this scene's provenance; decisions `rendering`, `scope` |
+| `FbxUtils.export_prepared(ctx=None, only=None, stagers=None)` / `stage(names=None)` | the bracket: stage, publish (given a context or `only`), finish after the block; `stage` alone runs every `prepare` now |
 | `FbxUtils.enable_export_producer(spec)` / `register_export_stager(name, prepare, finish)` | the session opt-ins |
 | `FbxUtils.finish_deliverable(file_path, glb=None)` | the finishing passes on a written FBX |
 | `DataNodes.read` / `write` / `remove` / `values` / `discard_if_empty` | the store contract (`ptk.SceneStoreBase`), per scope; a falsy `text` clears and never creates |

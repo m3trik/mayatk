@@ -93,8 +93,8 @@ class LightmapRecords(ptk.LoggingMixin):
     # ``data_export`` channel: a scene-wide JSON manifest of every lighting-only
     # lightmap, regenerated from the per-transform markers. Rides the FBX as a
     # user property (the ``ptk.SceneRecords.LIGHTMAPS`` record, whose key and
-    # version these are) -- purely informational unless consumed; unitytk's
-    # optional editor helper reads it to auto-bind Unity's *native* lightmap
+    # version these are) -- purely informational unless consumed; the unitytk
+    # package's Lightmaps importer reads it and binds Unity's *native* lightmap
     # slots ("sidecar benefits, no sidecar file").
     # Its key under its old name, retired here: read the declaration's
     # (``ptk.SceneRecords.LIGHTMAPS.key``).
@@ -1630,11 +1630,42 @@ class LightmapRecords(ptk.LoggingMixin):
                 hidden group of stale copies -- would ship its map with
                 nothing to bind it to. The record's ``unit_scale`` is the
                 writer's (``ctx.unit``), the scene's without one.
+
+        A record refused -- some object's lightmap set off the second UV set
+        (:meth:`_record`) -- is said on *ctx* with its fix and none ships:
+        the snapshot clears the delivered record. Raised, it failed the
+        producer, and the stale stored record shipped.
         """
         from mayatk.core_utils.units import Units
 
-        return cls._record(
-            ctx.scope, unit_scale=ctx.unit(lambda: Units.metres_per("working"))
+        return ptk.LightmapRecord.unless_refused(
+            lambda: cls._record(
+                ctx.scope, unit_scale=ctx.unit(lambda: Units.metres_per("working"))
+            ),
+            cls.logger,
+            note=ctx.note,
+        )
+
+    @classmethod
+    def withheld(cls, ctx: ptk.ExportContext) -> Dict[str, str]:
+        """``{"lightmaps": why}`` when the write of *ctx* ships the stored
+        record as it stands and its producer would refuse it now, else
+        ``{}`` (``ptk.LightmapRecord.withheld``, vetted as :meth:`_record`
+        vets one, over the markers of what the write ships) -- what
+        ``FbxUtils.export_context`` states on a hand-off
+        (``ptk.ExportContext.withheld``, its ``"withheld_records"`` hook):
+        the write ships no lightmaps, its materials keep their occlusion, the
+        reason is said with its fix, and the scene keeps its record for when
+        the set is put back."""
+        if cmds is None:
+            return {}
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return ptk.LightmapRecord.withheld(
+            ctx,
+            DataNodes,
+            lambda: cls._uv_placements(cls._marker_records(ctx.scope)),
+            cls.UV_SET_FIX,
         )
 
     @classmethod
@@ -1663,13 +1694,27 @@ class LightmapRecords(ptk.LoggingMixin):
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         cls._prune_folder_hints()
-        record = cls._record()
+        # A refused record (a lightmap set off the second slot) clears the
+        # channel, said with its fix, and the bake or revert goes on.
+        record = ptk.LightmapRecord.unless_refused(cls._record, cls.logger)
         FbxUtils.publish_authored({ptk.SceneRecords.LIGHTMAPS: record})
         return record.text if record is not None else None
 
     #: The most lights a manifest carries for their highlights: each is drawn
-    #: into every probe copy a GLB build makes.
+    #: into the probe and every copy of it a delivery ships.
     SPECULAR_LIGHT_LIMIT = 16
+
+    #: What a refused record's message tells its user to do with a lightmap
+    #: set off the second slot (``ptk.LightmapRecord.check_uv_sets``):
+    #: ``UvUtils.create_lightmap_uvs`` moves the set it reuses to index 1, its
+    #: UVs kept; a set renamed since the bake is found again under its old
+    #: name alone, and one removed took the UVs the map was baked on.
+    UV_SET_FIX = (
+        "Re-run create_lightmap_uvs on them: it moves each lightmap set to "
+        "index 1, keeping its UVs and so the bake (rename a set renamed since "
+        "the bake back first; bake again an object whose set was removed), "
+        "then export again."
+    )
 
     @classmethod
     def _record(
@@ -1686,14 +1731,22 @@ class LightmapRecords(ptk.LoggingMixin):
         them with the working unit's own.
         Its shape -- one ``unit_scale`` for every length, the version stamped
         -- is the record's model's (``ptk.LightmapRecord.payload``), which
-        blendertk's producer publishes through too. unitytk's optional editor
-        helper reads it to auto-bind Unity's native lightmap slots
+        blendertk's producer publishes through too. The unitytk package's
+        Lightmaps importer reads it and binds Unity's native lightmap slots
         (``renderer.lightmapScaleOffset`` per entry). Returns ``None`` when no
         lightmapped mesh remains (the publisher then clears the channel).
+
+        Raises:
+            ptk.LightmapRecord.UvSetRefused: Some object's lightmap set is not
+                its second UV set, through which the record reads every map
+                (:attr:`UV_SET_FIX` says what to do).
         """
+        markers = list(cls._marker_records(objects))
+        ptk.LightmapRecord.check_uv_sets(
+            cls._uv_placements(markers), fix=cls.UV_SET_FIX
+        )
         entries: List[Dict[str, Any]] = []
-        for transform, info in cls._marker_records(objects):
-            shape = NodeUtils.get_shape(transform)
+        for transform, info in markers:
             # The engine matches by the GameObject (transform) name, so publish
             # exactly what the export carries: the DAG path goes (no format
             # names a node by one -- it rides beside, as ``hierarchy``) but the
@@ -1708,38 +1761,6 @@ class LightmapRecords(ptk.LoggingMixin):
             # equivalent: Blender enforces scene-unique object names, so its
             # published name is already the exported one.
             name = transform.rsplit("|", 1)[-1]
-            # Publish the lightmap set's REAL channel index. Unity's native
-            # lightmaps only ever sample uv2 (index 1) -- anything else means
-            # the export will sample the wrong channel, so warn loudly instead
-            # of shipping a hardcoded 1 that hides the problem.
-            uv_set = info.get("uv_set")
-            sets = (
-                list(
-                    dict.fromkeys(
-                        cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-                    )
-                )
-                if shape
-                else []
-            )
-            uv_index = sets.index(uv_set) if uv_set in sets else 1
-            if shape and uv_set and uv_set not in sets:
-                cls.logger.warning(
-                    "%s: committed lightmap set %r no longer exists; "
-                    "publishing uvIndex 1 on faith. Re-run create_lightmap_uvs "
-                    "if the set was renamed or removed.",
-                    name,
-                    uv_set,
-                )
-            if uv_index != 1:
-                cls.logger.warning(
-                    "%s: lightmap set %r sits at UV index %d, but Unity samples "
-                    "uv2 (index 1). Re-run create_lightmap_uvs (it reorders to "
-                    "index 1) before exporting.",
-                    name,
-                    uv_set,
-                    uv_index,
-                )
             # ``hierarchy`` is where the object SITS, root first, namespaces
             # kept like ``name``. FBX carries leaf names only, so two objects
             # that share one arrive as two same-named nodes -- the production
@@ -1749,12 +1770,10 @@ class LightmapRecords(ptk.LoggingMixin):
             # (``ptk.MeshConvert.apply_glb_lightmaps``).
             entries.append(
                 {
-                    # camelCase keys: Unity's JsonUtility matches C# field names
-                    # exactly, so these mirror LightmapRecord in unitytk's
-                    # LightmapMetadataController.cs.
+                    # The keys pythontk's LightmapRecord declares (camelCase
+                    # where it does).
                     "name": name,
                     "map": info.get("map"),
-                    "uvIndex": uv_index,
                     # The object's rect into its (possibly shared) lightmap: the
                     # identity for a map of its own, or an atlas rect. Old
                     # markers predate the key -> identity.
@@ -1768,16 +1787,11 @@ class LightmapRecords(ptk.LoggingMixin):
         names = [e["name"] for e in entries]
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
-            # Not a warning: every record carries its hierarchy, and both
-            # readers -- the GLB applier and unitytk's LightmapMetadataController
-            # (since 2026-09-22) -- tell same-named objects apart by it. Only
-            # an older Unity helper, which matched by name alone, needs the
-            # objects renamed; said once, at info, for that reader.
+            # Not a warning: every record carries its hierarchy, and every
+            # reader tells same-named objects apart by it; said once, at info.
             cls.logger.info(
                 "Object name(s) recur in the lightmap manifest (%s); readers tell "
-                "them apart by hierarchy. A unitytk LightmapMetadataController "
-                "older than 2026-09-22 matches by name alone -- update it "
-                "rather than renaming.",
+                "them apart by hierarchy.",
                 ", ".join(dupes),
             )
 
@@ -1796,11 +1810,11 @@ class LightmapRecords(ptk.LoggingMixin):
         from mayatk.core_utils.units import Units
 
         probe = cls.probe()
-        # The highlights a lightmap cannot hold: the lights, which the GLB
-        # build draws into copies of the probe (LightUtils.specular_lights;
-        # ptk.MeshConvert.highlight_probe_layers), the strongest at the middle
-        # of what is baked when there are many.
-        baked = [transform for transform, _info in cls._marker_records(objects)]
+        # The highlights a lightmap cannot hold: the lights, which the
+        # delivery draws into the probe and its copies (LightUtils.
+        # specular_lights; ptk.MeshConvert.embed_fbx_highlight_probes), the
+        # strongest at the middle of what is baked when there are many.
+        baked = [transform for transform, _info in markers]
         near = None
         if baked:
             box = cmds.exactWorldBoundingBox(baked)
@@ -1823,6 +1837,35 @@ class LightmapRecords(ptk.LoggingMixin):
             ),
         )
         return ptk.SceneRecords.LIGHTMAPS.make(payload) if payload else None
+
+    @staticmethod
+    def _uv_placements(
+        markers: Iterable[Tuple[str, Dict[str, Any]]],
+    ) -> List[Tuple[str, str, Optional[int]]]:
+        """``(name, committed lightmap set, its UV index)`` for each marked
+        transform of *markers* (:meth:`_marker_records`) whose marker names a
+        set -- the index ``None`` where its shape no longer has it, renamed
+        or removed since the bake -- what ``ptk.LightmapRecord.check_uv_sets``
+        refuses a record by. The record reads every map through the second
+        UV set (index 1: Unity's uv2, glTF's TEXCOORD_1) and names none, so
+        each set's REAL place is read, never assumed."""
+        placed: List[Tuple[str, str, Optional[int]]] = []
+        for transform, info in markers:
+            uv_set = info.get("uv_set")
+            shape = NodeUtils.get_shape(transform)
+            if not (shape and uv_set):
+                continue
+            sets = list(
+                dict.fromkeys(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
+            )
+            placed.append(
+                (
+                    transform.rsplit("|", 1)[-1],
+                    uv_set,
+                    sets.index(uv_set) if uv_set in sets else None,
+                )
+            )
+        return placed
 
     @classmethod
     def _baked_lights(

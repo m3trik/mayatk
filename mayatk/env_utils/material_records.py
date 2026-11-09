@@ -5,10 +5,15 @@
 Every material an export ships, read from the scene as staged for the write
 -- a texture template's converted copies, the optimized maps, the shadow
 planes' fades -- into the host-free model that states it
-(``ptk.MaterialFamilies``): the statement the FBX carries
-(``ptk.SceneRecords.MATERIALS``), the GLB built from that FBX applies, and
-unitytk shades from. A transient record: the export's restore clears it, so
-the scene never holds a statement of maps it has since put back.
+(``ptk.MaterialFamilies``): the record the FBX carries
+(``ptk.SceneRecords.MATERIALS``, literal glTF 2.0), which the GLB built from
+that FBX copies as its own materials and unitytk shades from. A transient
+record: the export's restore clears it, so the scene never holds a statement
+of maps it has since put back. Its one write is glTF's own cost: each
+material's metal and roughness maps packed into one image, a delivery file
+written into the pack store and never into a source folder
+(``ptk.MaterialFamilies.pack_metallic_roughness``), which the delivery
+embeds with the other maps (``ptk.FbxMedia.embed_dependencies``).
 
 This module only GATHERS: each shader type's values in its family's
 vocabulary (:attr:`MaterialRecords.FAMILIES`) and its maps by logical
@@ -105,27 +110,45 @@ class MaterialRecords(ptk.HelpMixin):
     def export_record(cls, ctx: "ptk.ExportContext") -> Optional["ptk.Record"]:
         """The ``materials`` record for this write, or ``None`` when no mesh
         wears a material -- the ``ptk.SceneRecords.MATERIALS`` producer
-        (``FbxUtils.PRODUCERS``). Pure: it reads the staged scene and never
-        writes.
+        (``FbxUtils.PRODUCERS``). It reads the staged scene and changes
+        nothing in it; its one write is each material's metal and roughness
+        maps packed into one image, glTF's layout -- a delivery file in the
+        pack store, never beside the maps
+        (``ptk.MaterialFamilies.pack_metallic_roughness``: a re-export of the
+        same maps reuses it, a changed map packs anew).
 
         Parameters:
             ctx: The export's decisions; ``ctx.scope`` narrows the materials
                 to those the write ships (the whole scene's meshes when
                 ``None``), and what a material carries that the record cannot
                 state is noted on it.
+
+        Raises:
+            OSError: A material's metal and roughness maps could not be packed
+                (a map missing or unreadable, the pack store not writable): the
+                record is not produced, and the message says what to fix --
+                never a material read dielectric and matte unsaid.
+
+        A material only lightmapped objects wear states no occlusion map --
+        the bake holds their occlusion -- and one that lightmapped and
+        unbaked objects share keeps it, noted with the fix: decided against
+        the ``lightmaps`` record this write ships, by mesh shape
+        (``ptk.MaterialFamilies.export_record``, the producer both hosts
+        share; this reads which shapes wear which materials, :meth:`_worn`).
         """
+        from mayatk.node_utils.data_nodes import DataNodes
+
         objects = cls._export_objects(ctx.scope)
         if not objects:
             return None
         notes: List[str] = []
-        entries = cls.entries(objects, notes=notes)
-        for note in dict.fromkeys(notes):
-            ctx.note(note)
-        if not entries:
-            return None
-        # ``payload`` is the declaration's made payload already.
-        return ptk.Record(
-            ptk.SceneRecords.MATERIALS, ptk.MaterialFamilies.payload(entries)
+        return ptk.MaterialFamilies.export_record(
+            ctx,
+            cls.entries(objects, notes=notes),
+            lambda: cls._worn(objects),
+            store=DataNodes,
+            pack=ptk.MaterialFamilies.pack_metallic_roughness,
+            notes=notes,
         )
 
     @classmethod
@@ -157,11 +180,14 @@ class MaterialRecords(ptk.HelpMixin):
                 skipped.setdefault(node_type, []).append(mat)
                 continue
             family, method = row
+            values = getattr(cls, method)(mat, node_type)
+            if family != "stingray_pbs":  # its graph carries its own uv_*
+                values.update(cls._uv_values(mat, notes))
             found.append(
                 ptk.MaterialFamilies.entry(
                     family,
                     mat,
-                    getattr(cls, method)(mat, node_type),
+                    values,
                     # Its maps by channel, read off this material alone: the
                     # objects are expanded once, above (``MatManifest.build``
                     # would expand and resolve them again).
@@ -179,6 +205,64 @@ class MaterialRecords(ptk.HelpMixin):
         return found
 
     # ---------------------------------------------------------------- values
+    #: A ``place2dTexture``'s attributes the record has no term for, and the
+    #: value at which each changes nothing.
+    UNSTATED_PLACEMENT: Dict[str, Any] = {
+        "rotateUV": 0.0,
+        "rotateFrame": 0.0,
+        "coverage": (1.0, 1.0),
+        "translateFrame": (0.0, 0.0),
+    }
+
+    @classmethod
+    def _uv_values(cls, mat: str, notes: Optional[List[str]] = None) -> Dict[str, Any]:
+        """The UV transform *mat*'s maps share, in the family's vocabulary
+        (``uv_offset``, ``uv_scale``: Maya's UV space, which the model turns
+        into glTF's): the ``place2dTexture`` feeding its file nodes, its
+        ``offset`` and ``repeatUV``. Empty with none, or one that changes
+        nothing. Maps placed differently state the first one's, and a rotation
+        or a frame the record has no term for is said in *notes*."""
+        from mayatk.mat_utils.mat_manifest import MatManifest
+
+        found = None
+        for file_node in MatManifest._channel_file_nodes(mat).values():
+            placed = (
+                cmds.listConnections(
+                    f"{file_node}.uvCoord",
+                    source=True,
+                    destination=False,
+                    type="place2dTexture",
+                )
+                or []
+            )
+            if not placed:
+                continue
+            node = placed[0]
+            value = (
+                tuple(round(v, 6) for v in cls._value(node, "offset") or (0.0, 0.0)),
+                tuple(round(v, 6) for v in cls._value(node, "repeatUV") or (1.0, 1.0)),
+            )
+            if found is None:
+                found = value
+            elif value != found and notes is not None:
+                notes.append(
+                    f"Material {mat}: its maps are placed differently; the record "
+                    f"states the first map's placement for all of them."
+                )
+            for attr, rest in cls.UNSTATED_PLACEMENT.items():
+                current = cls._value(node, attr)
+                if current is None or notes is None:
+                    continue
+                current = tuple(current) if isinstance(current, (list, tuple)) else current
+                if current != rest:
+                    notes.append(
+                        f"Material {mat}: its {node}.{attr} is not stated (the record "
+                        "carries a UV offset and scale alone)."
+                    )
+        if found is None or found == ((0.0, 0.0), (1.0, 1.0)):
+            return {}
+        return {"uv_offset": found[0], "uv_scale": found[1]}
+
     @classmethod
     def _stingray_values(cls, mat: str, node_type: str) -> Dict[str, Any]:
         """A StingrayPBS's own attributes -- the family's vocabulary is the
@@ -381,6 +465,46 @@ class MaterialRecords(ptk.HelpMixin):
             except Exception as error:  # noqa: BLE001 -- the record states the rest
                 logger.debug("Unlit source %s unread: %s", row[1], error)
         return unlit
+
+    @classmethod
+    def _worn(cls, objects: Iterable[str]) -> List[Tuple[List[List[str]], List[str]]]:
+        """Per mesh shape *objects* ship (as :meth:`entries` reads them, a
+        transform with its descendants): the hierarchy of each transform it
+        is instanced under -- its DAG path's names, root first, as a
+        ``lightmaps`` entry's ``hierarchy`` -- and the materials the shape
+        wears, per-face assignment included (``MatUtils.get_mats`` of the
+        shape). Shapes, never transforms: a group counts as its contents,
+        so a group root read as an object put every baked material among
+        the unbaked ones too (``ptk.MaterialFamilies.export_record``)."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        nodes = cls._expand(list(objects))
+        shapes = cmds.ls(nodes, type="mesh", noIntermediate=True, long=True) or []
+        transforms = cmds.ls(nodes, type="transform", long=True) or []
+        if transforms:
+            shapes += (
+                cmds.listRelatives(
+                    transforms,
+                    shapes=True,
+                    type="mesh",
+                    noIntermediate=True,
+                    fullPath=True,
+                )
+                or []
+            )
+        worn: List[Tuple[List[List[str]], List[str]]] = []
+        for shape in dict.fromkeys(shapes):
+            parents = cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+            worn.append(
+                (
+                    [
+                        [part for part in parent.split("|") if part]
+                        for parent in parents
+                    ],
+                    list(MatUtils.get_mats(shape) or []),
+                )
+            )
+        return worn
 
     @staticmethod
     def _expand(objects: List[str]) -> List[str]:

@@ -104,7 +104,7 @@ class TestBuild(MayaTkTestCase):
 class TestPhongEMaps(MayaTkTestCase):
     """A textured phongE names its maps. The materials record states phongE
     (legacy family), and a map the record leaves out is CLEARED from the GLB
-    and from Unity's Deliverable Lit -- an undeclared shader type named none,
+    and from the materials Unity's import writes -- an undeclared shader type named none,
     so a textured phongE shipped flat colour."""
 
     def test_colour_and_normal_maps_reach_the_manifest_and_the_record(self):

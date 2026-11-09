@@ -1,8 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Project-level ops: inspect the open project and reload its mesh.
+"""Project-level ops: inspect, open, create, save and close the project, and
+reload its mesh.
 
-``mesh.reload`` is the op behind the Maya/Blender bridges' *reimport*
+A script calls these as functions (``from substance_rpc.ops import
+project_ops``) or runs Painter's own API; over RPC they are what a client asks
+before it runs a script (``project.info``: which project, by its UUID).
+
+``mesh.reload`` is the op behind the Update Mesh script
 template: the DCC re-exports the FBX over the path the project was
 created from, then asks Painter to replay the mesh from disk.
 Painter preserves paint strokes where UVs/material names still match.
@@ -26,16 +31,20 @@ _last_reload = {"status": None, "mesh_path": None}
 
 @register("project.info")
 def project_info():
-    """Return ``{is_open, file_path, mesh_path, needs_saving}`` (best-effort).
+    """Return ``{is_open, name, uuid, file_path, mesh_path, needs_saving}``.
 
     Every accessor is guarded: an unsaved project has no ``file_path``,
     and older Painter APIs lack ``last_imported_mesh_path`` -- missing
-    values come back as ``None`` rather than erroring the whole call.
+    values come back as ``None`` rather than erroring the whole call. The
+    ``uuid`` (``project.get_uuid``) is the project's own: saved with it, so a
+    run meant for one project is refused by any other.
     """
     import substance_painter.project as project  # noqa: PLC0415
 
     info = {
         "is_open": bool(project.is_open()),
+        "name": None,
+        "uuid": None,
         "file_path": None,
         "mesh_path": None,
         "needs_saving": None,
@@ -43,6 +52,8 @@ def project_info():
     if not info["is_open"]:
         return info
     for key, getter in (
+        ("name", "name"),
+        ("uuid", "get_uuid"),
         ("file_path", "file_path"),
         ("mesh_path", "last_imported_mesh_path"),
         ("needs_saving", "needs_saving"),
@@ -51,10 +62,78 @@ def project_info():
         if fn is None:
             continue
         try:
-            info[key] = fn()
+            value = fn()
+            info[key] = str(value) if key == "uuid" else value
         except Exception:  # noqa: BLE001 -- e.g. ProjectError on unsaved
             info[key] = None
     return info
+
+
+@register("project.open")
+def project_open(path=""):
+    """Open the ``.spp`` at *path*; the project's info."""
+    import substance_painter.project as project  # noqa: PLC0415
+
+    if not path or not os.path.isfile(path):
+        raise ValueError(f"No Painter project at {path!r}")
+    project.open(path)
+    return project_info()
+
+
+@register("project.create")
+def project_create(mesh_path="", template_path="", mesh_map_paths=None, resolution=0, split_by_udim=False):
+    """Create a project from *mesh_path*: Painter's ``project.create`` with its
+    optional project template, mesh maps (``[path, ...]``), default texture
+    resolution (*resolution* px, square; 0 is Painter's default) and, with
+    *split_by_udim*, a texture set per UV tile (``--split-by-udim``'s
+    ``ProjectWorkflow.TextureSetPerUVTile``)."""
+    import substance_painter.project as project  # noqa: PLC0415
+
+    if not mesh_path or not os.path.isfile(mesh_path):
+        raise ValueError(f"Mesh file not found on disk: {mesh_path!r}")
+    options = {}
+    if resolution:
+        options["default_texture_resolution"] = int(resolution)
+    if split_by_udim:
+        options["project_workflow"] = project.ProjectWorkflow.TextureSetPerUVTile
+    settings = project.Settings(**options)
+    kwargs = {"mesh_file_path": mesh_path, "settings": settings}
+    if template_path:
+        kwargs["template_file_path"] = template_path
+    if mesh_map_paths:
+        kwargs["mesh_map_file_paths"] = list(mesh_map_paths)
+    project.create(**kwargs)
+    return project_info()
+
+
+@register("project.save")
+def project_save():
+    """Save the open project where it is; its info."""
+    import substance_painter.project as project  # noqa: PLC0415
+
+    project.save()
+    return project_info()
+
+
+@register("project.save_as")
+def project_save_as(path=""):
+    """Save the open project to *path*; its info."""
+    import substance_painter.project as project  # noqa: PLC0415
+
+    if not path:
+        raise ValueError("No path to save the project to.")
+    project.save_as(path)
+    return project_info()
+
+
+@register("project.close")
+def project_close():
+    """Close the open project, unsaved edits and all (a caller asks first)."""
+    import substance_painter.project as project  # noqa: PLC0415
+
+    if project.is_open():
+        project.close()
+    return project_info()
 
 
 @register("mesh.reload")

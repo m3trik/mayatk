@@ -428,6 +428,9 @@ class MayaConnection:
         self._launched_pid: Optional[int] = None
         # Whether a launch (and a relaunch, ensure_connection) hides its Maya.
         self._launch_hidden: bool = False
+        # Whether the port refused the last command (_execute_via_port says a
+        # refusal once per streak).
+        self._port_refused: bool = False
 
     def connect(
         self,
@@ -1212,13 +1215,18 @@ class MayaConnection:
                 result = capture.getvalue()
             else:
                 if wait_for_response:
+                    # An expression is evaluated, statements exec'd -- after
+                    # the probe's SyntaxError is spent, never inside its
+                    # handler, where all they raise would chain to it.
                     try:
-                        # Try to eval first (if it's an expression)
-                        result = eval(code, globals())
+                        expression = compile(code, "<string>", "eval")
                     except SyntaxError:
-                        # If it's a statement/script, exec it
+                        expression = None
+                    if expression is None:
                         exec(code, globals())
                         result = None
+                    else:
+                        result = eval(expression, globals())
                 else:
                     exec(code, globals())
                     result = None
@@ -1399,6 +1407,9 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
     #: runs the code once, in ``__main__`` as ONE namespace, and always returns
     #: a string -- the expression's value, ``'None'`` for statements, or the
     #: error text (traceback to the Script Editor), as Maya's port replies.
+    #: The code runs after the expression probe's ``SyntaxError`` is spent,
+    #: never inside its handler: there, everything the code raised chained
+    #: that ``SyntaxError`` ("During handling of the above exception ...").
     _PORT_RUNNER = (
         "def _mayatk_port_run(src, path=None):\n"
         "    import __main__, traceback\n"
@@ -1410,6 +1421,8 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
         "        try:\n"
         "            code = compile(src, name, 'eval')\n"
         "        except SyntaxError:\n"
+        "            code = None\n"
+        "        if code is None:\n"
         "            exec(compile(src, name, 'exec'), ns)\n"
         "            return 'None'\n"
         "        return str(eval(code, ns))\n"
@@ -1498,7 +1511,19 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
                     )
 
             client.close()
+            self._port_refused = False
             return response
+        except ConnectionRefusedError as e:
+            # A busy Maya refuses its port while its main thread runs (a
+            # suite dispatched over it); a caller polling it would hear it on
+            # every poll. Said once, and again only after Maya has answered.
+            if not self._port_refused:
+                print(
+                    f"Error executing code: {e} (Maya busy or gone; further "
+                    "refusals unreported until it answers)"
+                )
+            self._port_refused = True
+            return None
         except Exception as e:
             print(f"Error executing code: {e}")
             return None

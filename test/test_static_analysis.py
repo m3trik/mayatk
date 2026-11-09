@@ -36,6 +36,14 @@ EXCLUDED_DIRS = (
     "env_utils/blender_bridge/templates",
 )
 
+# Source trees whose files run with names their host injects, so pyflakes may
+# not see them defined; every OTHER undefined name there is still a finding.
+# Substance templates run in Painter (the substance_rpc plugin's
+# ``script.start``) with ``args`` holding the panel's rows.
+INJECTED_NAMES = {
+    "mat_utils/substance_bridge/templates": {"args"},
+}
+
 
 def _is_inside_string_literal(source_line: str, col: int) -> bool:
     """Return True if 1-based column ``col`` in ``source_line`` is inside a
@@ -97,7 +105,10 @@ class TestStaticAnalysis(unittest.TestCase):
             rel = norm[len(root_norm) :].lstrip("/")
             if any(rel.startswith(d + "/") for d in EXCLUDED_DIRS):
                 continue
-            yield (rel, int(m.group("line")), int(m.group("col")), m.group("name"))
+            name = m.group("name")
+            if any(rel.startswith(d + "/") and name in names for d, names in INJECTED_NAMES.items()):
+                continue
+            yield (rel, int(m.group("line")), int(m.group("col")), name)
 
     @staticmethod
     def _filter_real_findings(findings):

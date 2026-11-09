@@ -32,7 +32,7 @@ dependencies = [
     "uitk>=1.10.0",
 ]
 
-# No Unity extra: the Unity delivery is extapps' Unity Workflow app, which tentacle
+# No Unity extra: the Unity delivery is extapps' Unity Scripts app, which tentacle
 # opens with this package's UnityBridge (the scene's export) as its engine.
 [project.urls]
 Homepage = "https://github.com/m3trik/mayatk"

@@ -20,7 +20,7 @@ import os
 _SCRIPTS_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
-for _pkg in ("mayatk", "pythontk", "uitk", "tentacle", "unitytk"):
+for _pkg in ("mayatk", "pythontk", "uitk", "tentacle"):
     _pkg_root = os.path.join(_SCRIPTS_ROOT, _pkg)
     if os.path.isdir(_pkg_root) and _pkg_root not in sys.path:
         sys.path.insert(0, _pkg_root)
@@ -166,6 +166,35 @@ def child_python():
     import pythontk as ptk
 
     return ptk.AppLauncher.companion_python() or sys.executable
+
+
+class PainterPluginsSandbox:
+    """Point Painter's plugins folder at a temp folder for a test module
+    (``SUBSTANCE_PAINTER_PLUGINS_PATH``, which ``Installer.user_plugin_dir``
+    reads first), so no install, refresh or status ever reaches the person's
+    ``Documents\\Adobe\\...\\plugins``. ``start()`` in ``setUpModule``,
+    ``stop()`` in ``tearDownModule``.
+    """
+
+    ENV = "SUBSTANCE_PAINTER_PLUGINS_PATH"
+
+    def __init__(self):
+        import pythontk as ptk
+
+        self._temp = ptk.TempArtifacts("ppl", policy="scoped")
+        self._before = None
+
+    def start(self):
+        self._before = os.environ.get(self.ENV)
+        os.environ[self.ENV] = os.path.join(self._temp.dir_path(), "painter")
+        return self
+
+    def stop(self):
+        if self._before is None:
+            os.environ.pop(self.ENV, None)
+        else:
+            os.environ[self.ENV] = self._before
+        self._temp.cleanup()
 
 
 def import_without_maya(module_name, null_attrs):

@@ -196,7 +196,7 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         # roughness with no transform (``highlightSize`` and ``whiteness`` shape
         # the highlight; no channel holds them). Undeclared, a textured phongE
         # named no map: the materials record states the type, and a map it
-        # leaves out is CLEARED from the GLB and Unity's Deliverable Lit.
+        # leaves out is CLEARED from the GLB and the materials Unity's import writes.
         "phongE": ShaderAttrs(
             baseColor=("color", "outColor"),
             emission=("incandescence", "outColor"),

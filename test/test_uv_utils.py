@@ -106,6 +106,26 @@ class TestLightmapUvs(MayaTkTestCase):
         self.assertTrue(res[shape]["reused"])
         self.assertFalse(res[shape]["created"])
 
+    def test_a_reused_set_moves_to_the_second_slot_its_uvs_kept(self):
+        """A valid set reused where it sat (index 2) was refused by every
+        lightmaps record -- each map is read through the second UV set -- and
+        the refusal's fix (this call) could not cure it. Reused, it moves to
+        index 1: a reorder keeps the UVs, so the bake stays valid.
+        Added: 2026-11-07"""
+        cube = cmds.polyCube(name="lmCubeSlot")[0]
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256)
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="filler")
+        UvUtils.reorder_uv_sets(shape, ["map1", "filler", "lightmap"])
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="lightmap")
+        before = cmds.polyEditUV(f"{shape}.map[*]", query=True)
+        res = UvUtils.create_lightmap_uvs([cube], map_size=256)
+        self.assertTrue(res[shape]["reused"])
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True)
+        self.assertEqual(sets, ["map1", "lightmap", "filler"])
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="lightmap")
+        self.assertEqual(cmds.polyEditUV(f"{shape}.map[*]", query=True), before)
+
     def test_a_generated_layout_that_still_overlaps_is_named(self):
         """Regenerated because the old set failed the check -- and the new one
         can fail it too (a 9544-face production door kept 375 overlapping

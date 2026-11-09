@@ -1,94 +1,52 @@
-# substance_rpc — talk to a running Substance 3D Painter
+# substance_rpc — run scripts in Substance 3D Painter
 
-The "reach into a live Painter" half of the Substance bridge. The parent
-[`substance_bridge`](../) is a safe, file-based handoff (export FBX → launch a
-templated Painter). This subpackage adds the RPC leg that powers the
-**reimport / render / bake_lighting** templates: a Python client
-([`client.py`](client.py)) that talks to a small HTTP server hosted *inside*
-Painter by a plugin ([`plugin_src/substance_rpc/`](plugin_src/substance_rpc/)),
-installed into Painter's plugins folder by [`installer.py`](installer.py).
+The Painter half of the Substance bridge:
+- [`plugin_src/substance_rpc/`](plugin_src/substance_rpc/) is a small HTTP server hosted *inside* Painter.
+- [`client.py`](client.py) is the Python client that finds and drives one.
+- [`installer.py`](installer.py) installs the plugin into Painter's plugins folder, or stages it for a Painter the bridge launches.
 
-Stock Painter binds **no** RPC port of its own — `--enable-remote-scripting`
-is a no-op (verified 2026-05-18). This plugin is what makes any "send to the
-running Painter" feature possible.
+Stock Painter binds **no** RPC port of its own; `--enable-remote-scripting` is a no-op (verified 2026-05-18). This plugin is what lets a bridge run a script in Painter.
 
-## First-run: enable the plugin once in Painter ⚠️
+## Finding a Painter
 
-**This is the one manual step, and the usual reason a first reimport does
-nothing.** The bridge installs the plugin automatically on every send, but
-Painter only loads plugins at launch, and a newly discovered plugin may sit
-**disabled** until you turn it on:
+Each Painter running the plugin binds a port the OS picks and writes an **instance record** (pythontk's `RpcInstances`, in the per-user cache). The record holds that port, a token every call must carry, and the project Painter holds: its path, name, UUID and the mesh it was made from. Painter's project events keep the record current, and it is removed when the plugin stops.
 
-1. **Painter ▸ Python menu** — find **`substance_rpc`** in the list.
-2. If it isn't checked, **tick it once**. Painter remembers the choice across
-   restarts, so this is genuinely one-time.
-3. No restart needed if you use **Python ▸ Reload Plugins Folder** after the
-   first install; otherwise the plugin loads on Painter's next launch.
+`PainterRpcClient.painters()` lists the records, `holding(path)` names the Painter with a project open, and `for_instance(record)` is a client of one. There is no fixed port, so any number of Painters serve at once.
 
-When it's live you'll see `[substance_rpc] listening on http://127.0.0.1:8090`
-in Painter's log/console. After that, reimport is one click — Maya/Blender
-re-exports the FBX over the recorded path and Painter reloads it in place.
+The server refuses any request a web page could send: an `Origin` header, a non-JSON body, or a `Host` that is not loopback.
 
-If Painter was **already open** before the plugin's first install, that
-instance has no plugin loaded at all — restart it (or Reload Plugins Folder).
+## Your Painter, by your hand
 
-## What you get without it
-
-Reimport still re-exports the FBX to the exact file your Painter project was
-created from (recorded per-scene), then logs the manual fallback: **Edit ▸
-Project Configuration ▸ Select** that same file **▸ OK**. So the feature
-degrades to "one manual reload," never a dead end.
+- **A Painter the bridge launches** loads the plugin from a launch root (`Installer.launch_root()`, on `SUBSTANCE_PAINTER_PLUGINS_PATH`). Nothing of yours changes.
+- **The Painter you open** serves scripts once you install the plugin (*Install in Painter* on the panel's Utilities menu, `Installer.install()`). Painter lists it in its **Python** menu, ticked the first time unless you have set it either way; untick it there to switch it off. A Painter open before the install picks it up with **Python ▸ Reload Plugins Folder**.
+- **A send** never installs the plugin. It only refreshes an install already there when the install is out of date (`Installer.refresh()`).
 
 ## Ops (the plugin's RPC surface)
 
-`{op, kwargs}` over HTTP (pythontk's [`RpcClient`](../../../../../pythontk/pythontk/net_utils/rpc/client.py) wire):
+`{op, kwargs}` over HTTP (pythontk's `RpcClient` wire), each call carrying the record's token:
 
 | Op | Does |
 |:--|:--|
-| `mesh.reload` | Reload the open project's mesh from a path (`substance_painter.project.reload_mesh`) — the reimport primitive. Async; poll `mesh.reload_status`. |
-| `project.info` | `{is_open, file_path, mesh_path, needs_saving}` for the open project. |
-| `js.evaluate` | Run a legacy-JS (`alg.*`) snippet via `substance_painter.js.evaluate` — routes the render/bake_lighting template bodies. |
-| `system.eval` | Exec Python inside Painter; returns the script's `result` var. |
-| `project.set_resolution` | Set every texture set's document resolution (`size` px square). |
-| `bake.set_high_poly` | Point every texture set's baking Hipoly Mesh at `mesh_path`. |
-| `textures.apply_mesh_maps` | Wire each material's baked maps onto its own texture set, from the manifest's `mesh_maps` section. |
-| `bake.pending_setup` | What is queued for the next project-open (diagnostics). |
-| `system.ping` / `list_ops` / `version` | Liveness / discovery / version. |
+| `script.start` | Queues a script (its text, `args`, the project it is meant for); compiled first, refused for another project; runs when Painter is idle, each piece one undo entry |
+| `script.status` / `script.cancel` / `script.jobs` | A job's state, report, console and error; stop it (a bake under way stops); every kept job |
+| `project.info` | `{is_open, name, uuid, file_path, mesh_path, needs_saving}` |
+| `project.open` / `create` / `save` / `save_as` / `close` | Painter's project calls (`create` takes mesh maps, a resolution, the UDIM workflow) |
+| `mesh.reload` / `mesh.reload_status` | Reload the open project's mesh (async; the Update Mesh script) |
+| `project.set_resolution`, `bake.set_high_poly`, `textures.apply_mesh_maps`, `bake.pending_setup` | Project setup, applied now or held until a project opens |
+| `bake.lighting_to_diffuse`, `bake.mesh_maps` | The bakes the built-in scripts call |
+| `system.ping` / `list_ops` / `describe` / `identity` / `version` | Liveness, discovery, this instance, versions |
 
-The three setup ops (resolution, high poly, mesh maps) apply at once when a
-project is open and are otherwise held until one opens.
+There is no op that evaluates a string: a script reaches Painter only through `script.start`. A script may also call any op module directly (`from substance_rpc.ops import bake_ops`).
 
-## Config
-
-- **Port** — `8090`, override machine-wide via the `SUBSTANCE_RPC_PORT` env var
-  (both the plugin and the client read it, so they stay in agreement).
-- **Plugins folder** — resolved from `SUBSTANCE_PAINTER_PLUGINS_PATH`, else the
-  known Documents folder (`<Documents>\Adobe\Adobe Substance 3D Painter\python\plugins`).
-
-## Manual install / uninstall
-
-Auto-install (on every bridge send) is idempotent, but you can drive it directly:
+## Use
 
 ```python
-# mayatk shown; under Blender use blendertk.mat_utils.substance_bridge.substance_rpc
-from mayatk.mat_utils.substance_bridge.substance_rpc import Installer
-Installer.install()        # symlink-first; copytree fallback
-Installer.is_installed()   # -> bool
-Installer.uninstall()      # -> bool (True if something was removed)
+# from the host library's (or the standalone app's) substance_bridge.substance_rpc
+for record in PainterRpcClient.painters():
+    print(record["pid"], (record["state"].get("project") or {}).get("name"))
+client = PainterRpcClient.for_instance(record)
+job = client.run_script("args.report(str(args['N']))", path="probe.py", args={"N": 1})
+print(client.wait(job)["report"])
 ```
 
-`Installer.install()` returns the destination path, or `None` if Painter's
-plugins folder couldn't be resolved (set `SUBSTANCE_PAINTER_PLUGINS_PATH`).
-
-## Layout
-
-- [`client.py`](client.py) — `PainterRpcClient` (a `pythontk.RpcClient` subclass).
-- [`installer.py`](installer.py) — `Installer` (Painter-folder resolution over pythontk's `PluginInstaller`).
-- [`plugin_src/substance_rpc/`](plugin_src/substance_rpc/) — the Painter-hosted plugin
-  (registry / server / main-thread marshaller / ops), self-contained so it needs
-  nothing on Painter's `sys.path`. Vendored from the marmoset_rpc plugin pattern.
-
-**Vendored twin.** This whole folder is kept code-identical in mayatk and
-blendertk (`mat_utils/substance_bridge/substance_rpc/`); mayatk's copy is the
-SSoT -- edit it there and mirror the change. Drift fails
-`extapps/test/test_vendor_sync.py`.
+**Vendored copy.** This whole folder ships in each host library's Substance bridge and in the standalone Substance Scripts app. The Maya library's copy is the source: edit it there, then mirror it. Drift fails the vendor guard (`test_vendor_sync.py`).

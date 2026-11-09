@@ -15,8 +15,8 @@ log handling, template rendering, the in-Toolbag helpers, the RPC client)
 is bundled alongside this module in the ``marmoset_bridge`` subpackage:
 the Toolbag SDK glue is not a generic pythontk utility, so it lives with
 its consumer (mirroring ``substance_bridge``). This module owns only what
-genuinely needs Maya. extapps' ``marmoset_workflow`` keeps its own copy of the
-same engine (for its standalone Marmoset Workflow panel), since it cannot
+genuinely needs Maya. extapps' ``marmoset_scripts`` keeps its own copy of the
+same engine (for its standalone Marmoset Scripts panel), since it cannot
 import mayatk.
 """
 
@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 try:
@@ -38,6 +39,7 @@ import pythontk as ptk
 # import from this module.
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import MarmosetEngine, ROUND_TRIP
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import APP
+from mayatk.mat_utils.marmoset_bridge.marmoset_rpc.installer import PLUGIN_SPEC as _RPC_PLUGIN
 
 # Re-exported so the tests can ``from ._marmoset_bridge import SEND_TO, _TEMPLATE_DIR``.
 from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (  # noqa: F401
@@ -257,6 +259,10 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         MarmosetBridge().send(template="lookdev")  # mode defaults to send_to
     """
 
+    #: The plugin in Toolbag (``pythontk.RpcPluginSpec``): a panel over this
+    #: bridge offers *Install in Toolbag* / *Uninstall from Toolbag* for it.
+    RPC_PLUGIN = _RPC_PLUGIN
+
     #: Executable discovery for this bridge's target app (:class:`pythontk.AppSpec`),
     #: re-exposed from the engine module so callers reach it through the class
     #: namespace: a panel's ``*_init`` gates its launch button on
@@ -322,6 +328,12 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         """``[(template, mode), ...]`` for every bundled template, off the class
         as a panel reads it (:meth:`MarmosetEngine.list_template_modes`)."""
         return MarmosetEngine.list_template_modes()
+
+    @staticmethod
+    def template_dirs() -> Tuple[Path, ...]:
+        """Where a template name resolves, the person's own scripts first
+        (:meth:`MarmosetEngine.template_dirs`): the folders a panel reads."""
+        return MarmosetEngine.template_dirs()
 
     def params_defaults(self) -> Dict[str, Any]:
         return self.params_registry().defaults()

@@ -125,6 +125,8 @@ class FbxUtils(ptk.HelpMixin):
         "take_stash": TAKE_STASH,
         "dependency_dirs": ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords", "search_dirs"),
         "offset_fold": ("mayatk.anim_utils.smart_bake._smart_bake", "SmartBake", "fold_offsets"),
+        "staging_scope": ("mayatk.mat_utils.render_opacity.render_effects", "RenderEffects", "scope_export"),
+        "withheld_records": ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords", "withheld"),
     }
 
     @classmethod
@@ -306,7 +308,10 @@ class FbxUtils(ptk.HelpMixin):
         A write that does not bake ships every ``offsetParentMatrix`` folded
         into its node's own channels, and every write ships a node that
         ignores its parent re-anchored under it (:meth:`offsets_folded`), put
-        back once the file is written.
+        back once the file is written. The written file then takes the repair
+        every Maya write takes (:meth:`finish_write`) and ships exactly its
+        declared takes, a shotless one declaring what it holds
+        (:meth:`drop_undeclared_takes`).
 
         Parameters:
             file_path: Destination ``.fbx`` path (directories are created automatically).
@@ -357,11 +362,25 @@ class FbxUtils(ptk.HelpMixin):
         # project-relative texture paths resolve exactly as Maya resolves
         # them (see embed_media_write_cwd).
         shipped = None if selection_only else cmds.ls(assemblies=True, long=True) or []
+        state = cls._bracket_state()
+        state.pop("takes_shipped", None)
         with cls.embed_media_write_cwd(), cls.offsets_folded(shipped, plan):
             cmds.file(file_path, **kwargs)
         cls.finish_write(file_path)
+        # The session hook's after-export step ships the takes of a write it
+        # saw (outside a bracket); this one does it for the rest, once.
+        if not cls._same_path(state.pop("takes_shipped", None), file_path):
+            cls.drop_undeclared_takes(file_path)
         logger.info(f"Exported FBX: {file_path}")
         return file_path
+
+    @staticmethod
+    def _same_path(a: Optional[str], b: Optional[str]) -> bool:
+        """Whether two spellings of a path name one file."""
+        if not a or not b:
+            return False
+        a, b = (os.path.normcase(os.path.normpath(os.path.abspath(p))) for p in (a, b))
+        return a == b
 
     @staticmethod
     def finish_write(
@@ -457,6 +476,9 @@ class FbxUtils(ptk.HelpMixin):
                 f"Rig helpers: excluded {report['models']} node(s) from the FBX "
                 f"({kinds}); their motion is already on what they drove."
             )
+            # Their keys left with them: a shotless take declares what the
+            # file still holds (a no-op when it already does).
+            FbxUtils.drop_undeclared_takes(file_path, logger=log)
         else:
             log.debug("Rig helpers: the export carries none.")
         spared = sorted(set(report["refused"]) | set(report["kept"]))
@@ -549,10 +571,12 @@ class FbxUtils(ptk.HelpMixin):
         shares; ``None`` builds them): an instance whose pivots differ from
         its siblings' gets a mesh of its own -- Unity moved the shared one by
         another instance's pivots -- StingrayPBS's environment maps leave the
-        file, the reflection probe's highlight copies go in, and every file
+        file, the reflection probe's highlight copies go in, every file
         the records name is embedded (:meth:`embed_dependencies`'s folders
-        and audio). ``ptk.MeshConvert.finish_fbx_deliverable`` is the
-        sequence.
+        and audio), and the folders of the machine that wrote it leave the
+        file (``ptk.FbxMedia.strip_machine_paths``: the staging path, the
+        project folder, each embedded map's source).
+        ``ptk.MeshConvert.finish_fbx_deliverable`` is the sequence.
 
         Never raises -- a pass that fails is a warning and the next still runs.
 
@@ -567,33 +591,17 @@ class FbxUtils(ptk.HelpMixin):
             logger: Where the outcome is said; this module's otherwise.
 
         Returns:
-            ``ptk.MeshConvert.finish_fbx_deliverable``'s report, or ``None``
-            when the file is not a binary FBX. A scene that cannot say where
+            ``ptk.MeshConvert.finish_fbx_deliverable``'s report (an ASCII
+            write's the paths pass alone), or ``None`` when the file is no
+            FBX. A scene that cannot say where
             its files are is warned about, and the passes run on what was
             given: the split, the copies and the drop need none of it.
         """
-        log = logger or logging.getLogger(__name__)
-        if not ptk.FbxFile.is_fbx(file_path):
-            return None
-        try:
-            search_dirs, walk_root, files = FbxUtils._dependency_inputs(
-                file_path, search_dirs, walk_root, files, log
-            )
-        except Exception as error:  # noqa: BLE001 -- the deliverable already shipped
-            log.warning(
-                f"FBX deliverable: the scene's files not resolved ({error}); "
-                "finishing with the folders and files given."
-            )
-            log.debug("Deliverable inputs failed.", exc_info=True)
-            search_dirs, walk_root, files = list(search_dirs or ()), walk_root or "", files or ()
-        return ptk.MeshConvert.finish_fbx_deliverable(
-            file_path,
-            glb,
-            search_dirs=search_dirs,
-            walk_root=walk_root,
-            files=files,
-            logger=log,
+        report = ptk.MeshConvert.finish_fbx_deliverable(
+            file_path, glb, search_dirs=search_dirs, walk_root=walk_root, files=files,
+            logger=logger or logging.getLogger(__name__), inputs=FbxUtils._dependency_inputs,
         )
+        return report or None
 
     @staticmethod
     def _dependency_inputs(
@@ -622,24 +630,13 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def _shipped_audio(file_path: str, log) -> List[Tuple[str, str]]:
-        """``(file name, path)`` of the audio the FBX's events play.
-
-        Read off the ``audio`` the file itself carries (each event
-        names its track: ``ptk.FbxMedia.audio_events``), resolved through the
-        scene's file map; a track whose file is missing is said once and left
-        out.
+        """``(file name, path)`` of the audio the FBX's cues play: the sounds
+        its ``audio`` record names (each a track's file under the track id),
+        resolved through this scene's tracks (``ptk.FbxMedia.audio_files``).
         """
         from mayatk.audio_utils._audio_utils import AudioUtils
 
-        names = ptk.FbxMedia.audio_events(file_path)
-        found = AudioUtils.track_files(names)
-        missing = sorted(set(names) - {os.path.splitext(n)[0] for n, _ in found})
-        if missing:
-            log.warning(
-                "FBX dependencies: no audio file for event(s) "
-                f"{', '.join(missing)}; the deliverable ships without them."
-            )
-        return found
+        return ptk.FbxMedia.audio_files(file_path, AudioUtils.track_files, log)
 
     @classmethod
     def import_scene(
@@ -1580,18 +1577,44 @@ class FbxUtils(ptk.HelpMixin):
         mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v {resample}")
 
     @staticmethod
+    @ptk.Deprecation.symbol(
+        "the write's own FbxUtils.write_plan(...).range, else FbxUtils.bake_range()",
+        remove_in="0.32.0",
+        since="2026-11-08",
+        reason="No producer reads the planned range.",
+    )
     def planned_bake_range() -> Optional[Tuple[float, float]]:
-        """The range the write in progress bakes over: the open bracket's plan's
-        (:meth:`begin_export` *plan*), else the settings' (:meth:`bake_range`).
-
-        What a producer publishing inside the bracket reads: a hand-off's
-        bracket publishes before the write is configured, while the settings
-        still hold whatever ran last.
+        """Retired: the range the write in progress bakes over -- the open
+        bracket's plan's (:meth:`begin_export` *plan*), else the settings'
+        (:meth:`bake_range`). No producer reads it (the audio cues read
+        :meth:`_take_window`); a writer holds its own :meth:`write_plan`.
         """
         plan = FbxUtils._bracket_state().get("write_plan")
         if plan is None:
             return FbxUtils.bake_range()
         return tuple(plan.range) if plan.bakes and plan.range else None
+
+    @staticmethod
+    def _take_window(ctx: ptk.ExportContext) -> Optional[Tuple[float, float]]:
+        """The window a shotless file's one take declares, in timeline frames
+        -- what its audio cues count from (``AudioClips.export_record``;
+        mirror of blendertk's): measured off the written file
+        (``ctx.take_window``, :meth:`drop_undeclared_takes`), else what Maya's
+        writer declares by itself, the playback range (measured on Maya 2025
+        / FBX 2020.3.6, 2026-11-05: keys 10-100 under a 1-120 playback range
+        declared 1-120, the bake on or off, its range read nowhere). Read
+        off the scene alone -- no FBX setting, no plug-in -- so an authoring
+        publish asks nothing of a writer. ``None`` for a write that carries
+        no animation: it has no take.
+        """
+        if ctx.animated is False:
+            return None
+        if ctx.take_window:
+            return (float(ctx.take_window[0]), float(ctx.take_window[1]))
+        return (
+            float(cmds.playbackOptions(q=True, min=True)),
+            float(cmds.playbackOptions(q=True, max=True)),
+        )
 
     @classmethod
     @contextlib.contextmanager
@@ -1807,6 +1830,117 @@ class FbxUtils(ptk.HelpMixin):
         value = "true" if enabled else "false"
         mel.eval(f"FBXProperty {FbxUtils.ANIMATION_INCLUDE_PROPERTY} -v {value}")
 
+    @classmethod
+    def drop_undeclared_takes(
+        cls, fbx_path: str, logger: Optional[logging.Logger] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Leave *fbx_path* exactly its declared takes, each declaring what it
+        should: one per shot, or a shotless file's one take over what it holds.
+
+        The one post-write step every Maya FBX write takes, last before
+        anything reads the file (the Scene Exporter's, :meth:`export`'s, the
+        hand-offs' and the session hook's: a GLB is converted from its takes).
+
+        With shots: Maya writes its whole-timeline take (``Take 001``) beside
+        the takes a split declares (:meth:`apply_takes`), so a scene with
+        shots would ship a clip no shot names -- Unity imports one clip per
+        take, and a GLB is converted from the file, one animation per take.
+        Every take the scene's shots do not declare (:meth:`declared_takes`)
+        is dropped, in place (``ptk.FbxMedia.keep_takes``, the rule both
+        hosts share); a file the split never reached keeps its one take.
+
+        With none: Maya's writer declares the one take's window as the
+        playback range whatever the take holds (:meth:`_take_window`), and
+        Unity cuts its clip by that window while a GLB plays the keys. The
+        file is MEASURED -- every curve it holds, an ancestor the plug-in
+        carried along included -- and its window fitted to them
+        (``ptk.FbxMedia.fit_take_windows``); the records that count from the
+        take's start are then cut again over that window, in the file
+        (:meth:`_recut_records`). Nothing in the scene moves.
+
+        Never raises: a take left in the file is the old file, not a broken
+        one (the verifier's ``fbx_takes`` gate names it).
+
+        Returns:
+            The ``drop_takes`` report, or ``None`` when nothing was dropped.
+        """
+        log = logger if logger is not None else logging.getLogger(__name__)
+        try:
+            declared = [take["name"] for take in cls.declared_takes()]
+        except Exception:  # noqa: BLE001 - the write already happened
+            log.warning("The declared takes could not be read.", exc_info=True)
+            return None
+        if declared:
+            return ptk.FbxMedia.keep_takes(fbx_path, declared, logger=log)
+        cls._fit_shotless_take(fbx_path, log)
+        return None
+
+    @classmethod
+    def _fit_shotless_take(
+        cls, fbx_path: str, log: logging.Logger
+    ) -> Optional[Tuple[float, float]]:
+        """Fit the one take of the shotless FBX at *fbx_path* to what it
+        holds (``ptk.FbxMedia.fit_take_windows``) and cut the records that
+        count from its start over that window (:meth:`_recut_records`).
+        Skipped for a write that holds no keys: its Animation include group
+        off, or nothing keyed and no bake to sample.
+
+        Returns:
+            The window it declares now, in timeline frames, or ``None``.
+        """
+        try:
+            if not cls.animation_export_enabled() or not (
+                cmds.ls(type="animCurve") or cls.baking_enabled()
+            ):
+                return None
+            windows = ptk.FbxMedia.fit_take_windows(fbx_path, logger=log)
+            if len(windows) != 1:
+                return None
+            ((start, end),) = windows.values()
+            fps = float(mel.eval("currentTimeUnitToFPS"))
+            window = (round(start * fps, 6), round(end * fps, 6))
+            log.debug(f"The shotless take declares {window[0]:g}-{window[1]:g}, what it holds.")
+            cls._recut_records(fbx_path, window, log)
+            return window
+        except Exception:  # noqa: BLE001 - the write already happened
+            log.warning("The shotless take could not be fitted.", exc_info=True)
+            return None
+
+    @classmethod
+    def _recut_records(
+        cls, fbx_path: str, window: Tuple[float, float], log: logging.Logger
+    ) -> None:
+        """Cut the ``audio`` record the shotless FBX at *fbx_path* carries
+        over the window its one take declares, measured off the file
+        (*window*, timeline frames): its producer runs again with
+        ``ctx.take_window`` and the result replaces the file's copy
+        (``ptk.FbxMedia.set_record``), its ``media`` kept.
+
+        Published after measuring rather than rebased: the record written
+        before the write was cut over the window Maya's writer declares (the
+        playback range), and a sound that window cut off is gone from it --
+        a shift by the difference cannot bring it back. The producer cuts the
+        scene's own sounds over the measured window, so nothing is predicted.
+        A file that carries no audio record is left alone.
+        """
+        spec = ptk.SceneRecords.AUDIO
+        stored = ptk.FbxMedia.record(fbx_path, spec.key)
+        if not isinstance(stored, dict):
+            return
+        producer = next(iter(cls.producers([spec]).values()), None)
+        if producer is None:
+            return
+        record = producer(ptk.ExportContext(animated=True, take_window=window))
+        payload = dict((record or spec.make({"cues": []})).payload)
+        if "media" in stored:
+            payload["media"] = stored["media"]
+        if payload != stored:
+            ptk.FbxMedia.set_record(fbx_path, spec.key, payload)
+            log.debug(
+                f"The audio cues count from the shotless take's {window[0]:g}, "
+                "where the file declares it."
+            )
+
     @staticmethod
     def reset_takes() -> None:
         """Clear FBX take definitions and restore pre-takes bake-complex state.
@@ -1864,14 +1998,11 @@ class FbxUtils(ptk.HelpMixin):
         (:attr:`RESAMPLE_ALL`) keys every animated curve on every frame of the
         bake range first, and the split then carries every channel across
         every take's window (measured: 0 channels missing, every take keyed on
-        each of its frames). The whole-timeline take then starts on the bake
-        range's first frame even where the scene's first key comes later --
-        what an export's clip origin has to say. Off only for a write whose
-        takes nothing reads (a GLB's own intermediate, whose clips are cut
-        from the whole-timeline take) -- and then OFF, not merely left alone:
-        a loaded preset's Resample All would still resample that write,
-        opening its whole-timeline take on the bake range while the published
-        clip origin says the first key.
+        each of its frames). The takes are every deliverable's clips -- the
+        FBX's for Unity, the GLB's converted from them -- so a split always
+        resamples; *resample* off ships the curves as keyed, and then OFF,
+        not merely left alone: a loaded preset's Resample All would still
+        resample that write.
 
         Also guarantees the Animation include group
         (:attr:`ANIMATION_INCLUDE_PROPERTY`), because without it every line
@@ -1886,7 +2017,7 @@ class FbxUtils(ptk.HelpMixin):
 
         Parameters:
             takes: Sequence of ``{"name","start","end"}`` mappings (what
-                ``ptk.SceneRecords.declared_takes`` returns) or
+                ``ShotStore.declared_takes`` returns: one per shot) or
                 ``(name, start, end)`` tuples.
             resample: Resample All for the write, whatever a preset left:
                 on, so every take carries every channel; off, so the curves
@@ -1983,19 +2114,24 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def declared_takes() -> list:
-        """The takes the scene's records declare -- each clip's range in
-        the shot record (``ptk.SceneRecords.declared_takes`` over the
-        carrier): what
-        :meth:`apply_takes_from_node` realizes by default, and so what an
-        export will split.  ``[]`` when nothing is declared."""
-        from mayatk.node_utils.data_nodes import DataNodes
+        """The takes an export of this scene splits: one per shot the scene's
+        shot store declares, named by its clip and spanning its range
+        (``ShotStore.declared_takes``) -- what :meth:`apply_takes_from_node`
+        realizes by default. The shot record states no frames (each shot's
+        take holds them), so the store is the one source of the ranges at
+        export time. ``[]`` when the scene has no shots: the write then ships
+        Maya's one whole-timeline take.
 
-        return (
-            ptk.SceneRecords.declared_takes(
-                lambda key: ptk.SceneRecords.resolve(key).load(DataNodes)
-            )
-            or []
-        )
+        The store is the shots producer's class (:attr:`PRODUCERS`), resolved
+        as every producer is -- lazily, so an uninstalled subsystem declares
+        nothing rather than blocking an export."""
+        module, name, _method = FbxUtils.PRODUCERS[ptk.SceneRecords.SHOTS]
+        try:
+            store = ptk.SceneRecords.resolve_class(module, name)
+        except ImportError:
+            logger.debug("No shot store to declare takes.", exc_info=True)
+            return []
+        return store.declared_takes()
 
     @staticmethod
     def apply_takes_from_node(
@@ -2003,9 +2139,9 @@ class FbxUtils(ptk.HelpMixin):
     ) -> int:
         """Realize the takes the scene declares into FBX export state.
 
-        Defaults to the shot record on the shared carrier -- each clip's
-        range (``ptk.SceneRecords.declared_takes``) -- so this is
-        shot-agnostic: it realizes whatever takes the scene declares.  An
+        Defaults to the scene's shots -- one take per shot, named after it
+        and spanning its range (:meth:`declared_takes`) -- so this realizes
+        whatever takes the scene declares.  An
         explicit *attr* reads a JSON take list off *node* (the carrier when
         ``None``) instead; a *node* alone names no list: it arms nothing, and
         warns why.
@@ -2060,7 +2196,7 @@ class FbxUtils(ptk.HelpMixin):
     # the records' declared dependencies, hands each the ``ptk.ExportContext``
     # (the exporter's decisions as input, plus every record produced before
     # it) and commits the carrier ONCE, handoff block included -- so an
-    # exporter's decision (the clip mode, the clip origin) is an input the
+    # exporter's decision (whether the write carries animation) is an input the
     # producer reads, never a patch applied after it that a second run would
     # overwrite.  A STAGER mutates the scene for the write (the curve-proxy
     # transport, a preview standing down) and undoes it after; it produces
@@ -2106,11 +2242,6 @@ class FbxUtils(ptk.HelpMixin):
             "ArticulatedRig",
             "export_record",
         ),
-        ptk.SceneRecords.EMISSIVE_GROUPS: (
-            "mayatk.mat_utils.emissive_groups",
-            "EmissiveGroups",
-            "export_record",
-        ),
         ptk.SceneRecords.LIGHTMAPS: (
             "mayatk.light_utils.lightmap_baker.lightmap_records",
             "LightmapRecords",
@@ -2129,6 +2260,27 @@ class FbxUtils(ptk.HelpMixin):
     #: conversion that follows it, in reverse order, so the artist gets the
     #: viewport back as it was.  A ``None`` finish is a one-way stage.
     STAGERS: Dict[str, Tuple[str, str, str, Optional[str]]] = {
+        # One-way, and before render_effects stages the keys it reads: a
+        # shadow plane baked under shadows v2 keyed its fade (opacity,
+        # mirrored to visibility), which every v3 reader evaluates from the
+        # shadows record -- stripped, so an old scene ships it once. On the
+        # planes the write ships alone: a plane it leaves out is not touched.
+        "shadow_v2_fade": (
+            "mayatk.rig_utils.shadow_rig._shadow_rig",
+            "ShadowRig",
+            "stage_v2_fade",
+            None,
+        ),
+        # One-way too: a live shadow plane built before its material's fade
+        # node drove its own opacity with the preview, which every take a
+        # write makes baked -- moved onto the material, so no take keys it
+        # (on the planes the write ships alone, as the row above).
+        "shadow_preview_fade": (
+            "mayatk.rig_utils.shadow_rig._shadow_rig",
+            "ShadowRig",
+            "stage_preview_fade",
+            None,
+        ),
         "render_effects": (
             "mayatk.mat_utils.render_opacity.render_effects",
             "RenderEffects",
@@ -2190,7 +2342,7 @@ class FbxUtils(ptk.HelpMixin):
         **decisions,
     ) -> ptk.ExportContext:
         """A context for this scene: provenance filled in, *decisions*
-        (``clip_mode``, ``clip_span``, ``rendering``, ``scope``) as given.
+        (``rendering``, ``scope``) as given.
 
         A *scope* names the nodes the write ships as well (``nodes``: every
         DAG node under its roots, :meth:`_shipped_nodes`), what the snapshot
@@ -2198,7 +2350,14 @@ class FbxUtils(ptk.HelpMixin):
         walks the export set again. The *writer* (``"fbx"``, ``"usd"``) and
         its *writer_options* state the unit every record is labelled with
         (``unit_scale``: ``ptk.ExportContext.WRITER_UNITS``), so no producer
-        reads the scene's unit for it."""
+        reads the scene's unit for it, and whether it carries animation at all
+        (``animated``: :meth:`animation_export_enabled`, the FBX plug-in's
+        Animation include group as the loaded preset left it; ``None`` for
+        another writer, with the plug-in unloaded -- no FBX write is under
+        way, and none is loaded to ask -- or outside Maya). A write that ships
+        a record as stored (a hand-off) is told which stored copies it must
+        ship none of (``withheld``: the ``"withheld_records"`` hook, the
+        lightmaps record a moved lightmap set has made false)."""
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}
@@ -2214,7 +2373,28 @@ class FbxUtils(ptk.HelpMixin):
             decisions["nodes"] = cls._shipped_nodes(decisions["scope"])
         if "unit_scale" not in decisions:
             decisions["unit_scale"] = cls._writer_unit(writer, writer_options)
-        return ptk.ExportContext(mode=mode, source=source, **decisions)
+        if "animated" not in decisions and mode != ptk.ExportContext.AUTHORING:
+            # Not for an authoring publish, which writes nothing (and must not
+            # load the FBX plug-in after every shot edit to say so).
+            decisions["animated"] = cls._writer_animates(writer)
+        ctx = ptk.ExportContext(mode=mode, source=source, **decisions)
+        if "withheld" not in decisions and ctx.ships_stored():
+            ctx.withhold(cls.hook("withheld_records"))
+        return ctx
+
+    @classmethod
+    def _writer_animates(cls, writer: str) -> Optional[bool]:
+        """Whether Maya's *writer* will write animation
+        (``ptk.ExportContext.animated``): for the FBX writer, its Animation
+        include group (:meth:`animation_export_enabled`); ``None`` for another
+        writer, or outside Maya."""
+        if cmds is None or writer != "fbx":
+            return None
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            # No FBX write is in progress without it (a .ma export fires the
+            # same hook): nothing to state, and nothing to load.
+            return None
+        return cls.animation_export_enabled()
 
     @classmethod
     def _writer_unit(
@@ -2292,6 +2472,8 @@ class FbxUtils(ptk.HelpMixin):
         from mayatk.node_utils.data_nodes import DataNodes
 
         ctx = ctx or cls.export_context()
+        if ctx.mode != ptk.ExportContext.AUTHORING:
+            cls._bracket_state()["write_context"] = ctx
         with CoreUtils.preserved_selection():
             if not cls._export_depth:
                 cls._run_stagers("prepare", dict(cls._session_stagers))
@@ -2306,7 +2488,28 @@ class FbxUtils(ptk.HelpMixin):
             # Written for the bracket's write alone (a transient record, a
             # narrowed one): the bracket puts the scene's own copy back.
             cls._bracket_state().setdefault("snapshots", []).append(snapshot)
+        # Staging made before the write knew its scope narrows to it now: the
+        # emissive-group copies' proxies ride the carrier, which every write
+        # ships (the ``staging_scope`` hook; a bracket re-staging after reads
+        # the same context through :meth:`write_context`).
+        if ctx.mode != ptk.ExportContext.AUTHORING:
+            scope = cls.hook("staging_scope")
+            if scope is not None:
+                try:
+                    scope(ctx)
+                except Exception:  # noqa: BLE001 - a scope never costs the publish
+                    logger.warning("The staging was not narrowed to the write.", exc_info=True)
         return snapshot
+
+    @classmethod
+    def write_context(cls) -> Optional[ptk.ExportContext]:
+        """The context of the write in progress: the one its bracket opened
+        with, else the one its publish ran under (a writer that stages
+        before it publishes, as the Scene Exporter does, stages again after);
+        ``None`` outside an export. A stager whose nodes every write ships
+        -- the emissive-group copies' proxies under the carrier -- stages
+        only what the write ships by it."""
+        return cls._bracket_state().get("write_context")
 
     @classmethod
     def publish_authored(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot:
@@ -2385,10 +2588,18 @@ class FbxUtils(ptk.HelpMixin):
                     logger.warning(
                         "Export stager %r failed to %s.", name, phase, exc_info=True
                     )
+        if phase == "finish" and not FbxUtils._export_depth:
+            FbxUtils._bracket_state().pop("write_context", None)  # the write is over
 
     # -- the bracket -------------------------------------------------------
 
     @classmethod
+    @ptk.Deprecation.parameter(
+        "plan",
+        remove_in="0.32.0",
+        since="2026-11-08",
+        reason="It fed only planned_bake_range, which no producer reads.",
+    )
     def begin_export(
         cls,
         ctx: Optional[ptk.ExportContext] = None,
@@ -2413,14 +2624,24 @@ class FbxUtils(ptk.HelpMixin):
         which is what ``only`` meant before the bracket took a context.  Stager
         names belong in *stagers*, not here.
 
-        *plan* is the bracketed write's :meth:`write_plan`, set before the
-        publish so a producer reads the range the write will bake
-        (:meth:`planned_bake_range`) rather than what the settings held when
-        the bracket opened.
+        *plan* is retired (2026-11-08, removed in 0.32.0): it fed only the
+        retired :meth:`planned_bake_range`.
 
         Returns:
             The snapshot published here, or ``None``.
         """
+        return cls._open_bracket(ctx, only, stagers, plan)
+
+    @classmethod
+    def _open_bracket(
+        cls,
+        ctx: Optional[ptk.ExportContext],
+        only: Optional[Iterable[Any]],
+        stagers: Optional[Iterable[str]],
+        plan: Optional["FbxUtils.WritePlan"],
+    ) -> Optional[ptk.ExportSnapshot]:
+        """:meth:`begin_export`'s body, which :meth:`export_prepared` opens
+        too (so a retired *plan* warns once)."""
         if cls._bracket_depth_add(1) != 1:
             return None
         cls._bracket_state()["write_plan"] = plan
@@ -2430,6 +2651,8 @@ class FbxUtils(ptk.HelpMixin):
             if only is not None:
                 only = list(only)
                 ctx = ctx or cls.export_context()
+            if ctx is not None:  # the stagers stage what this write ships
+                cls._bracket_state()["write_context"] = ctx
             cls._bracket_state()["stager_table"] = cls.stage(stagers)
             return cls.publish(ctx, only) if ctx is not None else None
         except BaseException:
@@ -2473,6 +2696,12 @@ class FbxUtils(ptk.HelpMixin):
             cls._run_stagers("finish", table if table is not None else cls.stagers())
 
     @classmethod
+    @ptk.Deprecation.parameter(
+        "plan",
+        remove_in="0.32.0",
+        since="2026-11-08",
+        reason="It fed only planned_bake_range, which no producer reads.",
+    )
     @contextlib.contextmanager
     def export_prepared(
         cls,
@@ -2482,12 +2711,12 @@ class FbxUtils(ptk.HelpMixin):
         plan: Optional["FbxUtils.WritePlan"] = None,
     ):
         """Stage the scene (and publish, given a *ctx* or *only* -- see
-        :meth:`begin_export`, which takes *plan* too) for an export; finish on
-        exit -- AFTER everything inside the block, so an FBX write followed by
-        a GLB conversion both see the staged scene.  Nested use is fine; the
-        outermost bracket owns the lifecycle.  Yields the snapshot
+        :meth:`begin_export`; *plan* is retired as there) for an export;
+        finish on exit -- AFTER everything inside the block, so an FBX write
+        followed by a GLB conversion both see the staged scene.  Nested use is
+        fine; the outermost bracket owns the lifecycle.  Yields the snapshot
         :meth:`begin_export` published, or ``None``."""
-        snapshot = cls.begin_export(ctx, only, stagers, plan=plan)
+        snapshot = cls._open_bracket(ctx, only, stagers, plan)
         try:
             yield snapshot
         finally:
@@ -2557,8 +2786,12 @@ class FbxUtils(ptk.HelpMixin):
     def enable_auto_takes() -> None:
         """Realize declared takes on **every** FBX export -- shot-agnostic.
 
-        Installs the shared before-export hook directly: it applies whatever
-        takes the shot record already declares.  A producer that must
+        Installs the shared before-export hook directly: it applies the takes
+        the scene's shots declare, one per shot (:meth:`declared_takes`), and
+        after the write drops the whole-timeline take Maya writes beside them
+        (:meth:`drop_undeclared_takes`, the Scene Exporter's and the
+        hand-offs' step too), so the file ships exactly the shots' takes; a
+        scene with no shots ships its one whole-timeline take.  A producer that must
         regenerate its record fresh at export time opts in through
         :meth:`enable_export_producer` instead (``ShotStore.enable_auto_export``
         does).  Idempotent.
@@ -2608,6 +2841,10 @@ class FbxUtils(ptk.HelpMixin):
         sparse visibility pairs one frame long, so they ride the proxies
         instead.  :meth:`_on_after_export` finishes that table.  A write in
         ASCII is warned about (:meth:`_warn_ascii_carrier`)."""
+        # The file this write goes to, as the check before it named it
+        # (:meth:`_on_export_check`); taken even when a bracket stands the hook
+        # down, so no later write reads it.
+        path = FbxUtils._bracket_state().pop("hook_export_path", None)
         if FbxUtils._export_depth:
             return
         FbxUtils._bracket_state()["hook_snapshot"] = FbxUtils.publish(
@@ -2615,10 +2852,11 @@ class FbxUtils(ptk.HelpMixin):
             only=sorted(FbxUtils._session_producers),
         )
         FbxUtils._warn_ascii_carrier()
+        state = FbxUtils._bracket_state()
+        if path and path.lower().endswith(".fbx"):
+            state["hook_takes_path"] = path
         if FbxUtils.apply_takes_from_node():
-            FbxUtils._bracket_state()["hook_stagers"] = FbxUtils.stage(
-                ("render_effects",)
-            )
+            state["hook_stagers"] = FbxUtils.stage(("render_effects",))
 
     @staticmethod
     def _raw_export_scope() -> Optional[Tuple[str, ...]]:
@@ -2634,6 +2872,22 @@ class FbxUtils(ptk.HelpMixin):
         return tuple(cmds.ls(selection=True, long=True) or ())
 
     @staticmethod
+    def _on_export_check(file_object, *_) -> bool:
+        """Before every export's own hooks: note the file it goes to
+        (``kBeforeExportCheck`` hands the ``MFileObject``), for
+        :meth:`_on_before_export`. Never refuses the write.
+
+        Read here rather than off ``MFileIO.beforeExportFilename``, which
+        crashes Maya when no export is under way (measured on Maya 2025: a
+        call after ``file -new`` ended the session) -- as a direct call of the
+        hook from a test, or a reload mid-session, makes it."""
+        try:
+            FbxUtils._bracket_state()["hook_export_path"] = file_object.resolvedFullName()
+        except Exception:  # noqa: BLE001 - a note, never a refusal
+            logger.debug("The export's file was not read.", exc_info=True)
+        return True
+
+    @staticmethod
     def _warn_ascii_carrier() -> None:
         """Warn when a write is about to go out in ASCII from a scene holding
         the ``data_export`` carrier.
@@ -2647,6 +2901,8 @@ class FbxUtils(ptk.HelpMixin):
         without it does not), so it says so rather than overruling the
         dialog.
         """
+        if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            return  # not an FBX write: the plug-in is loaded for every one
         if not FbxUtils.export_flag("FBXExportInAscii"):
             return
         from mayatk.node_utils.data_nodes import DataNodes
@@ -2661,13 +2917,23 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def _on_after_export(*_):
-        """Clear take state and undo the hook's staging: the records its
-        publish wrote for the write alone (a transient one cleared; outside
-        the undo queue, as :meth:`publish` wrote them), then the table a split
-        staged (:meth:`_on_before_export`), else the session stagers'."""
+        """Clear take state, leave the written FBX exactly its declared takes,
+        and undo the hook's staging: the records its publish wrote for the
+        write alone (a transient one cleared; outside the undo queue, as
+        :meth:`publish` wrote them), then the table a split staged
+        (:meth:`_on_before_export`), else the session stagers'.
+
+        The takes are shipped by the step the Scene Exporter, :meth:`export`
+        and the hand-offs take after theirs (:meth:`drop_undeclared_takes`):
+        a split write drops Maya's whole-timeline ``Take 001``, and a shotless
+        one declares what its take holds, its audio cues counted from there."""
         FbxUtils.reset_takes()
         if FbxUtils._export_depth:
             return
+        written = FbxUtils._bracket_state().pop("hook_takes_path", None)
+        if written:
+            FbxUtils.drop_undeclared_takes(written)
+            FbxUtils._bracket_state()["takes_shipped"] = written
         snapshot = FbxUtils._bracket_state().pop("hook_snapshot", None)
         if snapshot is not None:
             from mayatk.core_utils._core_utils import CoreUtils
@@ -2762,6 +3028,9 @@ class FbxUtils(ptk.HelpMixin):
         # a lifetime on, and the owner key was never used outside this module.
         FbxUtils._set_auto_takes_ids(
             [
+                om.MSceneMessage.addCheckFileCallback(
+                    om.MSceneMessage.kBeforeExportCheck, FbxUtils._on_export_check
+                ),
                 om.MSceneMessage.addCallback(
                     om.MSceneMessage.kBeforeExport, FbxUtils._on_before_export
                 ),

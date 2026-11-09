@@ -831,11 +831,15 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
 
         for name, value in cls._layout_constants(horizon).items():
             cmds.setAttr(f"{fx}.{name}", float(value))
-        # Opacity carries the expression's fade AND the artist's intensity
-        # dial (the expression multiplies shadowIntensity in), as every engine
-        # reads it: applying the intensity again here drew it twice.
+        # The material's drawn fade: the plane's authored opacity times the
+        # expression's fade, which carries the artist's intensity dial (the
+        # expression multiplies shadowIntensity in), as every engine reads it:
+        # applying the intensity again here drew it twice.
+        fade = ShadowRig._fade_node(plane)
         cmds.connectAttr(
-            f"{plane}.{ShadowRig.OPACITY_ATTR}", f"{fx}.gOpacity", force=True
+            f"{fade}.output" if fade else f"{plane}.{ShadowRig.OPACITY_ATTR}",
+            f"{fx}.gOpacity",
+            force=True,
         )
 
     @staticmethod

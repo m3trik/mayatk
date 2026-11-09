@@ -1,0 +1,511 @@
+{
+ "census": {
+  "AnimationCurve": 4,
+  "AnimationCurveNode": 14,
+  "AnimationLayer": 2,
+  "AnimationStack": 2,
+  "BindingTable": 2,
+  "Geometry": 1,
+  "Implementation": 2,
+  "Material": 2,
+  "Model": 3,
+  "NodeAttribute": 2
+ },
+ "format": "fbx",
+ "geometry": {
+  "geometry#0": {
+   "polygon_vertices": 40,
+   "vertices": 12
+  }
+ },
+ "materials": {
+  "panel_mat": {
+   "properties": {
+    "DiffuseColor": [
+     0.8,
+     0.8,
+     0.8
+    ],
+    "DiffuseFactor": 1.0,
+    "EmissiveColor": [
+     0.4,
+     1.2,
+     2.0
+    ],
+    "EmissiveFactor": 1.0,
+    "Maya": [],
+    "Maya|TypeId": 1398031443,
+    "Maya|base": 1.0,
+    "Maya|baseColor": [
+     0.8,
+     0.8,
+     0.8
+    ],
+    "Maya|coat": 0.0,
+    "Maya|coatAffectColor": 0.0,
+    "Maya|coatAffectRoughness": 0.0,
+    "Maya|coatAnisotropy": 0.0,
+    "Maya|coatColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|coatIOR": 1.5,
+    "Maya|coatNormal": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|coatRotation": 0.0,
+    "Maya|coatRoughness": 0.1,
+    "Maya|diffuseRoughness": 0.0,
+    "Maya|emission": 2.0,
+    "Maya|emissionColor": [
+     0.2,
+     0.6,
+     1.0
+    ],
+    "Maya|hardwareShader": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|metalness": 0.0,
+    "Maya|normalCamera": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|normalCameraFactor": 0.0,
+    "Maya|normalCameraUsedAs": 0,
+    "Maya|opacity": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheen": 0.0,
+    "Maya|sheenColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheenRoughness": 0.3,
+    "Maya|specular": 1.0,
+    "Maya|specularAnisotropy": 0.0,
+    "Maya|specularColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|specularIOR": 1.5,
+    "Maya|specularRotation": 0.0,
+    "Maya|specularRoughness": 0.2,
+    "Maya|subsurface": 0.0,
+    "Maya|subsurfaceAnisotropy": 0.0,
+    "Maya|subsurfaceColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceRadius": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceScale": 1.0,
+    "Maya|thinFilmIOR": 1.5,
+    "Maya|thinFilmThickness": 0.0,
+    "Maya|thinWalled": 0,
+    "Maya|transmission": 0.0,
+    "Maya|transmissionColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|transmissionDepth": 0.0,
+    "Maya|transmissionDispersion": 0.0,
+    "Maya|transmissionExtraRoughness": 0.0,
+    "Maya|transmissionScatter": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|transmissionScatterAnisotropy": 0.0,
+    "Opacity": 1.0,
+    "TransparencyFactor": 1.0,
+    "TransparentColor": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "shading_model": "unknown",
+   "textures": {}
+  },
+  "panel_mat_signal": {
+   "properties": {
+    "DiffuseColor": [
+     0.8,
+     0.8,
+     0.8
+    ],
+    "DiffuseFactor": 1.0,
+    "EmissiveColor": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "EmissiveFactor": 1.0,
+    "Maya": [],
+    "Maya|TypeId": 1398031443,
+    "Maya|base": 1.0,
+    "Maya|baseColor": [
+     0.8,
+     0.8,
+     0.8
+    ],
+    "Maya|coat": 0.0,
+    "Maya|coatAffectColor": 0.0,
+    "Maya|coatAffectRoughness": 0.0,
+    "Maya|coatAnisotropy": 0.0,
+    "Maya|coatColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|coatIOR": 1.5,
+    "Maya|coatNormal": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|coatRotation": 0.0,
+    "Maya|coatRoughness": 0.1,
+    "Maya|diffuseRoughness": 0.0,
+    "Maya|emission": 0.0,
+    "Maya|emissionColor": [
+     0.2,
+     0.6,
+     1.0
+    ],
+    "Maya|emissiveGroup": "signal",
+    "Maya|emissiveGroupBase": [],
+    "Maya|emissiveGroupStrength": 2.0,
+    "Maya|hardwareShader": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|metalness": 0.0,
+    "Maya|normalCamera": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|normalCameraFactor": 0.0,
+    "Maya|normalCameraUsedAs": 0,
+    "Maya|opacity": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheen": 0.0,
+    "Maya|sheenColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheenRoughness": 0.3,
+    "Maya|specular": 1.0,
+    "Maya|specularAnisotropy": 0.0,
+    "Maya|specularColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|specularIOR": 1.5,
+    "Maya|specularRotation": 0.0,
+    "Maya|specularRoughness": 0.2,
+    "Maya|subsurface": 0.0,
+    "Maya|subsurfaceAnisotropy": 0.0,
+    "Maya|subsurfaceColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceRadius": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceScale": 1.0,
+    "Maya|thinFilmIOR": 1.5,
+    "Maya|thinFilmThickness": 0.0,
+    "Maya|thinWalled": 0,
+    "Maya|transmission": 0.0,
+    "Maya|transmissionColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|transmissionDepth": 0.0,
+    "Maya|transmissionDispersion": 0.0,
+    "Maya|transmissionExtraRoughness": 0.0,
+    "Maya|transmissionScatter": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|transmissionScatterAnisotropy": 0.0,
+    "Opacity": 1.0,
+    "TransparencyFactor": 1.0,
+    "TransparentColor": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "emissiveGroup": "signal",
+    "emissiveGroupStrength": [
+     2.0,
+     2.0,
+     2.0
+    ]
+   },
+   "shading_model": "unknown",
+   "textures": {}
+  }
+ },
+ "models": {
+  "data_export": {
+   "Lcl Rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "Lcl Scaling": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "Lcl Translation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "type": "Null"
+  },
+  "panel": {
+   "type": "Mesh"
+  },
+  "panel_mat_signal__emission": {
+   "Lcl Scaling": [
+    0.0,
+    1.0,
+    1.0
+   ],
+   "type": "Null"
+  }
+ },
+ "takes": {
+  "ShotA": {
+   "panel_mat_signal__emission|Lcl Scaling|d|X": [
+    0.0417,
+    0.8333,
+    20
+   ],
+   "panel_mat_signal|Maya|emission|d|emission": [
+    0.0417,
+    0.8333,
+    20
+   ]
+  },
+  "ShotB": {
+   "panel_mat_signal__emission|Lcl Scaling|d|X": [
+    0.875,
+    1.6667,
+    20
+   ],
+   "panel_mat_signal|Maya|emission|d|emission": [
+    0.875,
+    1.6667,
+    20
+   ]
+  }
+ },
+ "user_properties": {
+  "data_export.animation": {
+   "fps": 24.0,
+   "shots": [
+    {
+     "clip": "text"
+    },
+    {
+     "clip": "text"
+    }
+   ],
+   "version": 3
+  },
+  "data_export.handoff": {
+   "assembly": [
+    {
+     "data": [],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    }
+   ],
+   "extras": {
+    "source": {
+     "application": "text",
+     "version": "text"
+    }
+   },
+   "instructions": "text",
+   "rendering": {
+    "environment": {
+     "fallback": "text",
+     "intensity": 1.0,
+     "prefilter": "text",
+     "prefilterBlur": 0.04
+    },
+    "keyLight": {
+     "color": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "intensity": 0.9,
+     "position": [
+      3,
+      6,
+      4
+     ],
+     "type": "text"
+    },
+    "renderer": {
+     "toneMapping": "text",
+     "toneMappingExposure": 1.0
+    }
+   },
+   "version": 3
+  },
+  "data_export.materials": {
+   "asset": {
+    "version": "text"
+   },
+   "extensionsUsed": [
+    "text"
+   ],
+   "materials": [
+    {
+     "alphaMode": "text",
+     "doubleSided": false,
+     "emissiveFactor": [
+      0.2,
+      0.6,
+      1.0
+     ],
+     "extensions": {
+      "KHR_materials_emissive_strength": {
+       "emissiveStrength": 2.0
+      }
+     },
+     "name": "text",
+     "pbrMetallicRoughness": {
+      "baseColorFactor": [
+       0.8,
+       0.8,
+       0.8,
+       1.0
+      ],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.2
+     }
+    },
+    {
+     "alphaMode": "text",
+     "doubleSided": false,
+     "emissiveFactor": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "name": "text",
+     "pbrMetallicRoughness": {
+      "baseColorFactor": [
+       0.8,
+       0.8,
+       0.8,
+       1.0
+      ],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.2
+     }
+    }
+   ],
+   "version": 2
+  },
+  "data_export.render_effects": {
+   "materials": [
+    {
+     "channels": [
+      "text"
+     ],
+     "emission_color": [
+      0.2,
+      0.6,
+      1.0
+     ],
+     "emission_strength": 2.0,
+     "material": "text"
+    }
+   ],
+   "tracks": [],
+   "version": 2
+  },
+  "panel.currentUVSet": "text",
+  "panel_mat_signal__emission.curveProxy": 1,
+  "panel_mat_signal__emission.emissiveGroupProxy": 1
+ }
+}

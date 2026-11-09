@@ -14,10 +14,12 @@ scene holding a prop of rigid parts. Deliberately NOT named ``test_*`` so
      added over FK;
   D. a grab lands the head where it is sent (it drags the end control), and
      moving the end control lands the head on it;
-  E. the export (records published in the bracket, FBX written baked, the
-     rig-helper sweep, FBX2glTF) ships every joint and every grabbed part and
+  E. the Scene Exporter's own run (no shot: its one whole-timeline take
+     bakes the joints the solve drives, and keys every one; the rig-helper
+     sweep; FBX2glTF) ships every joint and every grabbed part and
      none of the controls -- the end control included -- and
-     ``extras.articulation`` binds them all;
+     ``extras.articulation`` carries the record, every joint and part of it
+     resolved by name (``MeshConvert.verify_glb`` notes none);
   F. the teardown puts every part back exactly.
 
 The GLB is left in a detached scratch directory and its path printed as
@@ -37,7 +39,6 @@ Run:
 Exit code 0 only when every verdict passes.
 """
 
-import json
 import os
 import random
 
@@ -47,12 +48,12 @@ maya.standalone.initialize(name="python")
 
 import maya.api.OpenMaya as om  # noqa: E402
 import maya.cmds as cmds  # noqa: E402
-import maya.mel as mel  # noqa: E402
 
 import pythontk as ptk  # noqa: E402
 
-from mayatk.env_utils.fbx_utils import FbxUtils  # noqa: E402
-from mayatk.node_utils.data_nodes import DataNodes  # noqa: E402
+from mayatk.env_utils.scene_exporter._scene_exporter import (  # noqa: E402
+    SceneExporter,
+)
 from mayatk.rig_utils.articulated_rig import ArticulatedRig  # noqa: E402
 
 TOLERANCE = 1e-4  # scene units; the build and the model are exact to ~1e-6
@@ -205,22 +206,26 @@ def main():
 
     fbx = os.path.join(scratch, "articulated_live.fbx")
     glb = os.path.join(scratch, "articulated_live.glb")
-    FbxUtils.reset_export()
-    mel.eval("FBXExportBakeComplexAnimation -v true")
-    FbxUtils.set_bake_range_from_scene()
-    with FbxUtils.export_prepared(FbxUtils.export_context()):
-        selection = [cmds.ls(node, long=True)[0]] + DataNodes.get_export_nodes()
-        cmds.select(selection, replace=True)
-        cmds.file(
-            fbx, force=True, options="v=0;", type="FBX export", exportSelected=True
-        )
-        report = FbxUtils.drop_rig_apparatus(
-            fbx, cmds.ls(selection=True, long=True) or []
-        )
-    print(
-        f"\n   rig-helper sweep: {json.dumps(report, default=str)[:400] if report else report}"
+    # The Scene Exporter's own run, as a user makes it: no shot, so its one
+    # whole-timeline take is what bakes the joints (the solve's expression
+    # drives them) -- no bake flag set by hand here.
+    exporter = SceneExporter(log_level="WARNING")
+    exporter.confirm = lambda question: False
+    written = exporter.perform_export(
+        export_dir=scratch,
+        objects=[cmds.ls(node, long=True)[0]],
+        output_name="articulated_live",
+        tasks={
+            "output_format": "fbx_glb",
+            "export_data_node": True,
+            "drop_rig_apparatus": True,
+        },
     )
-    ptk.MeshConvert.fbx_to_glb(fbx, glb)
+    ok &= verdict("E. the Scene Exporter writes", bool(written), fbx)
+    curves = ptk.FbxFile.load(
+        fbx, decode_arrays=("KeyTime",), raw_payloads=False
+    ).take_curves()
+    keyed = {key[0] for stack in curves.values() for key in stack}
     with ptk.MeshConvert.open_glb(glb) as edit:
         names = [n.get("name", "") for n in edit.gltf.get("nodes") or []]
         manifest = (edit.gltf.get("extras") or {}).get(
@@ -229,6 +234,11 @@ def main():
     record = rig.record()
     joints = [j["name"] for j in record["joints"]]
     grabbed = [g["node"] for g in record["grab"]]
+    ok &= verdict(
+        "E. its one take keys every joint",
+        len(curves) == 1 and all(j in keyed for j in joints),
+        f"{len(curves)} take(s), {sum(j in keyed for j in joints)}/{len(joints)} joints keyed",
+    )
     affix = ptk.NamingConvention.affix("control")
     controls = [
         n for n in names if n.endswith((affix, affix + ArticulatedRig.IK_GROUP_SUFFIX))
@@ -241,12 +251,20 @@ def main():
         f"{sum(j in names for j in joints)}/{len(joints)} joints, "
         f"{sum(g in names for g in grabbed)}/{len(grabbed)} parts, {len(controls)} controls",
     )
-    bound = manifest["rigs"][0] if manifest and manifest.get("rigs") else {}
+    # The GLB carries the record as it stands; every reader resolves its
+    # joints and parts by name, and verify_glb notes any it cannot.
+    carried = manifest["rigs"][0] if manifest and manifest.get("rigs") else {}
+    where = f"extras.{ptk.SceneRecords.ARTICULATION.key}:"
+    unresolved = [
+        n for n in ptk.MeshConvert.verify_glb(glb)["notes"] if n.startswith(where)
+    ]
     ok &= verdict(
-        "E. extras.articulation binds them",
-        len(bound.get("joints", [])) == len(joints)
-        and len(bound.get("grab", [])) == len(grabbed),
-        f"{len(bound.get('joints', []))} joints, {len(bound.get('grab', []))} grab parts bound",
+        "E. extras.articulation carries them, every one resolved",
+        len(carried.get("joints", [])) == len(joints)
+        and len(carried.get("grab", [])) == len(grabbed)
+        and not unresolved,
+        f"{len(carried.get('joints', []))} joints, {len(carried.get('grab', []))} grab "
+        f"parts carried; unresolved: {unresolved or 'none'}",
     )
 
     cmds.currentTime(1)

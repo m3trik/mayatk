@@ -281,9 +281,9 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         The shape is the one measured on the WebXR reference: a period of
         2.86 s with the object bright for 59% of it, eased at both ends. Keys
         are written with LINEAR tangents at each transition rather than as a
-        spline through the extrema, because the published ramp is read
-        linearly (see ``RenderEffects._linear_ramp``) -- a spline would ship
-        as a triangle wave and lose the dwell. Four keys per cycle: bright hold
+        spline through the extrema, because the reference's shape is a dwell
+        joined by ramps, and the curve ships as keyed -- its proxy copies the
+        keys with their tangents -- so a spline would round the dwell away. Four keys per cycle: bright hold
         start, dim ramp end, dim hold end, bright ramp end.
 
         **The pulse is bracketed by dim keys**, and that is not cosmetic: Maya

@@ -1,26 +1,22 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Substance Painter bridge templates.
+"""Substance Painter bridge scripts: the built-in ones, run inside Painter.
 
-Each ``*.py`` sibling is a template descriptor consumed by
-:class:`mayatk.mat_utils.substance_bridge.SubstanceBridge`. Templates declare:
+Each ``*.py`` sibling is a Python script the ``substance_rpc`` plugin runs in
+Painter (``script.start``), its values in ``args``; the person's own live in
+``ptk.ScriptTemplate.user_dir("substance")`` and shadow a built-in of their
+name. The header the engine reads without running it (``ast``):
 
-* ``BRIDGE_MODES`` -- supported modes (``"send_to"``, ``"round_trip"``).
-* ``LAUNCH_ARGS`` -- list of Painter command-line args (with ``__KEY__``
-  placeholders substituted from the rendered context).
-* ``RPC_SCRIPT`` -- JavaScript body sent via Painter's
-  ``--enable-remote-scripting`` JSON-RPC endpoint after launch
-  (empty string = no RPC step).
-* ``BUILD_MANIFEST`` -- if True, a :class:`MatManifest` JSON is written
-  next to the FBX and its path is exposed as ``__MANIFEST_PATH__``.
+* the docstring's first line -- the description the panel shows;
+* ``WORKS_ON`` -- ``"new"`` / ``"mesh"`` / ``"project"``: what it runs on,
+  which decides the Painter (``SubstanceEngine.pick_painter``);
+* ``# Rows: __KEY__ ...`` -- the panel rows it reads; ``# Row: __KEY__ kind
+  default "Label" ...`` -- a row of its own (``ScriptTemplate.declared_rows``);
+* ``BUILD_MANIFEST``, ``REUSE_RECORDED_EXPORT``, ``FBX_OPTIONS``,
+  ``BRIDGE_MODES`` -- the host export's options.
 
-Templates are parsed via :mod:`ast` (literals only, no execution), so the
-files can contain placeholder tokens that would otherwise be syntax errors
-inside a JS string.
-
-**Vendored twin -- keep code-identical.** The ``templates/`` folder is
-duplicated under ``mayatk/mat_utils/substance_bridge/templates/`` (the
-SSoT: edit it there) and ``blendertk/mat_utils/substance_bridge/templates/``;
-mirror every change -- a new template too -- into both. Drift fails
-``extapps/test/test_vendor_sync.py``.
+**Vendored copy -- keep byte-identical.** The ``templates/`` folder ships in each host
+library's Substance bridge and in the standalone Substance Scripts app; the
+Maya library's copy is the source (edit it there, then mirror it). Drift
+fails the vendor guard (``test_vendor_sync.py``). A new script goes into every copy.
 """

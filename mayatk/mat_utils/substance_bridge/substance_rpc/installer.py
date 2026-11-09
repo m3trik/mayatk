@@ -16,10 +16,17 @@ A freshly installed plugin is picked up on Painter's next launch (or via
 (default off), so the install sets that switch the first time; the user can
 still turn it off in Painter's **Python** menu, and that choice stands.
 
-**Vendored twin -- keep code-identical.** This file is duplicated at
-``mayatk/mat_utils/substance_bridge/substance_rpc/installer.py`` (the SSoT: edit it there)
-and ``blendertk/mat_utils/substance_bridge/substance_rpc/installer.py``; mirror every change
-into both. Drift fails ``extapps/test/test_vendor_sync.py``.
+The install is the person's act (a panel's *Install in Painter*): it is how
+the Painter they open serves scripts, so a bridge never makes it on its own --
+a send only refreshes an install already there (:meth:`Installer.refresh`).
+A Painter a bridge launches needs no install: it loads the plugin from
+:meth:`Installer.launch_root` (``SUBSTANCE_PAINTER_PLUGINS_PATH``), touching
+nothing of the person's.
+
+**Vendored copy -- keep byte-identical.** This file ships in each host
+library's Substance bridge and in the standalone Substance Scripts app; the
+Maya library's copy is the source (edit it there, then mirror it). Drift
+fails the vendor guard (``test_vendor_sync.py``).
 """
 
 import os
@@ -28,10 +35,14 @@ from pathlib import Path
 from typing import Optional
 
 import pythontk as ptk
-from pythontk.net_utils.rpc.installer import PluginInstaller
+from pythontk.net_utils.rpc.installer import PluginInstaller, RpcPluginSpec
 
 
 PLUGIN_NAME = "substance_rpc"
+#: The launch root's copy: its own name, so a person's installed ``substance_rpc``
+#: (which Painter finds first) cannot shadow it; it answers to ``substance_rpc``
+#: in the Painter it serves (the plugin's ``_answer_to_the_plugins_name``).
+LAUNCHED_NAME = "substance_rpc_launched"
 
 
 class _InstallerInternal(object):
@@ -146,26 +157,18 @@ class Installer(_InstallerInternal):
         Presence only -- it says nothing about *which* version is there.
         Use :meth:`is_current` to decide whether an install needs a refresh.
         """
-        dest_root = Installer.user_plugin_dir()
-        if not dest_root:
-            return False
-        return PluginInstaller.is_plugin_installed(dest_root / PLUGIN_NAME)
+        return PluginInstaller.status(PLUGIN_SPEC) in ("current", "stale")
 
     @staticmethod
     def is_current() -> bool:
         """True if the installed plugin matches the one this package ships.
 
         A copytree install (any machine without Developer Mode) is a
-        snapshot, so an install from an older mayatk can be missing ops the
+        snapshot, so an install from an older release can be missing ops the
         bridge now dispatches -- which fails as an unknown-op error at
         invoke time, i.e. the knob silently doing nothing.
         """
-        dest_root = Installer.user_plugin_dir()
-        if not dest_root:
-            return False
-        return PluginInstaller.is_plugin_current(
-            _InstallerInternal._plugin_source_dir(), dest_root / PLUGIN_NAME
-        )
+        return PluginInstaller.status(PLUGIN_SPEC) == "current"
 
     @staticmethod
     def install(force: bool = False) -> Optional[Path]:
@@ -174,19 +177,52 @@ class Installer(_InstallerInternal):
         Returns the final plugin directory (or *None* if no destination
         could be resolved). An install that already matches the shipped
         source is left alone; one that has drifted is rebuilt. *force*
-        rebuilds even a matching install.
+        rebuilds even a matching install. Painter's launch-at-start switch is
+        the person's install's alone (:meth:`enable_launch_at_start`, a
+        panel's *Install in Painter*), never a refresh's.
         """
-        dest_root = Installer.user_plugin_dir()
-        if not dest_root:
-            return None
-        installed = PluginInstaller.install_plugin(
+        dest = PLUGIN_SPEC.destination()
+        return None if dest is None else PluginInstaller.install_plugin(PLUGIN_SPEC.source, dest, force=force)
+
+    @staticmethod
+    def refresh() -> Optional[Path]:
+        """Bring an install that is there up to date (a copy predating this
+        package serves stale ops); never install one that is not. The plugin
+        folder, or ``None`` when nothing is installed or it is current."""
+        return PluginInstaller.refresh(PLUGIN_SPEC)
+
+    @staticmethod
+    def launch_root() -> Path:
+        """A Painter plugin root holding the plugin as a startup module
+        (:data:`LAUNCHED_NAME`), for a Painter a bridge launches
+        (``SUBSTANCE_PAINTER_PLUGINS_PATH``): the cache's ``substance_rpc/launch``,
+        refreshed when the source changed. A copy left there under the plugin's
+        own name (before :data:`LAUNCHED_NAME`) goes: it would serve beside it."""
+        root = ptk.UserConfig.cache_dir(PLUGIN_NAME, "launch", create=True)
+        stale = root / "startup" / PLUGIN_NAME
+        if stale.exists():
+            PluginInstaller.uninstall_plugin(stale)
+        PluginInstaller.install_plugin(
             plugin_src=_InstallerInternal._plugin_source_dir(),
-            dest=dest_root / PLUGIN_NAME,
-            force=force,
+            dest=root / "startup" / LAUNCHED_NAME,
         )
-        if installed:
-            Installer.enable_launch_at_start()
-        return installed
+        return root
+
+    @staticmethod
+    def launch_env(env: Optional[dict] = None) -> dict:
+        """*env* (else this process's) with :meth:`launch_root` first on
+        ``SUBSTANCE_PAINTER_PLUGINS_PATH``. A set ``SUBSTANCE_PAINTER_STARTUP_PLUGINS``
+        replaces Painter's whole startup list, so it gains the plugin, first (ahead
+        of Painter's Python menu, which starts a person's ticked install)."""
+        env = dict(os.environ if env is None else env)
+        root = str(Installer.launch_root())
+        existing = env.get("SUBSTANCE_PAINTER_PLUGINS_PATH", "")
+        env["SUBSTANCE_PAINTER_PLUGINS_PATH"] = f"{root}{os.pathsep}{existing}" if existing else root
+        startup = env.get("SUBSTANCE_PAINTER_STARTUP_PLUGINS")
+        if startup is not None:  # Painter splits it on ":" (not os.pathsep)
+            names = [name for name in startup.split(":") if name and name != LAUNCHED_NAME]
+            env["SUBSTANCE_PAINTER_STARTUP_PLUGINS"] = ":".join([LAUNCHED_NAME] + names)
+        return env
 
     @staticmethod
     def painter_settings():
@@ -216,7 +252,21 @@ class Installer(_InstallerInternal):
 
         Returns True if something was removed.
         """
-        dest_root = Installer.user_plugin_dir()
-        if not dest_root:
-            return False
-        return PluginInstaller.uninstall_plugin(dest_root / PLUGIN_NAME)
+        return PluginInstaller.uninstall(PLUGIN_SPEC)
+
+
+#: The plugin in Painter, as the shared installer (``pythontk.PluginInstaller``)
+#: and every panel's *Install in Painter* take it.
+PLUGIN_SPEC = RpcPluginSpec(
+    name=PLUGIN_NAME,
+    app="Painter",
+    source=_InstallerInternal._plugin_source_dir(),
+    # Read at call time, so ``SUBSTANCE_PAINTER_PLUGINS_PATH`` (and a test's
+    # patch) is where it looks.
+    user_dir=lambda: Installer.user_plugin_dir(),
+    enable=lambda: Installer.enable_launch_at_start(),
+    after_install=(
+        "In an open Painter, use Python > Reload Plugins Folder; it is in Painter's "
+        "Python menu, ticked (untick it there to switch it off)."
+    ),
+)

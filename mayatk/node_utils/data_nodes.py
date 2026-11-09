@@ -89,22 +89,24 @@ class DataNodes(ptk.SceneStoreBase):
 
     @staticmethod
     def _resolve(name: str) -> Optional[str]:
-        """Canonical node for *name*, or ``None`` when absent.
+        """The scene's node for *name*, or ``None`` when it has none.
 
-        A duplicate short name (an imported second carrier parented under a
-        group) makes every bare-name plug query ambiguous: ``attributeQuery``
-        raises, ``setAttr`` raises, and ``getAttr`` silently returns a *list*
-        of both values. The scene's canonical carrier is the **shallowest
-        path** -- the root-level node ``ensure_*`` creates -- with ties broken
-        lexically for determinism. Returns the bare name when it is unique so
-        the public methods keep their stable short-name return values.
+        The scene's carrier is the **root-level** node of the name, the one
+        ``ensure_*`` creates (a DG node has no path, so it is always root
+        level): one parented under a group is a grouped module's own, as a
+        namespaced ``NS:data_export`` is a referenced module's, and is never
+        adopted, written over or deleted (``ptk.SceneStoreBase.is_scene_carrier``,
+        the rule every reader of a written file applies). A duplicate short
+        name makes every bare-name plug query ambiguous (``attributeQuery`` and
+        ``setAttr`` raise, ``getAttr`` returns a *list*), so the root one is
+        then returned by its long path; the bare name when it is unique, so the
+        public methods keep their stable short-name return values.
         """
         matches = cmds.ls(name, long=True) or []
-        if not matches:
+        own = [path for path in matches if path.count("|") <= 1]
+        if not own:
             return None
-        if len(matches) == 1:
-            return name
-        return min(matches, key=lambda path: (path.count("|"), path))
+        return name if len(matches) == 1 else own[0]
 
     # ------------------------------------------------------------------
     # Node lifecycle

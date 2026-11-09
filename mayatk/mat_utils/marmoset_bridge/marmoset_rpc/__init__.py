@@ -22,7 +22,7 @@ Quickstart::
     # ... user starts Toolbag manually ...
 
     conn = MarmosetConnection()
-    if conn.ping():
+    if conn.attach():  # a running Toolbag serving the plugin, by its record
         print(conn.invoke("system.version"))  # -> 5022
         print(conn.list_ops())                # -> ['system.list_ops', ...]
 

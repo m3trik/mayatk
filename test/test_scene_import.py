@@ -3266,27 +3266,36 @@ class TestApplySceneData(_ShotsCase):
 
     def test_an_emissive_group_lands_through_the_importer_spelling(self):
         """Every portable record rides the generic ``records`` section; its owner
-        resolves members exactly as the shots do."""
+        tags the copies the FBX brought as plain materials, and keys them."""
+        from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.emissive_groups import EmissiveGroups
 
         dotted = cmds.polyCube(name="CubeFBXASC046001")[0]
+        base = cmds.shadingNode("standardSurface", asShader=True, name="glowMat")
+        copy = cmds.shadingNode("standardSurface", asShader=True, name="glowMat_glow")
+        cmds.setAttr(f"{base}.emission", 2.0)
+        MatUtils.assign_mat([dotted], base)
+        MatUtils.assign_mat([f"{dotted}.f[0]", f"{dotted}.f[2]"], copy)
         path = self._manifest(
             {
                 "version": 2,
                 "records": {
                     ptk.SceneRecords.EMISSIVE_REGISTRY.key: {
-                        "registry": {
-                            "schema": 1,
-                            "groups": {"glow": {"slot": 0, "default": 1.0}},
-                        },
-                        "members": {"glow": {"Cube.001": [0, 2]}},
-                        "faces": {"Cube.001": 6},
+                        "copies": {
+                            "glowMat_glow": {
+                                "group": "glow",
+                                "base": "glowMat",
+                                "strength": 2.0,
+                                "keys": [[1.0, 0.0], [10.0, 2.0]],
+                            }
+                        }
                     }
                 },
             }
         )
         ctx = BlenderSceneImport()._apply_scene_data(path, [dotted])
         self.assertEqual(EmissiveGroups.list_groups()["glow"]["faces"], 2, ctx.notes)
+        self.assertTrue(EmissiveGroups.list_groups()["glow"]["keyed"])
 
     def test_the_earlier_name_still_lands_and_counts(self):
         """``_apply_shots_manifest`` stays for the templates of an earlier release

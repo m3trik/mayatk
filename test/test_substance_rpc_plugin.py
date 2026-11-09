@@ -10,7 +10,10 @@ HTTP server is started in-process, and ``substance_painter`` is faked in
 
 Covers the full reimport transport end-to-end:
 PainterRpcClient -> HTTP -> server dispatch -> registry -> mesh.reload
--> (fake) substance_painter.project.reload_mesh -> status callback.
+-> (fake) substance_painter.project.reload_mesh -> status callback; the
+script runner (``script.*``); and the instance record the plugin announces,
+written under a ``ptk.TempArtifacts`` folder (``PYTHONTK_CACHE_ROOT``), never
+the user's cache.
 """
 
 import os
@@ -33,6 +36,57 @@ _PLUGIN_SRC = (
 sys.path.insert(0, str(_PLUGIN_SRC))
 
 import substance_rpc  # noqa: E402  -- the plugin package itself
+
+import pythontk as ptk  # noqa: E402
+
+_RECORDS = ptk.TempArtifacts("rpcrec", policy="scoped")  # short: records sit deep under it
+_CACHE_ENV = "PYTHONTK_CACHE_ROOT"
+_cache_before = os.environ.get(_CACHE_ENV)
+
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from base_test import PainterPluginsSandbox  # noqa: E402
+
+_PLUGINS = PainterPluginsSandbox()
+
+
+def setUpModule():
+    os.environ[_CACHE_ENV] = str(_RECORDS.dir_path())
+    _PLUGINS.start()
+
+
+def tearDownModule():
+    _PLUGINS.stop()
+    if _cache_before is None:
+        os.environ.pop(_CACHE_ENV, None)
+    else:
+        os.environ[_CACHE_ENV] = _cache_before
+    _RECORDS.cleanup()
+
+
+from mayatk.mat_utils.substance_bridge.substance_rpc import PainterRpcClient  # noqa: E402
+
+
+class _LiveTokenClient(PainterRpcClient):
+    """A client sending the plugin's CURRENT token: each serving gets a new
+    one, and a test that stops and restarts the server keeps its client."""
+
+    module = None
+
+    @property
+    def token(self):
+        return self.module.PLUGIN.token
+
+    @token.setter
+    def token(self, _value):
+        pass
+
+
+def _client(module=None, port=None):
+    """A client of the served plugin, carrying its instance's token."""
+    module = module or substance_rpc
+    client = type("_Client", (_LiveTokenClient,), {"module": module})
+    return client(port=port or module.PLUGIN.address[1], timeout=5.0)
 
 from mayatk.mat_utils.substance_bridge.substance_rpc import (  # noqa: E402
     PainterRpcClient,
@@ -81,8 +135,43 @@ class _FakePainter:
         project.ReloadMeshStatus = ReloadMeshStatus
         project.is_open = is_open
         project.reload_mesh = reload_mesh
-        project.file_path = lambda: "C:/projects/test.spp"
+        project.file_path = lambda: outer.file_path
         project.needs_saving = lambda: False
+        project.name = lambda: "test"
+        project.get_uuid = lambda: outer.uuid
+        project.last_imported_mesh_path = lambda: "C:/meshes/test.fbx"
+        project.is_busy = lambda: outer.busy
+        self.file_path = "C:/projects/test.spp"
+        self.uuid = "11111111-2222-3333-4444-555555555555"
+        self.busy = False
+        #: Callbacks held while Painter is busy (``execute_when_not_busy``).
+        self.held = []
+
+        def execute_when_not_busy(fn):
+            if outer.busy:
+                outer.held.append(fn)
+            else:
+                fn()
+
+        project.execute_when_not_busy = execute_when_not_busy
+        #: What project.create does: Painter goes on loading after it returns.
+        project.start_loading = lambda: setattr(outer, "busy", True)
+
+        layerstack = types.ModuleType("substance_painter.layerstack")
+        self.undo_scopes = []
+
+        class ScopedModification:
+            def __init__(self, name):
+                self.name = name
+
+            def __enter__(self):
+                outer.undo_scopes.append(self.name)
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        layerstack.ScopedModification = ScopedModification
 
         js = types.ModuleType("substance_painter.js")
         js.evaluate = lambda script: f"js:{script}"
@@ -213,6 +302,7 @@ class _FakePainter:
         root.resource = resource
         root.baking = baking
         root.event = event
+        root.layerstack = layerstack
 
         self.modules = {
             "substance_painter": root,
@@ -222,6 +312,7 @@ class _FakePainter:
             "substance_painter.resource": resource,
             "substance_painter.baking": baking,
             "substance_painter.event": event,
+            "substance_painter.layerstack": layerstack,
         }
 
     def fire_project_ready(self):
@@ -239,7 +330,7 @@ class TestSubstanceRpcPlugin(unittest.TestCase):
         os.environ["SUBSTANCE_RPC_DISABLE_MAIN_THREAD"] = "1"
         cls.port = _free_port()
         substance_rpc.start_server(port=cls.port)
-        cls.client = PainterRpcClient(port=cls.port, timeout=5.0)
+        cls.client = _client(port=cls.port)
 
     @classmethod
     def tearDownClass(cls):
@@ -264,10 +355,14 @@ class TestSubstanceRpcPlugin(unittest.TestCase):
             "mesh.reload",
             "mesh.reload_status",
             "project.info",
-            "js.evaluate",
-            "system.eval",
+            "script.start",
+            "script.status",
+            "script.cancel",
         ):
             self.assertIn(expected, ops)
+        # One way in to run code: the runner. No op evaluates a string.
+        self.assertNotIn("system.eval", ops)
+        self.assertNotIn("js.evaluate", ops)
 
     def test_unknown_op_raises(self):
         with self.assertRaises(RuntimeError):
@@ -316,16 +411,275 @@ class TestSubstanceRpcPlugin(unittest.TestCase):
             self.client.reload_mesh(mesh_path)
         self.assertIn("No project is open", str(ctx.exception))
 
-    def test_js_evaluate_routes_to_painter_js(self):
-        self.assertEqual(self.client.eval_js("alg.log('hi')"), "js:alg.log('hi')")
-
-    def test_eval_py_returns_result_variable(self):
-        self.assertEqual(self.client.eval_py("result = 40 + 2"), 42)
-
     def test_project_info(self):
         info = self.client.project_info()
         self.assertTrue(info["is_open"])
         self.assertEqual(info["file_path"], "C:/projects/test.spp")
+        self.assertEqual(info["uuid"], self.painter.uuid)
+        self.assertEqual(info["name"], "test")
+
+
+class TestScriptRunner(unittest.TestCase):
+    """``script.*``: a script runs in Painter as a job, through the wire."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["SUBSTANCE_RPC_DISABLE_MAIN_THREAD"] = "1"
+        substance_rpc.start_server(port=_free_port())
+        cls.client = _client()
+
+    @classmethod
+    def tearDownClass(cls):
+        substance_rpc.stop_server()
+        os.environ.pop("SUBSTANCE_RPC_DISABLE_MAIN_THREAD", None)
+
+    def setUp(self):
+        self.painter = _FakePainter()
+        sys.modules.update(self.painter.modules)
+        for name in self.painter.modules:
+            self.addCleanup(sys.modules.pop, name, None)
+
+    def _run(self, source, **kwargs):
+        job = self.client.run_script(source, path="probe.py", label="Probe", **kwargs)
+        return self.client.wait(job, timeout=10, poll=0.05)
+
+    def test_a_script_gets_its_args_and_reports_back(self):
+        status = self._run(
+            "print('working')\nargs.report('made ' + args['NAME'])\nargs.progress(1.0, 'all')",
+            args={"NAME": "it"},
+        )
+        self.assertEqual(status["state"], "done", status)
+        self.assertEqual(status["report"], ["made it"])
+        self.assertEqual(status["console"], ["working"])
+        self.assertEqual(status["progress"], {"fraction": 1.0, "text": "all"})
+        self.assertNotIn("args", status)
+
+    def test_the_run_is_one_undo_entry_named_for_the_script(self):
+        self._run("x = 1")
+        self.assertEqual(self.painter.undo_scopes, ["Probe"])
+
+    def test_no_project_open_runs_without_an_undo_entry(self):
+        self.painter.project_open = False
+        self.assertEqual(self._run("x = 1")["state"], "done")
+        self.assertEqual(self.painter.undo_scopes, [])
+
+    def test_a_failing_script_is_its_jobs_failure(self):
+        status = self._run("raise ValueError('no such layer')")
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["error"], "ValueError: no such layer")
+        self.assertIn("probe.py", status["traceback"])
+        self.assertTrue(self.client.ping(), "Painter's server is unharmed")
+
+    def test_a_script_that_does_not_compile_is_refused_before_it_queues(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self.client.run_script("def broken(:\n", path="probe.py")
+        self.assertIn("SyntaxError", str(ctx.exception))
+
+    def test_a_run_meant_for_another_project_is_refused(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self.client.run_script("x = 1", expect={"uuid": "another", "path": "C:/projects/test.spp"})
+        self.assertIn("meant for", str(ctx.exception))
+        with self.assertRaises(RuntimeError):
+            self.client.run_script("x = 1", expect={"path": "C:/projects/other.spp"})
+        self.assertEqual(self._run("x = 1", expect={"uuid": self.painter.uuid, "path": "C:/projects/test.spp"})["state"], "done")
+
+    def test_a_job_is_refused_if_the_project_changed_while_it_waited(self):
+        """The project is checked when the job runs, not only when it queued:
+        a person may open another while Painter is busy."""
+        self.painter.busy = True
+        job = self.client.run_script("args.report('ran')", path="probe.py", expect={"uuid": self.painter.uuid})
+        self.painter.uuid = "99999999-0000-0000-0000-000000000000"
+        self.painter.busy = False
+        self.painter.held.pop(0)()
+        status = self.client.job(job)
+        self.assertEqual((status["state"], status["report"]), ("failed", []))
+        self.assertIn("meant for", status["error"])
+
+    def test_a_busy_painter_holds_the_job_and_a_cancel_stops_it_before_it_starts(self):
+        self.painter.busy = True
+        job = self.client.run_script("args.report('ran')", path="probe.py")
+        self.assertEqual(self.client.job(job)["state"], "queued")
+        self.assertEqual(self.client.cancel(job)["state"], "queued")
+        self.painter.busy = False
+        for fn in self.painter.held:
+            fn()
+        status = self.client.job(job)
+        self.assertEqual(status["state"], "cancelled")
+        self.assertEqual(status["report"], [])
+
+    def _pause(self):
+        from substance_rpc.ops import script_ops
+
+        script_ops.set_paused(True)
+        self.addCleanup(script_ops.set_paused, False)
+        return script_ops
+
+    def test_paused_in_painter_a_run_is_refused_saying_where_to_resume(self):
+        script_ops = self._pause()
+        with self.assertRaises(RuntimeError) as ctx:
+            self.client.run_script("args.report('ran')", path="probe.py")
+        self.assertIn("paused in Painter", str(ctx.exception))
+        self.assertIn("M3trik Scripts", str(ctx.exception))
+        script_ops.set_paused(False)
+        self.assertEqual(self._run("x = 1")["state"], "done")
+
+    def test_a_job_still_queued_when_painter_pauses_never_runs(self):
+        self.painter.busy = True
+        job = self.client.run_script("args.report('ran')", path="probe.py")
+        self._pause()
+        self.painter.busy = False
+        self.painter.held.pop(0)()
+        status = self.client.job(job)
+        self.assertEqual((status["state"], status["report"]), ("cancelled", []))
+        self.assertIn("paused in Painter", status["error"])
+
+    def test_a_job_waits_for_painters_shelves_to_finish_loading(self):
+        """A Painter just launched is still crawling its shelves (its export
+        presets among them): a script naming one would not find it yet."""
+        from unittest import mock
+
+        from substance_rpc.ops import script_ops
+
+        crawling = [True]
+        shelf = types.SimpleNamespace(is_crawling=lambda: crawling[0])
+        sys.modules["substance_painter.resource"].Shelves = types.SimpleNamespace(all=lambda: [shelf])
+        later = []
+        with mock.patch.object(script_ops, "_after", lambda ms, fn: later.append(fn)):
+            job = self.client.run_script("args.report('ran')", path="probe.py")
+            for _ in range(3):
+                later.pop(0)()
+            self.assertEqual(self.client.job(job)["state"], "queued", "held while a shelf crawls")
+            crawling[0] = False
+            while later:
+                later.pop(0)()
+        self.assertEqual(self.client.job(job)["report"], ["ran"])
+
+    def test_a_running_script_stops_at_its_check(self):
+        script = (
+            "from substance_rpc.ops import script_ops\n"
+            "script_ops._JOBS[[k for k in script_ops._JOBS][-1]]['cancel'] = True\n"
+            "args.check_cancel()\n"
+            "args.report('not reached')\n"
+        )
+        status = self._run(script)
+        self.assertEqual(status["state"], "cancelled")
+        self.assertEqual(status["report"], [])
+
+    def _drain(self):
+        """Run what Painter would once idle: its held callbacks, and a Qt
+        timer's (Painter's own loop runs those; nothing pumps one here)."""
+        try:
+            from PySide6 import QtCore
+        except ImportError:
+            QtCore = None
+        for _ in range(50):
+            if QtCore is not None and QtCore.QCoreApplication.instance() is not None:
+                QtCore.QCoreApplication.processEvents()
+            if self.painter.busy or not self.painter.held:
+                if not (QtCore and QtCore.QCoreApplication.instance()):
+                    return
+                continue
+            self.painter.held.pop(0)()
+
+    def test_a_step_painter_finishes_later_runs_when_it_is_idle(self):
+        """``project.create`` returns before Painter finished loading; a save
+        right after is refused ("Painter is busy"). A script's ``when_idle``
+        step runs once Painter is idle, and the job ends after its last step."""
+        self.painter.busy = True
+        job = self.client.run_script(
+            "import substance_painter.project as project\n"
+            "project.start_loading()\n"  # as project.create: Painter loads on
+            "args.report('created')\nargs.when_idle(lambda: args.report('saved'))",
+            path="probe.py",
+        )
+        self.assertEqual(self.client.job(job)["state"], "queued")
+        self.painter.busy = False
+        self.painter.held.pop(0)()  # the script, once Painter was idle
+        self._drain()  # still loading what it made: the step waits
+        status = self.client.job(job)
+        self.assertEqual((status["state"], status["report"]), ("running", ["created"]))
+        self.painter.busy = False
+        self._drain()
+        status = self.client.job(job)
+        self.assertEqual((status["state"], status["report"]), ("done", ["created", "saved"]))
+
+    def test_a_failing_idle_step_fails_the_job(self):
+        job = self.client.run_script("args.when_idle(lambda: 1 / 0)", path="probe.py")
+        self._drain()
+        status = self.client.job(job)
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("ZeroDivisionError", status["error"])
+
+    def test_an_unknown_job_is_none(self):
+        self.assertIsNone(self.client.job("nope"))
+
+    def test_new_project_on_a_mesh_painter_reads_nothing_from_fails_saying_so(self):
+        # Painter's importer may read no mesh from a file (it logs "No meshes
+        # in scene"): the project then has no texture set to work on.
+        project = self.painter.modules["substance_painter.project"]
+        project.Settings = lambda **options: options
+        project.create = lambda **kwargs: setattr(self.painter, "project_open", True)
+        self.painter.project_open = False
+        self.painter.modules["substance_painter.textureset"].all_texture_sets = lambda: []
+        template = _PLUGIN_SRC.parents[1] / "templates" / "new_project.py"
+        mesh = Path(__file__)  # any file on disk: the stand-in reads nothing from it
+        job = self.client.run_script(
+            template.read_text(encoding="utf-8"), path=str(template), args={"MESH": str(mesh), "MESH_MAP_FILES": []}
+        )
+        self._drain()
+        status = self.client.job(job)
+        self.assertEqual(status["state"], "failed", status)
+        self.assertIn("read no mesh", status["error"])
+
+
+class TestInstanceRecord(unittest.TestCase):
+    """The plugin announces itself: found by what it is, reached by its token."""
+
+    def setUp(self):
+        os.environ["SUBSTANCE_RPC_DISABLE_MAIN_THREAD"] = "1"
+        self.addCleanup(os.environ.pop, "SUBSTANCE_RPC_DISABLE_MAIN_THREAD", None)
+        self.painter = _FakePainter()
+        sys.modules.update(self.painter.modules)
+        for name in self.painter.modules:
+            self.addCleanup(sys.modules.pop, name, None)
+        substance_rpc.start_server(port=0)
+        self.addCleanup(substance_rpc.stop_server)
+
+    def test_the_record_names_this_painter_and_what_it_holds(self):
+        substance_rpc.publish_state()
+        (record,) = PainterRpcClient.painters()
+        self.assertEqual(record["pid"], os.getpid())
+        self.assertEqual(record["port"], substance_rpc.PLUGIN.address[1])
+        project = record["state"]["project"]
+        self.assertEqual(project["uuid"], self.painter.uuid)
+        self.assertEqual(project["mesh_path"], "C:/meshes/test.fbx")
+        self.assertIs(record["state"]["busy"], False)
+        self.assertEqual(PainterRpcClient.holding("C:/projects/test.spp")["id"], record["id"])
+        self.assertIsNone(PainterRpcClient.holding("C:/projects/other.spp"))
+
+    def test_a_call_without_the_token_is_refused(self):
+        with self.assertRaises(RuntimeError):
+            PainterRpcClient(port=substance_rpc.PLUGIN.address[1], timeout=5.0).invoke("project.info")
+        (record,) = PainterRpcClient.painters()
+        self.assertTrue(PainterRpcClient.for_instance(record).project_info()["is_open"])
+
+    def test_pause_is_in_the_record_and_the_status_line(self):
+        from substance_rpc.ops import script_ops
+
+        substance_rpc.publish_state()
+        self.assertEqual(substance_rpc.status_line(), "Serving test")
+        script_ops.set_paused(True)
+        self.addCleanup(script_ops.set_paused, False)
+        (record,) = PainterRpcClient.painters()
+        self.assertIs(record["state"]["paused"], True)
+        self.assertEqual(substance_rpc.status_line(), "Paused: scripts sent to Painter are refused")
+        script_ops.set_paused(False)
+        self.assertIs(PainterRpcClient.painters()[0]["state"]["paused"], False)
+
+    def test_the_port_is_the_oss_and_the_record_goes_with_the_server(self):
+        self.assertNotEqual(substance_rpc.PLUGIN.address[1], 8090)
+        substance_rpc.stop_server()
+        self.assertEqual(PainterRpcClient.painters(), [])
 
 
 class TestProjectSetupOps(unittest.TestCase):
@@ -338,7 +692,7 @@ class TestProjectSetupOps(unittest.TestCase):
         os.environ["SUBSTANCE_RPC_DISABLE_MAIN_THREAD"] = "1"
         cls.port = _free_port()
         substance_rpc.start_server(port=cls.port)
-        cls.client = PainterRpcClient(port=cls.port, timeout=5.0)
+        cls.client = _client(port=cls.port)
 
     @classmethod
     def tearDownClass(cls):
@@ -689,10 +1043,10 @@ class TestProjectSetupOps(unittest.TestCase):
 
 
 class TestInstallerLaunchAtStart(unittest.TestCase):
-    """A fresh install turns on Painter's switch to start the plugin at launch:
-    Painter starts a ``plugins/`` module only when ``python_plugins/<name>/
-    launch_at_start`` reads ``on`` (default off), so a first send found no
-    server until the user ticked it in the Python menu (2026-10-31)."""
+    """The person's *Install in Painter* turns on Painter's switch to start the
+    plugin at launch (Painter starts a ``plugins/`` module only when
+    ``python_plugins/<name>/launch_at_start`` reads ``on``, default off); a
+    send's refresh of an install never touches it, nor an off the person set."""
 
     def setUp(self):
         import tempfile
@@ -723,13 +1077,27 @@ class TestInstallerLaunchAtStart(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_a_fresh_install_turns_the_switch_on(self):
-        self.installer.Installer.install()
+    def _install_in_painter(self):
+        from mayatk.mat_utils.substance_bridge._substance_bridge import SubstanceBridge
+
+        bridge = SubstanceBridge()
+        bridge.logger.setLevel("CRITICAL")
+        return bridge.install_rpc_plugin()
+
+    def test_install_in_painter_turns_the_switch_on(self):
+        self.assertTrue(self._install_in_painter())
         self.assertEqual(self.settings.value(self.installer.LAUNCH_AT_START_KEY), "on")
+
+    def test_a_sends_refresh_never_touches_the_switch(self):
+        older = Path(self.dir) / "plugins" / "substance_rpc"
+        older.mkdir(parents=True)
+        (older / "__init__.py").write_text("# an older copy", encoding="utf-8")
+        self.assertTrue(self.installer.Installer.refresh())
+        self.assertFalse(self.settings.contains(self.installer.LAUNCH_AT_START_KEY))
 
     def test_a_users_off_stands(self):
         self.settings.setValue(self.installer.LAUNCH_AT_START_KEY, "off")
-        self.installer.Installer.install()
+        self._install_in_painter()
         self.assertEqual(self.settings.value(self.installer.LAUNCH_AT_START_KEY), "off")
 
 
@@ -744,6 +1112,88 @@ class TestPluginImportSafety(unittest.TestCase):
         # Painter's loader calls these on enable/disable.
         self.assertTrue(callable(substance_rpc.start_plugin))
         self.assertTrue(callable(substance_rpc.close_plugin))
+
+
+class TestTheLaunchedCopy(unittest.TestCase):
+    """A Painter a bridge launches loads the plugin under its own name (the
+    launch root's ``substance_rpc_launched``): a person's install must not
+    shadow it, nor serve beside it. In its own process: it rebinds
+    ``substance_rpc``, which this module imported."""
+
+    def test_it_answers_to_the_plugins_name_and_hides_a_persons_install(self):
+        import shutil
+        import subprocess
+        import tempfile
+
+        root = Path(tempfile.mkdtemp(prefix="srl"))
+        self.addCleanup(shutil.rmtree, root, True)
+        ignore = shutil.ignore_patterns("__pycache__")
+        shutil.copytree(_PLUGIN_SRC / "substance_rpc", root / "launch" / "startup" / "substance_rpc_launched", ignore=ignore)
+        shutil.copytree(_PLUGIN_SRC / "substance_rpc", root / "user" / "plugins" / "substance_rpc", ignore=ignore)
+        probe = (
+            "import importlib, importlib.util, sys\n"
+            # Painter's sys.path order: the user folder's plugins/ ahead of the launch root's startup/.
+            f"sys.path[:0] = [{str(root / 'user' / 'plugins')!r}, {str(root / 'launch' / 'startup')!r}]\n"
+            "launched = importlib.import_module('substance_rpc_launched')\n"
+            "from substance_rpc.ops import script_ops\n"
+            "print(sys.modules['substance_rpc'] is launched)\n"
+            "print(script_ops is launched.ops.script_ops)\n"
+            "print(importlib.util.find_spec('substance_rpc').origin)\n"
+        )
+        from base_test import child_python  # a Python, not maya.exe, under a GUI-hosted run
+
+        out = subprocess.run([child_python(), "-c", probe], capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        same, same_ops, origin = out.stdout.split()[-3:]
+        self.assertEqual((same, same_ops), ("True", "True"))
+        self.assertIn("substance_rpc_launched", origin, "Painter's plugins scan finds the launched copy, not the install")
+
+
+class TestPluginMenu(unittest.TestCase):
+    """The plugin shows in Painter's menu bar (what it serves) and is paused
+    there: the connection is visible and switchable off in the app."""
+
+    def setUp(self):
+        try:
+            from PySide6 import QtWidgets
+        except ImportError:
+            self.skipTest("no PySide6")
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        self.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        self.painter = _FakePainter()
+        ui = types.ModuleType("substance_painter.ui")
+        self.menus, self.deleted = [], []
+        ui.add_menu = self.menus.append
+        ui.delete_ui_element = self.deleted.append
+        self.painter.modules["substance_painter.ui"] = ui
+        self.painter.modules["substance_painter"].ui = ui
+        sys.modules.update(self.painter.modules)
+        for name in self.painter.modules:
+            self.addCleanup(sys.modules.pop, name, None)
+        os.environ["SUBSTANCE_RPC_DISABLE_MAIN_THREAD"] = "1"
+        self.addCleanup(os.environ.pop, "SUBSTANCE_RPC_DISABLE_MAIN_THREAD", None)
+        substance_rpc.start_server(port=0)
+        self.addCleanup(substance_rpc.stop_server)
+
+    def test_the_menu_says_what_it_serves_and_pauses_and_goes_with_the_plugin(self):
+        from substance_rpc.ops import script_ops
+
+        self.addCleanup(script_ops.set_paused, False)
+        substance_rpc.publish_state()
+        substance_rpc.add_menu()
+        (menu,) = self.menus
+        self.assertEqual(menu.title(), "M3trik Scripts")
+        status, pause = menu.actions()
+        menu.aboutToShow.emit()
+        self.assertEqual(status.text(), "Serving test")
+        self.assertFalse(status.isEnabled(), "a status line, not a command")
+        pause.setChecked(True)
+        self.assertTrue(script_ops.is_paused())
+        menu.aboutToShow.emit()
+        self.assertTrue(status.text().startswith("Paused"))
+        substance_rpc.close_plugin()
+        self.assertEqual(self.deleted, [menu])
+        self.assertFalse(script_ops.is_paused(), "a plugin started again serves")
 
 
 class TestReloadServesTheFullSurface(unittest.TestCase):
@@ -769,8 +1219,9 @@ class TestReloadServesTheFullSurface(unittest.TestCase):
         "mesh.reload",
         "mesh.reload_status",
         "project.info",
-        "system.eval",
-        "js.evaluate",
+        "script.start",
+        "script.status",
+        "script.cancel",
     )
 
     def setUp(self):
@@ -802,7 +1253,7 @@ class TestReloadServesTheFullSurface(unittest.TestCase):
         port = _free_port()
         module.start_server(port=port)
         self.addCleanup(module.stop_server)
-        return PainterRpcClient(port=port, timeout=5.0).invoke("system.list_ops")
+        return _client(module, port).invoke("system.list_ops")
 
     def _assert_full_surface(self, module, how):
         ops = self._serve_and_list(module)

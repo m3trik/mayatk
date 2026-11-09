@@ -218,9 +218,10 @@ never touched.
 
 Nothing about the material or its UVs changes, so the engine does the
 compositing. A per-object map works in any engine as-is: the mesh's second UV
-set samples it directly. For Unity's native lightmap slots, add unitytk's
-`LightmapMetadataController.cs` to the project once. It reads the manifest on
-import and binds everything. The WebXR preview and the GLB export carry the
+set samples it directly. For Unity's native lightmap slots, add the unitytk
+package to the project (one line in its `Packages/manifest.json`): its import
+gives each model a Lightmap Set, which binds the maps whenever the model is in a
+scene. The WebXR preview and the GLB export carry the
 maps automatically; see pythontk's
 [Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md).
 

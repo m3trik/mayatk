@@ -23,18 +23,469 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from mayatk.mat_utils.substance_bridge._substance_bridge import (
     SEND_TO,
     ROUND_TRIP,
-    TARGET_AUTO,
-    TARGET_NEW,
-    TARGET_CURRENT,
+    PAINTER_AUTO,
+    PAINTER_NEW,
     SubstanceBridge,
     _TEMPLATE_DEFAULTS,
 )
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from base_test import PainterPluginsSandbox  # noqa: E402
+
+_PLUGINS = PainterPluginsSandbox()
+
+
+def setUpModule():
+    _PLUGINS.start()
+
+
+def tearDownModule():
+    _PLUGINS.stop()
+
+
+def _args(manifest_built=False, mesh_maps=None, high_poly_path=None, works_on="new", params=None, project=None):
+    """The ``args`` a script gets for a send that made these files."""
+    payload = ptk.Payload(
+        primary="C:/out/a.fbx",
+        extras={
+            "meta": {"WORKS_ON": works_on},
+            "manifest_path": "C:/out/a.materials.json",
+            "output_dir": "C:/out",
+            "staged_textures": [],
+            "high_poly_path": high_poly_path,
+            "manifest_built": manifest_built,
+            "mesh_maps": mesh_maps or {},
+        },
+    )
+    request = ptk.HandoffRequest(
+        template="new_project", mode=SEND_TO, params=params or {}, extras={"project": project} if project else {}
+    )
+    return SubstanceBridge().script_args(payload, request)
+
+
+def _record(rid, project=None, pid=1):
+    return {"id": rid, "pid": pid, "port": 1, "state": {"project": project}}
+
+
+class TestBuiltInScripts(unittest.TestCase):
+    """The scripts the bridge ships, run in Painter: what each runs on, and
+    that each is Python Painter can run (no legacy JS left)."""
+
+    WORKS_ON = {
+        "new_project": "new",
+        "update_mesh": "mesh",
+        "bake_lighting": "project",
+        "bake_mesh_maps": "project",
+        "export_textures": "project",
+    }
+
+    def _meta(self, stem):
+        return SubstanceBridge.parse_template(SubstanceBridge.template_path(stem))
+
+    def test_the_bundled_set(self):
+        self.assertEqual(sorted(p.stem for p in SubstanceBridge.list_templates()), sorted(self.WORKS_ON))
+
+    def test_each_compiles_and_says_what_it_works_on(self):
+        for stem, works_on in self.WORKS_ON.items():
+            with self.subTest(stem):
+                path = SubstanceBridge.template_path(stem)
+                compile(path.read_text(encoding="utf-8"), str(path), "exec")
+                self.assertEqual(self._meta(stem)["WORKS_ON"], works_on)
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("js.evaluate", text)
+                self.assertNotIn("alg.", text)
+
+    def test_new_project_builds_the_manifest_and_embeds_textures(self):
+        meta = self._meta("new_project")
+        self.assertTrue(meta["BUILD_MANIFEST"])
+        self.assertTrue(meta["FBX_OPTIONS"].get("FBXExportEmbeddedTextures"))
+
+    def test_update_mesh_overwrites_the_recorded_export(self):
+        self.assertTrue(self._meta("update_mesh")["REUSE_RECORDED_EXPORT"])
+
+    def test_bake_lighting_declares_its_own_rows(self):
+        rows = {r["key"]: r for r in ptk.ScriptTemplate.declared_rows(SubstanceBridge.template_path("bake_lighting"))}
+        for key in ("BAKE_RESOLUTION", "AO_RAYS", "AO_MAX_DISTANCE", "AO_SPREAD", "INCLUDE_CURVATURE"):
+            self.assertIn(key, rows)
+        self.assertEqual((rows["AO_RAYS"]["kind"], rows["AO_RAYS"]["default"], rows["AO_RAYS"]["maximum"]), ("int", 64, 256))
+
+
+class TestParseScriptHeader(unittest.TestCase):
+    """parse_template defends against every shape of broken header."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="substance_header_test_")
+        self.addCleanup(__import__("shutil").rmtree, self.tmpdir, True)
+
+    def _write(self, name, body, encoding="utf-8"):
+        path = Path(self.tmpdir) / name
+        path.write_text(body, encoding=encoding)
+        return path
+
+    def test_missing_constants_fall_back_to_defaults(self):
+        meta = SubstanceBridge.parse_template(self._write("blank.py", '"""empty"""\n'))
+        expected = dict(_TEMPLATE_DEFAULTS, BRIDGE_MODES=(SEND_TO,))
+        self.assertEqual(meta, expected)
+        self.assertEqual(meta["WORKS_ON"], "project", "a person's plain script runs on the open project")
+
+    def test_a_script_saved_with_a_bom_is_parsed(self):
+        """A UTF-8 BOM (Windows PowerShell 5.1 writes one) is not content."""
+        path = self._write("bom.py", 'WORKS_ON = "new"\n', encoding="utf-8-sig")
+        self.assertEqual(SubstanceBridge.parse_template(path)["WORKS_ON"], "new")
+
+    def test_modes_are_filtered_and_folded(self):
+        self.assertEqual(SubstanceBridge.parse_template(self._write("a.py", 'BRIDGE_MODES = ("send_to", "garbage")\n'))["BRIDGE_MODES"], (SEND_TO,))
+        self.assertEqual(SubstanceBridge.parse_template(self._write("b.py", 'BRIDGE_MODES = ("invalid",)\n'))["BRIDGE_MODES"], (SEND_TO,))
+        self.assertEqual(SubstanceBridge.parse_template(self._write("c.py", 'BRIDGE_MODES = ["send_to", "roundtrip"]\n'))["BRIDGE_MODES"], (SEND_TO, ROUND_TRIP))
+
+    def test_an_unknown_works_on_falls_back(self):
+        self.assertEqual(SubstanceBridge.parse_template(self._write("w.py", 'WORKS_ON = "everything"\n'))["WORKS_ON"], "project")
+
+    def test_wrong_types_and_non_literals_fall_back(self):
+        meta = SubstanceBridge.parse_template(self._write("t.py", 'WORKS_ON = 3\nBUILD_MANIFEST = "yes"\nFBX_OPTIONS = dict(a=1)\n'))
+        self.assertEqual((meta["WORKS_ON"], meta["BUILD_MANIFEST"], meta["FBX_OPTIONS"]), ("project", False, {}))
+
+    def test_a_dict_of_fbx_options_parses(self):
+        meta = SubstanceBridge.parse_template(self._write("o.py", 'FBX_OPTIONS = {"FBXExportTriangulate": True}\n'))
+        self.assertEqual(meta["FBX_OPTIONS"], {"FBXExportTriangulate": True})
+
+    def test_a_syntax_error_or_no_file_falls_back(self):
+        expected = dict(_TEMPLATE_DEFAULTS, BRIDGE_MODES=(SEND_TO,))
+        self.assertEqual(SubstanceBridge.parse_template(self._write("s.py", "this is not python {{[\n")), expected)
+        self.assertEqual(SubstanceBridge.parse_template(Path(self.tmpdir) / "nope.py"), expected)
+
+
+class _OwnConnection:
+    """A Painter this bridge launched, as its registry holds it."""
+
+    def __init__(self, record):
+        self.record = record
+
+    def is_alive(self):
+        return True
+
+
+class TestPickPainter(unittest.TestCase):
+    """Which Painter a script runs in: by what it works on, and the Painter row."""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.bridge = SubstanceBridge()
+        self.bridge.logger.setLevel("CRITICAL")
+        self.records = []
+        for target, value in (
+            ("painters", lambda: list(self.records)),
+            ("_connection_for", lambda record: ("attached", record["id"])),
+            ("_launch_new", lambda exe=None, gui=True, hidden=False: "launched"),
+        ):
+            patcher = mock.patch.object(self.bridge, target, side_effect=value) if target != "painters" else mock.patch.object(type(self.bridge), target, staticmethod(value))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_a_new_project_takes_a_painter_with_none_open_else_launches(self):
+        self.records = [_record("busy", {"file_path": "C:/p/a.spp"}), _record("free")]
+        self.assertEqual(self.bridge.pick_painter("new"), ("attached", "free"))
+        self.records = [_record("busy", {"file_path": "C:/p/a.spp"})]
+        self.assertEqual(self.bridge.pick_painter("new"), "launched")
+
+    def test_a_painter_paused_in_painter_is_never_taken_as_a_free_one(self):
+        paused = dict(_record("paused"), state={"project": None, "paused": True})
+        self.records = [paused]
+        self.assertEqual(self.bridge.pick_painter("new"), "launched")
+        self.assertEqual(self.bridge.pick_painter("project", project="C:/p/b.spp"), "launched")
+        self.assertIn("paused", SubstanceBridge.painter_label(paused))
+
+    def test_a_painter_this_bridge_launched_comes_first(self):
+        self.records = [_record("theirs"), _record("mine")]
+        self.bridge._instances = [_OwnConnection(self.records[1])]
+        self.assertEqual(self.bridge.pick_painter("new"), ("attached", "mine"))
+
+    def test_an_explicit_painter_for_update_mesh_must_hold_the_meshs_project(self):
+        self.records = [_record("other", {"mesh_path": "C:/m/b.fbx"})]
+        self.assertIsNone(self.bridge.pick_painter("mesh", choice="other", mesh="C:/m/a.fbx"))
+
+    def test_update_mesh_needs_the_painter_holding_the_meshs_project(self):
+        self.records = [_record("other", {"mesh_path": "C:/m/b.fbx"}), _record("it", {"mesh_path": "C:/m/a.fbx"})]
+        self.assertEqual(self.bridge.pick_painter("mesh", mesh="C:/m/a.fbx"), ("attached", "it"))
+        self.assertIsNone(self.bridge.pick_painter("mesh", mesh="C:/m/c.fbx"), "never a launch: no project to update")
+
+    def test_a_named_project_runs_where_it_is_open_else_in_a_free_painter(self):
+        self.records = [_record("free"), _record("holder", {"file_path": "C:/p/a.spp"})]
+        self.assertEqual(self.bridge.pick_painter("project", project="C:/p/a.spp"), ("attached", "holder"))
+        self.assertEqual(self.bridge.pick_painter("project", project="C:/p/b.spp"), ("attached", "free"))
+        self.records = [_record("holder", {"file_path": "C:/p/a.spp"})]
+        self.assertEqual(self.bridge.pick_painter("project", project="C:/p/b.spp"), "launched")
+
+    def test_the_open_project_runs_in_the_only_painter_and_never_guesses(self):
+        self.records = [_record("one", {"file_path": "C:/p/a.spp"})]
+        self.assertEqual(self.bridge.pick_painter("project"), ("attached", "one"))
+        self.records = []
+        self.assertIsNone(self.bridge.pick_painter("project"))
+        self.records = [_record("a"), _record("b")]
+        self.assertIsNone(self.bridge.pick_painter("project"), "several: the person picks")
+
+    def test_the_painter_row_names_one(self):
+        self.records = [_record("a"), _record("b", {"file_path": "C:/p/b.spp"})]
+        self.assertEqual(self.bridge.pick_painter("project", choice="b"), ("attached", "b"))
+        self.assertEqual(self.bridge.pick_painter("project", choice=PAINTER_NEW), "launched")
+        self.assertIsNone(self.bridge.pick_painter("project", choice="gone"))
+        self.assertIsNone(self.bridge.pick_painter("new", choice="b"), "a new project never replaces an open one")
+
+
+class _FakeRpc:
+    def __init__(self, conn, refuse=False):
+        self.conn, self.refuse, self.runs, self.opened = conn, refuse, [], []
+
+    def run_script(self, source, path="", args=None, expect=None, label=""):
+        if self.refuse:
+            raise RuntimeError("Painter now has another project open")
+        self.runs.append({"source": source, "path": path, "args": args, "expect": expect, "label": label})
+        return "job1"
+
+    def invoke(self, op, timeout=None, **kwargs):
+        assert op == "project.open", op
+        self.opened.append(kwargs["path"])
+        self.conn.held = {"name": "b", "uuid": "u-b", "file_path": kwargs["path"]}
+
+    def wait(self, job, timeout=3600.0, poll=0.5, on_status=None):
+        return {"job": job, "state": "done", "report": ["baked"], "label": "Bake Lighting"}
+
+
+class _FakeConnection:
+    def __init__(self, held=None, refuse=False):
+        self.held, self.record = held, {"id": "p1", "pid": 7, "state": {}}
+        self.rpc = _FakeRpc(self, refuse)
+
+    def project(self):
+        return self.held
+
+
+class TestDeliver(unittest.TestCase):
+    """The send's last step: the Painter's project checked, the script queued."""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.bridge = SubstanceBridge()
+        self.bridge.logger.setLevel("CRITICAL")
+        self.conn = _FakeConnection(held={"name": "a", "uuid": "u-a", "file_path": "C:/p/a.spp"})
+        for target, value in (("pick_painter", lambda *a, **k: self.conn), ("refresh_rpc_plugin", lambda: None)):
+            patcher = mock.patch.object(self.bridge, target, side_effect=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _deliver(self, stem, mode=SEND_TO, params=None):
+        path = SubstanceBridge.template_path(stem)
+        meta = SubstanceBridge.parse_template(path)
+        payload = ptk.Payload(
+            primary=str(path),  # a file that exists, standing in for the mesh
+            extras={"meta": meta, "manifest_path": "C:/out/a.materials.json", "output_dir": "C:/out", "staged_textures": []},
+        )
+        request = ptk.HandoffRequest(
+            template=stem, mode=mode, params=params or {}, extras={"_meta": meta, "_template_path": path}
+        )
+        return self.bridge._deliver(payload, request)
+
+    def test_a_new_project_is_queued_with_no_project_expected(self):
+        result = self._deliver("new_project")
+        (run,) = self.conn.rpc.runs
+        self.assertIsNone(run["expect"])
+        self.assertEqual(run["label"], "New Project")
+        self.assertTrue(run["args"]["MESH"].endswith("new_project.py"))
+        self.assertIn("import substance_painter", run["source"])
+        self.assertEqual((result["job"], result["delivered"]), ("job1", True))
+
+    def test_a_project_script_is_refused_by_painter_if_its_project_changed(self):
+        self._deliver("bake_lighting")
+        (run,) = self.conn.rpc.runs
+        self.assertEqual(run["expect"], {"uuid": "u-a", "path": "C:/p/a.spp"})
+        self.assertEqual(run["args"]["MESH"], "", "a project script gets no mesh")
+
+    def test_a_named_project_is_opened_in_a_painter_with_none(self):
+        self.conn.held = None
+        self._deliver("bake_lighting", params={"PAINTER_PROJECT": "C:/p/b.spp"})
+        self.assertEqual(self.conn.rpc.opened, ["C:/p/b.spp"])
+        self.assertEqual(self.conn.rpc.runs[0]["expect"], {"uuid": "u-b", "path": "C:/p/b.spp"})
+
+    def test_a_named_project_is_never_opened_over_another(self):
+        """Opening would close the project Painter holds, unsaved edits and all."""
+        result = self._deliver("bake_lighting", params={"PAINTER_PROJECT": "C:/p/b.spp"})
+        self.assertEqual((self.conn.rpc.opened, self.conn.rpc.runs), ([], []))
+        self.assertFalse(result["delivered"])
+
+    def test_a_script_declaring_only_round_trip_still_queues(self):
+        from unittest import mock
+
+        with mock.patch.object(SubstanceBridge, "parse_template", return_value=dict(_TEMPLATE_DEFAULTS, BRIDGE_MODES=(ROUND_TRIP,))):
+            request = ptk.HandoffRequest(template="bake_lighting", mode=SEND_TO, params={}, extras={})
+            self.assertTrue(self.bridge._preflight([], request))
+
+    def test_no_project_open_stops_before_painter(self):
+        self.conn.held = None
+        result = self._deliver("export_textures")
+        self.assertEqual(self.conn.rpc.runs, [])
+        self.assertFalse(result["delivered"])
+
+    def test_a_refused_run_is_said_not_raised(self):
+        self.conn.rpc.refuse = True
+        self.assertFalse(self._deliver("bake_lighting")["delivered"])
+
+    def test_a_round_trip_waits_for_the_jobs_end(self):
+        result = self._deliver("bake_lighting", mode=ROUND_TRIP)
+        self.assertEqual(result["status"]["state"], "done")
+        self.assertTrue(result["delivered"])
+
+    def test_no_painter_for_update_mesh_still_leaves_the_mesh_updated(self):
+        from unittest import mock
+
+        with mock.patch.object(self.bridge, "pick_painter", return_value=None):
+            result = self._deliver("update_mesh")
+        self.assertFalse(result["delivered"])
+        self.assertIsNone(result["job"])
+
+
+class TestDeliverInBackground(unittest.TestCase):
+    """A panel's send: the waits (a launch serving, a project opening) run in
+    the panel's background, silently; the queue and every word on its thread."""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.bridge = SubstanceBridge()
+        self.bridge.logger.setLevel("CRITICAL")
+        self.conn = _FakeConnection(held={"name": "a", "uuid": "u-a", "file_path": "C:/p/a.spp"})
+        self.picks, self.served, self.deferred, self.queued = [], [], [], []
+        patches = {
+            "pick_painter": lambda *a, **k: self.picks.append(k) or self.pick,
+            "refresh_rpc_plugin": lambda: None,
+            "_start_painter": lambda *a: self.conn,
+            "_served": lambda conn: self.served.append(conn) or "",
+        }
+        for target, value in patches.items():
+            patcher = mock.patch.object(self.bridge, target, side_effect=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.pick = self.conn
+
+    def _send(self, stem, params=None):
+        path = SubstanceBridge.template_path(stem)
+        meta = SubstanceBridge.parse_template(path)
+        payload = ptk.Payload(primary=str(path), extras={"meta": meta, "output_dir": "C:/out", "staged_textures": []})
+        extras = {
+            "_meta": meta,
+            "_template_path": path,
+            "background": lambda work, then: self.deferred.append((work, then)),
+            "on_queued": self.queued.append,
+        }
+        return self.bridge._deliver(payload, ptk.HandoffRequest(template=stem, mode=SEND_TO, params=params or {}, extras=extras))
+
+    def _finish(self):
+        ((work, then),) = self.deferred
+        then(work())
+
+    def test_a_launch_waits_in_the_background_and_queues_after(self):
+        self.pick = PAINTER_NEW
+        result = self._send("new_project")
+        self.assertIs(self.picks[0]["launch"], False, "the panel's send never launches inline")
+        self.assertTrue(result["pending"])
+        self.assertEqual((self.conn.rpc.runs, self.served), ([], []), "nothing waited for yet")
+        self._finish()
+        self.assertEqual(self.served, [self.conn])
+        (queued,) = self.queued
+        self.assertEqual((queued["job"], queued["connection"]), ("job1", self.conn))
+
+    def test_a_project_opens_in_the_background(self):
+        self.conn.held = None
+        self.assertTrue(self._send("bake_lighting", params={"PAINTER_PROJECT": "C:/p/b.spp"})["pending"])
+        self.assertEqual(self.conn.rpc.opened, [])
+        self._finish()
+        self.assertEqual(self.conn.rpc.opened, ["C:/p/b.spp"])
+        self.assertEqual(self.queued[0]["job"], "job1")
+
+    def test_a_painter_serving_with_the_project_open_queues_at_once(self):
+        result = self._send("bake_lighting")
+        self.assertEqual((result["job"], self.deferred, self.queued), ("job1", [], []))
+
+    def test_a_launch_that_never_serves_ends_the_run_saying_so(self):
+        self.pick = PAINTER_NEW
+        self.bridge._served.side_effect = lambda conn: "The launched Painter never served (see its log)."
+        self._send("new_project")
+        self._finish()
+        (queued,) = self.queued
+        self.assertEqual((queued["job"], queued["delivered"]), (None, False))
+
+
+class TestScriptArgs(unittest.TestCase):
+    def test_rows_default_under_the_request(self):
+        args = _args(params={"PAINTER_RESOLUTION": 2048})
+        self.assertEqual(args["PAINTER_RESOLUTION"], 2048)
+        self.assertIs(args["PAINTER_SAVE"], False)
+        self.assertEqual(args["PAINTER"], PAINTER_AUTO)
+
+    def test_the_mesh_only_for_a_script_on_a_mesh(self):
+        self.assertEqual(_args(works_on="new")["MESH"], "C:/out/a.fbx")
+        self.assertEqual(_args(works_on="project")["MESH"], "")
+
+    def test_the_project_from_the_row_or_the_caller(self):
+        self.assertEqual(_args(params={"PAINTER_PROJECT": "C:\\p\\a.spp"})["PROJECT"], "C:/p/a.spp")
+        self.assertEqual(_args(project="C:/p/b.spp")["PROJECT"], "C:/p/b.spp")
+
+
+class TestPreflightRefusals(unittest.TestCase):
+    def setUp(self):
+        self.bridge = SubstanceBridge()
+        self.bridge.logger.setLevel("CRITICAL")
+
+    def _request(self, template, **extras):
+        return ptk.HandoffRequest(template=template, mode=SEND_TO, params={}, extras=dict(extras))
+
+    def test_a_script_that_does_not_compile_never_reaches_painter(self):
+        from unittest import mock
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        with mock.patch.dict(os.environ, {ptk.UserConfig.CONFIG_ROOT_ENV_VAR: str(root)}):
+            mine = ptk.ScriptTemplate.user_dir("substance")
+            mine.mkdir(parents=True)
+            (mine / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+            self.assertFalse(self.bridge._preflight([], self._request("broken")))
+
+    def test_a_missing_script_or_mesh_is_refused(self):
+        self.assertFalse(self.bridge._preflight([], self._request("no_such_script")))
+        self.assertFalse(self.bridge._preflight([], self._request("new_project", mesh="C:/no/such.fbx")))
+        self.assertTrue(self.bridge._preflight([], self._request("bake_lighting")))
+
+
+class TestThePluginIsNeverInstalledUnasked(unittest.TestCase):
+    """A send refreshes the person's install; it never makes one."""
+
+    def test_the_engine_declares_its_plugin_for_the_shared_install(self):
+        """Every panel's *Install in Painter* runs the shared installer on this
+        spec, which follows ``SUBSTANCE_PAINTER_PLUGINS_PATH`` at call time."""
+        spec = SubstanceBridge.RPC_PLUGIN
+        self.assertEqual((spec.name, spec.app), ("substance_rpc", "Painter"))
+        self.assertIn(os.path.normcase(os.environ[PainterPluginsSandbox.ENV]), os.path.normcase(str(spec.destination())))
+
+    def test_a_send_only_refreshes_an_install_that_is_there(self):
+        """In the module's sandboxed plugins folder (never the person's)."""
+        from mayatk.mat_utils.substance_bridge.substance_rpc.installer import Installer
+
+        dest = Installer.user_plugin_dir() / "substance_rpc"
+        self.assertIn(os.path.normcase(os.environ[PainterPluginsSandbox.ENV]), os.path.normcase(str(dest)))
+        self.assertIsNone(Installer.refresh())
+        self.assertFalse(dest.exists(), "nothing there: a refresh installs nothing")
+        dest.mkdir(parents=True)
+        (dest / "__init__.py").write_text("# an older copy", encoding="utf-8")
+        self.addCleanup(Installer.uninstall)
+        self.assertEqual(Installer.refresh(), dest)
+        self.assertTrue(Installer.is_current())
+
 
 class TestTemplateDiscovery(unittest.TestCase):
-    def test_list_templates_finds_import(self):
+    def test_list_templates_finds_new_project(self):
         stems = [p.stem for p in SubstanceBridge.list_templates()]
-        self.assertIn("import", stems)
+        self.assertIn("new_project", stems)
 
     def test_list_templates_skips_underscore_prefixed(self):
         # Sanity: __init__.py is in templates/ but starts with underscore
@@ -44,124 +495,26 @@ class TestTemplateDiscovery(unittest.TestCase):
 
     def test_list_template_modes_returns_pairs(self):
         pairs = SubstanceBridge.list_template_modes()
-        self.assertIn(("import", SEND_TO), pairs)
+        self.assertIn(("new_project", SEND_TO), pairs)
 
+    def test_a_persons_own_template_shadows_the_bundled_one(self):
+        """Their folder (``ptk.ScriptTemplate.user_dir("substance")``) comes
+        first: a template named like a bundled one is the one listed and run."""
+        from unittest import mock
 
-class TestParseTemplate(unittest.TestCase):
-    """parse_template should defend against every shape of broken template."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="substance_template_test_")
-
-    def tearDown(self):
-        import shutil
-
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def _write(self, name: str, body: str) -> Path:
-        path = Path(self.tmpdir) / name
-        path.write_text(body, encoding="utf-8")
-        return path
-
-    def test_import_template_parses_correctly(self):
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "import")
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-        # LAUNCH_ARGS is the minimal flag set current Painter accepts:
-        # ``--mesh <fbx>``. The bridge appends ``--mesh-map`` per staged
-        # texture and ``--split-by-udim`` (presence flag) at runtime.
-        self.assertEqual(meta["LAUNCH_ARGS"], ["--mesh", "__FBX_PATH__"])
-        self.assertEqual(meta["RPC_SCRIPT"], "")
-        # import.py builds a manifest (folded in from the deleted with_textures
-        # template) and embeds Maya-referenced textures into the FBX.
-        self.assertEqual(meta["BUILD_MANIFEST"], True)
-        self.assertTrue(meta["FBX_OPTIONS"].get("FBXExportEmbeddedTextures"))
-
-    def test_missing_constants_fall_back_to_defaults(self):
-        path = self._write("blank.py", '"""empty template"""\n')
-        meta = SubstanceBridge.parse_template(path)
-        # Defaults: SEND_TO mode, empty args, empty script, no manifest.
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-        self.assertEqual(meta["LAUNCH_ARGS"], _TEMPLATE_DEFAULTS["LAUNCH_ARGS"])
-        self.assertEqual(meta["RPC_SCRIPT"], "")
-        self.assertEqual(meta["BUILD_MANIFEST"], False)
-
-    def test_a_template_saved_with_a_bom_is_parsed(self):
-        """A UTF-8 BOM (Windows PowerShell 5.1 writes one) is not content: the
-        template's constants must be read, not dropped for the defaults."""
-        path = Path(self.tmpdir) / "bom.py"
-        path.write_text('RPC_SCRIPT = "run.py"\n', encoding="utf-8-sig")
-        self.assertEqual(SubstanceBridge.parse_template(path)["RPC_SCRIPT"], "run.py")
-
-    def test_invalid_mode_is_filtered_out(self):
-        path = self._write(
-            "bogus.py",
-            'BRIDGE_MODES = ("send_to", "garbage_mode")\n',
-        )
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-
-    def test_all_invalid_modes_falls_back_to_send_to(self):
-        path = self._write("worse.py", 'BRIDGE_MODES = ("invalid",)\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-
-    def test_roundtrip_mode_preserved(self):
-        path = self._write(
-            "rt.py",
-            'BRIDGE_MODES = ("send_to", "roundtrip")\nRPC_SCRIPT = "alg.log(\'hi\')"\n',
-        )
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO, ROUND_TRIP))
-        self.assertIn("alg.log", meta["RPC_SCRIPT"])
-
-    def test_non_literal_value_falls_back(self):
-        # An expression (not a literal) should be rejected gracefully.
-        path = self._write(
-            "expr.py",
-            'BAKE_W = 2048\nLAUNCH_ARGS = ["--w", str(BAKE_W)]\n',
-        )
-        meta = SubstanceBridge.parse_template(path)
-        # Non-literal LAUNCH_ARGS -> fall back to default empty list.
-        self.assertEqual(meta["LAUNCH_ARGS"], _TEMPLATE_DEFAULTS["LAUNCH_ARGS"])
-
-    def test_wrong_type_falls_back(self):
-        path = self._write(
-            "wrong_type.py",
-            'LAUNCH_ARGS = "not a list"\nRPC_SCRIPT = 42\n',
-        )
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["LAUNCH_ARGS"], _TEMPLATE_DEFAULTS["LAUNCH_ARGS"])
-        self.assertEqual(meta["RPC_SCRIPT"], _TEMPLATE_DEFAULTS["RPC_SCRIPT"])
-
-    def test_non_string_launch_arg_entry_falls_back(self):
-        # All entries in LAUNCH_ARGS must be strings.
-        path = self._write(
-            "mixed.py",
-            'LAUNCH_ARGS = ["--scale", 1.5]\n',
-        )
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["LAUNCH_ARGS"], _TEMPLATE_DEFAULTS["LAUNCH_ARGS"])
-
-    def test_syntax_error_falls_back(self):
-        path = self._write("syntax.py", "this is not python {{[\n")
-        meta = SubstanceBridge.parse_template(path)
-        # All defaults preserved -- compare to the canonical defaults dict
-        # (with BRIDGE_MODES normalized to a tuple) so adding a new field
-        # to _TEMPLATE_DEFAULTS doesn't break this test.
-        expected = dict(_TEMPLATE_DEFAULTS)
-        expected["BRIDGE_MODES"] = (SEND_TO,)
-        self.assertEqual(meta, expected)
-
-    def test_missing_file_falls_back(self):
-        meta = SubstanceBridge.parse_template(Path(self.tmpdir) / "does_not_exist.py")
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-
-    def test_list_normalized_to_tuple(self):
-        # Author might use a list instead of a tuple.
-        path = self._write("list_modes.py", 'BRIDGE_MODES = ["send_to"]\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        with mock.patch.dict(os.environ, {ptk.UserConfig.CONFIG_ROOT_ENV_VAR: str(root)}):
+            mine = ptk.ScriptTemplate.user_dir("substance")
+            mine.mkdir(parents=True)
+            (mine / "new_project.py").write_text("BRIDGE_MODES = ('send_to',)\n", encoding="utf-8")
+            (mine / "my_bake.py").write_text("BRIDGE_MODES = ('send_to',)\n", encoding="utf-8")
+            self.assertEqual(SubstanceBridge.template_dirs()[0], mine)
+            self.assertEqual(SubstanceBridge.template_path("new_project"), mine / "new_project.py")
+            stems = [p.stem for p in SubstanceBridge.list_templates()]
+            self.assertIn("my_bake", stems)
+            self.assertEqual(stems.count("new_project"), 1)
+            self.assertIn(("my_bake", SEND_TO), SubstanceBridge.list_template_modes())
 
 
 class TestFbxOptionsField(unittest.TestCase):
@@ -206,172 +559,6 @@ class TestFbxOptionsField(unittest.TestCase):
         path = self._write("expr.py", "FBX_OPTIONS = dict(a=1)\n")
         meta = SubstanceBridge.parse_template(path)
         self.assertEqual(meta["FBX_OPTIONS"], {})
-
-
-class TestExportFbxField(unittest.TestCase):
-    """EXPORT_FBX template field controls whether send() exports an FBX."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="substance_export_test_")
-
-    def tearDown(self):
-        import shutil
-
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def _write(self, name, body):
-        path = Path(self.tmpdir) / name
-        path.write_text(body, encoding="utf-8")
-        return path
-
-    def test_default_is_true(self):
-        path = self._write("blank.py", '"""empty"""\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["EXPORT_FBX"], True)
-
-    def test_explicit_false_parses(self):
-        path = self._write("r.py", "EXPORT_FBX = False\n")
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["EXPORT_FBX"], False)
-
-    def test_wrong_type_falls_back_to_true(self):
-        path = self._write("r.py", 'EXPORT_FBX = "no"\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["EXPORT_FBX"], True)
-
-
-class TestBundledTemplates(unittest.TestCase):
-    """Sanity checks for the canonical templates the bridge ships with."""
-
-    def test_bundled_templates_full_set(self):
-        """Bundled set: import (new project), reimport (update current),
-        render (Iray render current), bake_lighting (import + bake Iray
-        lighting into diffuse). Guards against accidental drift."""
-        stems = sorted(p.stem for p in SubstanceBridge.list_templates())
-        self.assertEqual(stems, ["bake_lighting", "import", "reimport", "render"])
-
-    def test_import_template_embeds_textures_and_builds_manifest(self):
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "import")
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-        self.assertTrue(
-            meta["FBX_OPTIONS"].get("FBXExportEmbeddedTextures"),
-            "import.py must embed textures (replaces with_textures)",
-        )
-        self.assertTrue(meta["BUILD_MANIFEST"])
-        self.assertEqual(meta["TARGET_INSTANCE"], "new")
-
-    def test_reimport_is_send_to_not_roundtrip(self):
-        """Reimport is a one-way update of an existing instance, not a
-        roundtrip -- nothing comes back from Painter. It dispatches the
-        structured ``mesh.reload`` op (not legacy JS), overwrites the
-        recorded export path, and declares a manual-fallback hint."""
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "reimport")
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-        self.assertEqual(meta["TARGET_INSTANCE"], "current")
-        self.assertEqual(meta["RPC_SCRIPT"], "")
-        self.assertEqual(len(meta["RPC_OPS"]), 1)
-        op_name, op_kwargs = meta["RPC_OPS"][0]
-        self.assertEqual(op_name, "mesh.reload")
-        self.assertEqual(op_kwargs["mesh_path"], "__FBX_PATH__")
-        self.assertTrue(op_kwargs["preserve_strokes"])
-        self.assertTrue(meta["REUSE_RECORDED_EXPORT"])
-        self.assertIn("__FBX_PATH__", meta["NO_CONNECTION_HINT"])
-        self.assertTrue(meta["EXPORT_FBX"])
-
-    def test_render_template_skips_fbx_and_targets_current(self):
-        """render.py asks the running Painter to Iray-render itself; no
-        Maya FBX export needed, and it requires a live managed instance."""
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "render")
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-        self.assertEqual(meta["TARGET_INSTANCE"], "current")
-        self.assertFalse(meta["EXPORT_FBX"])
-        self.assertEqual(meta["LAUNCH_ARGS"], [])
-        self.assertIn("exportRenderImage", meta["RPC_SCRIPT"])
-
-    def test_bake_lighting_combines_import_and_iray_render(self):
-        """bake_lighting.py = import.py (new project + embed textures) +
-        a Painter-side Iray render that lands in the diffuse channel."""
-        path = next(
-            p for p in SubstanceBridge.list_templates() if p.stem == "bake_lighting"
-        )
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["BRIDGE_MODES"], (SEND_TO,))
-        self.assertEqual(meta["TARGET_INSTANCE"], "new")
-        # FBX is exported (it's the source of the new project).
-        self.assertTrue(meta["EXPORT_FBX"])
-        self.assertTrue(meta["FBX_OPTIONS"].get("FBXExportEmbeddedTextures"))
-        self.assertTrue(meta["BUILD_MANIFEST"])
-        # RPC body covers all three Painter-side phases.
-        self.assertIn('alg.shaders.setCurrent("iray")', meta["RPC_SCRIPT"])
-        self.assertIn("exportRenderImage", meta["RPC_SCRIPT"])
-        self.assertIn("insertLayerInstance", meta["RPC_SCRIPT"])
-        self.assertIn("baseColor", meta["RPC_SCRIPT"])
-
-
-class TestParameterRendering(unittest.TestCase):
-    """parameters.render_cli_context vs render_js_context: the bug we fixed.
-
-    The substance bridge no longer carries its own ``SubstanceParam``
-    subclass -- formatting moved to strategy callables in
-    :mod:`uitk.bridge.formatters` (``cli_raw`` / ``js_literal``). These
-    tests exercise those callables directly with a synthetic spec.
-    """
-
-    def _spec(self, kind, default=None):
-        from uitk.bridge import AttributeSpec
-
-        return AttributeSpec(key="X", label="X", kind=kind, default=default)
-
-    def test_format_cli_string_is_raw(self):
-        """CLI rendering must NOT auto-quote strings -- subprocess would
-        otherwise embed literal quotes inside argv values."""
-        from uitk.bridge import Formatters
-        from mayatk.mat_utils.substance_bridge.parameters import Parameters
-
-        # Unknown keys fall through to str() (the formatter is only
-        # consulted for keys present in PARAMS).
-        out = Parameters.render_cli_context({"UNKNOWN_KEY": "C:/some/path"})
-        self.assertEqual(out["UNKNOWN_KEY"], "C:/some/path")
-        # Direct spec test:
-        spec = self._spec("path", default="")
-        self.assertEqual(
-            Formatters.cli_raw(spec, "C:/Painter/template.spp"),
-            "C:/Painter/template.spp",
-        )
-
-    def test_format_js_string_is_quoted_and_escaped(self):
-        from uitk.bridge import Formatters
-
-        spec = self._spec("path", default="")
-        # Backslashes doubled, quotes escaped, wrapped in double quotes.
-        self.assertEqual(
-            Formatters.js_literal(spec, "C:\\foo\\bar"), '"C:\\\\foo\\\\bar"'
-        )
-        self.assertEqual(Formatters.js_literal(spec, 'say "hi"'), '"say \\"hi\\""')
-
-    def test_format_cli_bool_lowercased(self):
-        from uitk.bridge import Formatters
-
-        spec = self._spec("bool", default=False)
-        self.assertEqual(Formatters.cli_raw(spec, True), "true")
-        self.assertEqual(Formatters.cli_raw(spec, False), "false")
-
-    def test_format_cli_int_plain(self):
-        from uitk.bridge import Formatters
-
-        spec = self._spec("int", default=0)
-        self.assertEqual(Formatters.cli_raw(spec, 2048), "2048")
-
-    def test_format_cli_file_list_joins_with_pathsep(self):
-        import os as _os
-        from uitk.bridge import Formatters
-
-        spec = self._spec("file_list", default=[])
-        joined = Formatters.cli_raw(spec, ["a.png", "b.png"])
-        self.assertEqual(joined, _os.pathsep.join(["a.png", "b.png"]))
 
 
 class TestAssignedTextureStaging(unittest.TestCase):
@@ -554,123 +741,6 @@ class TestAssignedTextureStaging(unittest.TestCase):
         )
 
 
-class TestRenderTemplateJs(unittest.TestCase):
-    """Render template's RPC_SCRIPT must produce valid JS after substitution.
-
-    Specifically, the OUTPUT_DIR internal token must land inside JS quotes
-    (template-author-supplied) so the fallback expression
-    ``("__OUTPUT_DIR__" + "/painter_render.png")`` doesn't degenerate into
-    a bare-identifier parse error like ``C:/path + "/painter_render.png"``.
-    """
-
-    def _render(self, params=None):
-        bridge = SubstanceBridge()
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "render")
-        meta = SubstanceBridge.parse_template(path)
-        _cli, js_ctx = bridge._build_contexts(
-            fbx_path="/tmp/x.fbx",
-            manifest_path="/tmp/x.materials.json",
-            output_dir="/tmp/render_test",
-            params=params,
-        )
-        from pythontk import StrUtils as _StrUtils
-
-        return _StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
-
-    def test_internal_output_dir_token_is_quoted(self):
-        rendered = self._render(params=None)
-        # The OUTPUT_DIR fallback should appear inside JS double quotes,
-        # not as a bare identifier.
-        self.assertIn('"/tmp/render_test"', rendered)
-        # And the user-side path PARAM defaults to empty -> JS empty string.
-        self.assertIn('"" ||', rendered)
-
-    def test_user_supplied_path_overrides_fallback(self):
-        rendered = self._render(
-            params={"PAINTER_RENDER_OUTPUT_PATH": "C:/out/hero.png"},
-        )
-        self.assertIn('"C:/out/hero.png"', rendered)
-
-    def test_numeric_params_render_unquoted(self):
-        """Width/height/samples are ints -- they should drop into the JS
-        body bare (no JS quotes) so they're treated as numeric literals."""
-        rendered = self._render(
-            params={
-                "PAINTER_RENDER_WIDTH": 1920,
-                "PAINTER_RENDER_HEIGHT": 1080,
-                "PAINTER_RENDER_SAMPLES": 512,
-            },
-        )
-        self.assertIn("width: 1920", rendered)
-        self.assertIn("height: 1080", rendered)
-        self.assertIn("samples: 512", rendered)
-
-
-class TestBakeLightingTemplateJs(unittest.TestCase):
-    """bake_lighting.py shares the same JS-quoting pitfalls as render.py.
-    Lock in that __OUTPUT_DIR__ lands inside JS string quotes."""
-
-    def _render(self, params=None):
-        bridge = SubstanceBridge()
-        path = next(
-            p for p in SubstanceBridge.list_templates() if p.stem == "bake_lighting"
-        )
-        meta = SubstanceBridge.parse_template(path)
-        _cli, js_ctx = bridge._build_contexts(
-            fbx_path="/tmp/x.fbx",
-            manifest_path="/tmp/x.materials.json",
-            output_dir="/tmp/bake_test",
-            params=params,
-        )
-        from pythontk import StrUtils as _StrUtils
-
-        return _StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
-
-    def test_output_dir_token_is_quoted(self):
-        rendered = self._render(params=None)
-        self.assertIn('"/tmp/bake_test"', rendered)
-        # Default render output path is empty -> JS empty string + ||.
-        self.assertIn('"" ||', rendered)
-
-    def test_user_supplied_render_path_overrides_fallback(self):
-        rendered = self._render(
-            params={"PAINTER_RENDER_OUTPUT_PATH": "C:/bakes/baked.png"},
-        )
-        self.assertIn('"C:/bakes/baked.png"', rendered)
-
-
-class TestRenderOutputsGoToProjectFolders(unittest.TestCase):
-    """A render template's own output falls back to the scene project's
-    ``images`` folder, a lighting bake's (a texture Painter imports) to its
-    texture folder -- never the hand-off folder, which is scratch when the
-    Output Dir is blank. Added: 2026-10-13"""
-
-    def _render(self, stem, **dirs):
-        from pythontk import StrUtils as _StrUtils
-
-        bridge = SubstanceBridge()
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == stem)
-        meta = SubstanceBridge.parse_template(path)
-        _cli, js_ctx = bridge._build_contexts(
-            fbx_path="/tmp/x.fbx",
-            manifest_path="/tmp/x.materials.json",
-            output_dir="/tmp/handoff",
-            params=None,
-            **dirs,
-        )
-        return _StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
-
-    def test_render_falls_back_to_the_images_folder(self):
-        rendered = self._render("render", images_dir="/proj/images")
-        self.assertIn('"/proj/images" + "/painter_render.png"', rendered)
-        self.assertNotIn("/tmp/handoff", rendered)
-
-    def test_bake_lighting_falls_back_to_the_texture_folder(self):
-        rendered = self._render("bake_lighting", textures_dir="/proj/sourceimages")
-        self.assertIn('"/proj/sourceimages" + "/baked_lighting.png"', rendered)
-        self.assertNotIn("/tmp/handoff", rendered)
-
-
 class TestParamsPopulated(unittest.TestCase):
     """The infrastructure was previously scaffolded but PARAMS was empty.
     Guard against regressing back to an empty registry."""
@@ -685,15 +755,15 @@ class TestParamsPopulated(unittest.TestCase):
             "or the slot UI shows an empty panel",
         )
 
-    def test_import_template_references_params(self):
-        """import.py must reference at least one registered PARAM key so
+    def test_new_project_references_params(self):
+        """new_project.py must reference at least one registered PARAM key so
         the slot panel surfaces the matching widgets (PAINTER_INCLUDE_TEXTURES
         and PAINTER_SPLIT_BY_UDIM are wired post-render rather than baked
         into LAUNCH_ARGS, but appear in the file as comment references)."""
         from mayatk.mat_utils.substance_bridge import parameters as _params
 
         path = next(
-            (p for p in SubstanceBridge.list_templates() if p.stem == "import"),
+            (p for p in SubstanceBridge.list_templates() if p.stem == "new_project"),
             None,
         )
         self.assertIsNotNone(path)
@@ -701,51 +771,9 @@ class TestParamsPopulated(unittest.TestCase):
         self.assertGreater(
             len(used),
             0,
-            "import.py should reference at least one PARAMS key so the "
+            "new_project.py should reference at least one PARAMS key so the "
             "slot panel exposes a user-tunable knob",
         )
-
-
-class TestEndToEndLaunchArgsRendering(unittest.TestCase):
-    """End-to-end: load import.py, render LAUNCH_ARGS, verify CLI-clean."""
-
-    def test_import_renders_to_clean_argv(self):
-        bridge = SubstanceBridge()
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "import")
-        meta = SubstanceBridge.parse_template(path)
-
-        cli_ctx, _js_ctx = bridge._build_contexts(
-            fbx_path="/tmp/x.fbx",
-            manifest_path="/tmp/x.materials.json",
-            output_dir="/tmp",
-            params=None,  # defaults
-        )
-
-        rendered = bridge._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
-
-        # No argv entry should contain quote characters -- subprocess would
-        # otherwise embed them inside the actual argument value.
-        for arg in rendered:
-            self.assertNotIn('"', arg, f"argv entry has literal quotes: {arg!r}")
-            self.assertNotIn("'", arg, f"argv entry has literal quotes: {arg!r}")
-
-        # Current Painter only accepts ``--mesh <fbx>`` here; the dynamic
-        # ``--mesh-map`` / ``--split-by-udim`` extensions are appended by
-        # ``send()`` after this static render, not by the template.
-        self.assertEqual(rendered, ["--mesh", "/tmp/x.fbx"])
-
-    def test_render_launch_args_drops_only_flag_empty_pairs(self):
-        """Sanity: non-flag entries followed by empty strings are preserved
-        (the heuristic only triggers when the empty value comes after a
-        flag-style ``--`` or ``-`` token)."""
-        bridge = SubstanceBridge()
-        # ``--flag2`` is dropped because its value renders empty; the bare
-        # positional ``""`` value following ``positional`` is preserved.
-        result = bridge._render_launch_args(
-            ["positional", "__EMPTY__", "--flag2", "__EMPTY__", "--keep", "tail"],
-            {"EMPTY": ""},
-        )
-        self.assertEqual(result, ["positional", "", "--keep", "tail"])
 
 
 class TestPanelSurfacesAllPainterDialogOptions(unittest.TestCase):
@@ -777,354 +805,8 @@ class TestPainterLogResolution(unittest.TestCase):
         self.assertTrue(result is None or isinstance(result, str))
 
 
-class TestTargetInstanceParsing(unittest.TestCase):
-    """TARGET_INSTANCE field parsing + normalization."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="substance_target_test_")
-
-    def tearDown(self):
-        import shutil
-
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def _write(self, name, body):
-        path = Path(self.tmpdir) / name
-        path.write_text(body, encoding="utf-8")
-        return path
-
-    def test_default_is_auto(self):
-        path = self._write("blank.py", '"""empty"""\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["TARGET_INSTANCE"], TARGET_AUTO)
-
-    def test_explicit_new(self):
-        path = self._write("new.py", 'TARGET_INSTANCE = "new"\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["TARGET_INSTANCE"], TARGET_NEW)
-
-    def test_explicit_current(self):
-        path = self._write("cur.py", 'TARGET_INSTANCE = "current"\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["TARGET_INSTANCE"], TARGET_CURRENT)
-
-    def test_invalid_value_falls_back_to_default(self):
-        path = self._write("bad.py", 'TARGET_INSTANCE = "bogus"\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["TARGET_INSTANCE"], TARGET_AUTO)
-
-    def test_wrong_type_falls_back(self):
-        path = self._write("bad.py", "TARGET_INSTANCE = 42\n")
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["TARGET_INSTANCE"], TARGET_AUTO)
-
-
-class TestTargetValidation(unittest.TestCase):
-    """SubstanceBridge._validate_target rejects incompatible pairs."""
-
-    def test_auto_template_accepts_anything(self):
-        # All four shapes must be valid for an auto template.
-        for user_target in (TARGET_AUTO, TARGET_NEW, TARGET_CURRENT, 8090):
-            SubstanceBridge._validate_target(TARGET_AUTO, user_target)
-
-    def test_new_template_rejects_current(self):
-        with self.assertRaises(ValueError):
-            SubstanceBridge._validate_target(TARGET_NEW, TARGET_CURRENT)
-
-    def test_new_template_rejects_int_port(self):
-        with self.assertRaises(ValueError):
-            SubstanceBridge._validate_target(TARGET_NEW, 8090)
-
-    def test_new_template_accepts_auto_and_new(self):
-        SubstanceBridge._validate_target(TARGET_NEW, TARGET_AUTO)
-        SubstanceBridge._validate_target(TARGET_NEW, TARGET_NEW)
-
-    def test_current_template_rejects_new(self):
-        with self.assertRaises(ValueError):
-            SubstanceBridge._validate_target(TARGET_CURRENT, TARGET_NEW)
-
-    def test_current_template_accepts_current_and_int(self):
-        SubstanceBridge._validate_target(TARGET_CURRENT, TARGET_CURRENT)
-        SubstanceBridge._validate_target(TARGET_CURRENT, 8090)
-        SubstanceBridge._validate_target(TARGET_CURRENT, TARGET_AUTO)
-
-    def test_unknown_string_target_rejected(self):
-        with self.assertRaises(ValueError):
-            SubstanceBridge._validate_target(TARGET_AUTO, "garbage")
-
-
-class TestResolveConnection(unittest.TestCase):
-    """SubstanceBridge._resolve_connection routes target -> connection.
-
-    Tests use fake connection objects to keep the suite Maya/Painter-free.
-    """
-
-    def setUp(self):
-        # Patch SubstanceConnection.attach at the import site used by the
-        # bridge module, not the connection module.
-        from mayatk.mat_utils.substance_bridge import _substance_bridge as sb
-
-        self.sb = sb
-
-    def _make_live_conn(self, port=8090):
-        class FakeRpc:
-            def ping(self, timeout=0.5):
-                return True
-
-        class FakeConn:
-            def __init__(self):
-                self.rpc = FakeRpc()
-                self.rpc_port = port
-
-            def is_alive(self):
-                return True
-
-        return FakeConn()
-
-    def test_target_new_calls_launch_new(self):
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        sentinel = self._make_live_conn()
-        with patch.object(bridge, "_launch_new", return_value=sentinel) as mock_launch:
-            result = bridge._resolve_connection(TARGET_NEW, ["--mesh", "x.fbx"], False)
-            mock_launch.assert_called_once_with(["--mesh", "x.fbx"], False, None)
-            self.assertIs(result, sentinel)
-
-    def test_target_new_passes_painter_exe_through(self):
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        sentinel = self._make_live_conn()
-        with patch.object(bridge, "_launch_new", return_value=sentinel) as mock_launch:
-            bridge._resolve_connection(
-                TARGET_NEW, [], False, painter_exe="C:/custom/Painter.exe"
-            )
-            mock_launch.assert_called_once_with([], False, "C:/custom/Painter.exe")
-
-    def test_target_current_with_live_instance_reuses(self):
-        bridge = SubstanceBridge()
-        existing = self._make_live_conn()
-        bridge._instances = [existing]
-        # _launch_new must NOT be called.
-        from unittest.mock import patch
-
-        with patch.object(bridge, "_launch_new") as mock_launch:
-            result = bridge._resolve_connection(TARGET_CURRENT, [], False)
-            self.assertIs(result, existing)
-            mock_launch.assert_not_called()
-
-    def test_target_current_with_no_instances_errors(self):
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        # No managed instance AND the default-port probe finds nothing.
-        with patch.object(
-            self.sb.SubstanceConnection,
-            "attach",
-            side_effect=ConnectionRefusedError("nope"),
-        ):
-            result = bridge._resolve_connection(TARGET_CURRENT, [], False)
-        self.assertIsNone(result)
-
-    def test_target_current_discovers_default_port(self):
-        """Registry empty, but a Painter with the substance_rpc plugin is
-        listening on the default port -- 'current' must attach to it (the
-        cross-Maya-session reimport path) and register it for reuse."""
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        discovered = self._make_live_conn()
-        with patch.object(
-            self.sb.SubstanceConnection, "attach", return_value=discovered
-        ) as mock_attach:
-            result = bridge._resolve_connection(TARGET_CURRENT, [], False)
-        self.assertIs(result, discovered)
-        mock_attach.assert_called_once_with(
-            port=self.sb.DEFAULT_RPC_PORT, verify_timeout=1.0
-        )
-        self.assertIn(discovered, bridge._instances)
-
-    def test_target_auto_discovers_default_port_before_launching(self):
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        discovered = self._make_live_conn()
-        with (
-            patch.object(
-                self.sb.SubstanceConnection, "attach", return_value=discovered
-            ),
-            patch.object(bridge, "_launch_new") as mock_launch,
-        ):
-            result = bridge._resolve_connection(TARGET_AUTO, [], False)
-        self.assertIs(result, discovered)
-        mock_launch.assert_not_called()
-
-    def test_target_auto_with_live_reuses(self):
-        bridge = SubstanceBridge()
-        existing = self._make_live_conn()
-        bridge._instances = [existing]
-        from unittest.mock import patch
-
-        with patch.object(bridge, "_launch_new") as mock_launch:
-            result = bridge._resolve_connection(TARGET_AUTO, [], False)
-            self.assertIs(result, existing)
-            mock_launch.assert_not_called()
-
-    def test_target_auto_with_no_instances_launches(self):
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        sentinel = self._make_live_conn()
-        with (
-            patch.object(
-                self.sb.SubstanceConnection,
-                "attach",
-                side_effect=ConnectionRefusedError("nope"),
-            ),
-            patch.object(bridge, "_launch_new", return_value=sentinel) as mock_launch,
-        ):
-            result = bridge._resolve_connection(TARGET_AUTO, [], False)
-            self.assertIs(result, sentinel)
-            mock_launch.assert_called_once()
-
-    def test_target_int_attaches_and_registers(self):
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        attached = self._make_live_conn(port=9876)
-        with patch.object(
-            self.sb.SubstanceConnection, "attach", return_value=attached
-        ) as mock_attach:
-            result = bridge._resolve_connection(9876, [], False)
-            mock_attach.assert_called_once_with(port=9876)
-            self.assertIs(result, attached)
-            # Attached connection must be registered for subsequent "auto" calls.
-            self.assertIn(attached, bridge._instances)
-
-    def test_target_int_attach_failure_returns_none(self):
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        with patch.object(
-            self.sb.SubstanceConnection,
-            "attach",
-            side_effect=ConnectionRefusedError("nope"),
-        ):
-            result = bridge._resolve_connection(9876, [], False)
-            self.assertIsNone(result)
-            self.assertEqual(bridge._instances, [])
-
-
-class TestManagedInstanceRegistry(unittest.TestCase):
-    """SubstanceBridge.find_live_managed walks MRU and prunes dead."""
-
-    def test_empty_registry_returns_none(self):
-        bridge = SubstanceBridge()
-        self.assertIsNone(bridge.find_live_managed())
-        self.assertEqual(bridge.instances, [])
-
-    def test_dead_entries_are_pruned(self):
-        bridge = SubstanceBridge()
-
-        class FakeConn:
-            def __init__(self, alive):
-                self._alive = alive
-                self.rpc = None
-                self.rpc_port = 0
-
-            def is_alive(self):
-                return self._alive
-
-        bridge._instances = [FakeConn(False), FakeConn(False)]
-        result = bridge.find_live_managed()
-        self.assertIsNone(result)
-        # After the call, the dead entries should be gone.
-        self.assertEqual(bridge.instances, [])
-
-    def test_picks_most_recent_live_with_rpc(self):
-        bridge = SubstanceBridge()
-
-        class FakeRpc:
-            def __init__(self, alive):
-                self._alive = alive
-
-            def ping(self, timeout=0.5):
-                return self._alive
-
-        class FakeConn:
-            def __init__(self, alive, rpc_alive, port):
-                self._alive = alive
-                self.rpc = FakeRpc(rpc_alive)
-                self.rpc_port = port
-
-            def is_alive(self):
-                return self._alive
-
-        oldest = FakeConn(True, True, 8090)
-        middle_dead = FakeConn(False, False, 8091)
-        newest = FakeConn(True, True, 8092)
-        bridge._instances = [oldest, middle_dead, newest]
-
-        result = bridge.find_live_managed()
-        self.assertIs(result, newest)
-        # Dead middle is pruned; oldest + newest survive.
-        self.assertEqual(bridge.instances, [oldest, newest])
-
-
-class TestRpcOpsField(unittest.TestCase):
-    """RPC_OPS template field parsing + normalization."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="substance_rpcops_test_")
-
-    def tearDown(self):
-        import shutil
-
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def _write(self, name, body):
-        path = Path(self.tmpdir) / name
-        path.write_text(body, encoding="utf-8")
-        return path
-
-    def test_default_is_empty(self):
-        path = self._write("blank.py", '"""empty"""\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["RPC_OPS"], [])
-
-    def test_valid_pairs_parse_and_normalize_to_tuples(self):
-        path = self._write(
-            "ops.py",
-            'RPC_OPS = [["mesh.reload", {"mesh_path": "__FBX_PATH__"}], '
-            '("system.ping", {})]\n',
-        )
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(
-            meta["RPC_OPS"],
-            [
-                ("mesh.reload", {"mesh_path": "__FBX_PATH__"}),
-                ("system.ping", {}),
-            ],
-        )
-
-    def test_malformed_entry_voids_the_field(self):
-        # A half-broken op list must not dispatch a partial sequence.
-        path = self._write(
-            "bad.py",
-            'RPC_OPS = [("mesh.reload", {"mesh_path": "x"}), "not_a_pair"]\n',
-        )
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["RPC_OPS"], [])
-
-    def test_wrong_type_falls_back(self):
-        path = self._write("bad.py", 'RPC_OPS = "mesh.reload"\n')
-        meta = SubstanceBridge.parse_template(path)
-        self.assertEqual(meta["RPC_OPS"], [])
-
-
 class TestReimportSupportFields(unittest.TestCase):
-    """REUSE_RECORDED_EXPORT + NO_CONNECTION_HINT parsing."""
+    """REUSE_RECORDED_EXPORT parsing."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="substance_reimport_fields_")
@@ -1143,82 +825,14 @@ class TestReimportSupportFields(unittest.TestCase):
         path = self._write("blank.py", '"""empty"""\n')
         meta = SubstanceBridge.parse_template(path)
         self.assertFalse(meta["REUSE_RECORDED_EXPORT"])
-        self.assertEqual(meta["NO_CONNECTION_HINT"], "")
 
     def test_explicit_values_parse(self):
         path = self._write(
             "r.py",
-            'REUSE_RECORDED_EXPORT = True\nNO_CONNECTION_HINT = "do it by hand"\n',
+            "REUSE_RECORDED_EXPORT = True\n",
         )
         meta = SubstanceBridge.parse_template(path)
         self.assertTrue(meta["REUSE_RECORDED_EXPORT"])
-        self.assertEqual(meta["NO_CONNECTION_HINT"], "do it by hand")
-
-
-class TestRenderRpcOps(unittest.TestCase):
-    """_render_rpc_ops substitutes __KEY__ only inside string kwargs."""
-
-    def test_string_kwargs_substituted_others_untouched(self):
-        rendered = SubstanceBridge._render_rpc_ops(
-            [
-                (
-                    "mesh.reload",
-                    {
-                        "mesh_path": "__FBX_PATH__",
-                        "preserve_strokes": True,
-                        "count": 3,
-                    },
-                )
-            ],
-            {"FBX_PATH": "C:/tmp/scene.fbx"},
-        )
-        self.assertEqual(
-            rendered,
-            [
-                (
-                    "mesh.reload",
-                    {
-                        "mesh_path": "C:/tmp/scene.fbx",
-                        "preserve_strokes": True,
-                        "count": 3,
-                    },
-                )
-            ],
-        )
-
-
-class TestTargetNarrowing(unittest.TestCase):
-    """_preflight narrows the default 'auto' target to the template's
-    TARGET_INSTANCE, so a 'current'-only template (reimport) can never
-    silently launch a fresh Painter -- the originally reported bug."""
-
-    def _preflight(self, template, target=TARGET_AUTO):
-        import pythontk as ptk
-
-        bridge = SubstanceBridge()
-        request = ptk.HandoffRequest(
-            template=template,
-            mode=SEND_TO,
-            params={},
-            extras={"target": target},
-        )
-        ok = bridge._preflight(None, request)
-        return ok, request
-
-    def test_auto_narrows_to_current_for_reimport(self):
-        ok, request = self._preflight("reimport")
-        self.assertTrue(ok)
-        self.assertEqual(request.get("target"), TARGET_CURRENT)
-
-    def test_auto_narrows_to_new_for_import(self):
-        ok, request = self._preflight("import")
-        self.assertTrue(ok)
-        self.assertEqual(request.get("target"), TARGET_NEW)
-
-    def test_explicit_int_port_survives_narrowing(self):
-        ok, request = self._preflight("reimport", target=9876)
-        self.assertTrue(ok)
-        self.assertEqual(request.get("target"), 9876)
 
 
 class TestExportPathRecording(unittest.TestCase):
@@ -1281,141 +895,6 @@ class TestExportPathRecording(unittest.TestCase):
         SubstanceBridge._record_export_path("C:/tmp/x.fbx")  # must not raise
 
 
-class TestDeliverNoConnectionFallback(unittest.TestCase):
-    """When a hint-declaring template can't reach Painter, _deliver keeps
-    the produced FBX (already overwritten on disk) and logs the manual
-    steps instead of returning None."""
-
-    def _deliver(self, template):
-        import pythontk as ptk
-        from unittest.mock import patch
-
-        bridge = SubstanceBridge()
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == template)
-        meta = SubstanceBridge.parse_template(path)
-        payload = ptk.Payload(
-            primary="C:/tmp/scene.fbx",
-            extras={
-                "meta": meta,
-                "manifest_path": "C:/tmp/scene.materials.json",
-                "output_dir": "C:/tmp",
-                "staged_textures": [],
-                "referenced": set(),
-            },
-        )
-        request = ptk.HandoffRequest(
-            template=template,
-            mode=SEND_TO,
-            params={},
-            extras={"target": TARGET_CURRENT},
-        )
-        with (
-            patch.object(bridge, "ensure_rpc_plugin"),
-            patch.object(bridge, "_resolve_connection", return_value=None),
-        ):
-            return bridge._deliver(payload, request)
-
-    def test_reimport_returns_partial_result_with_hint(self):
-        result = self._deliver("reimport")
-        self.assertIsNotNone(result)
-        self.assertIsNone(result["connection"])
-        self.assertFalse(result["delivered"])
-        self.assertEqual(result["fbx"], "C:/tmp/scene.fbx")
-
-    def test_hintless_template_still_fails_hard(self):
-        # import.py declares no hint -- an unresolvable connection is a
-        # real failure there (nothing useful happened yet for the user).
-        result = self._deliver("import")
-        self.assertIsNone(result)
-
-
-class TestRpcOpIsolation(unittest.TestCase):
-    """One failing op must not cancel the ops queued behind it.
-
-    ``_project_setup_ops`` dispatches resolution first and the mesh-map
-    wiring last, and they are independent of one another. Sharing a single
-    ``try`` meant a Painter that could not serve ``project.set_resolution``
-    (a cosmetic knob) also never got asked to apply the mesh maps -- turning
-    "the resolution didn't take" into "no textures arrived", from one cause.
-    """
-
-    def _deliver(self, mode, failing_op):
-        import pythontk as ptk
-        from unittest.mock import patch
-
-        calls = []
-
-        class FakeRpc:
-            def wait_until_ready(self, timeout=60):
-                return True
-
-            def invoke(self, op, **kwargs):
-                calls.append(op)
-                if op == failing_op:
-                    raise RuntimeError(f"Unknown op: {op!r}")
-                return {"applied": True}
-
-            def eval_js(self, script):
-                calls.append("js")
-                return "js-ok"
-
-        class FakeConn:
-            rpc = FakeRpc()
-            rpc_port = 8090
-
-            def close(self):
-                calls.append("closed")
-
-        bridge = SubstanceBridge()
-        path = next(p for p in SubstanceBridge.list_templates() if p.stem == "import")
-        meta = SubstanceBridge.parse_template(path)
-        payload = ptk.Payload(
-            primary="C:/tmp/scene.fbx",
-            extras={
-                "meta": meta,
-                "manifest_path": __file__,  # must exist on disk for the op
-                "output_dir": "C:/tmp",
-                "staged_textures": [],
-                "referenced": {"PAINTER_RESOLUTION"},
-                "has_mesh_map_wiring": True,
-            },
-        )
-        request = ptk.HandoffRequest(
-            template="import",
-            mode=mode,
-            params={"PAINTER_RESOLUTION": 2048},
-            extras={"target": TARGET_NEW},
-        )
-        with (
-            patch.object(bridge, "ensure_rpc_plugin"),
-            patch.object(bridge, "_resolve_connection", return_value=FakeConn()),
-        ):
-            return bridge._deliver(payload, request), calls
-
-    def test_send_to_continues_past_a_failing_op(self):
-        result, calls = self._deliver(SEND_TO, "project.set_resolution")
-        self.assertIn("textures.apply_mesh_maps", calls)
-        self.assertIsNotNone(result)
-        self.assertFalse(result["delivered"])
-
-    def test_send_to_reports_which_ops_failed(self):
-        result, _ = self._deliver(SEND_TO, "project.set_resolution")
-        self.assertEqual(result.get("rpc_failed"), ["project.set_resolution"])
-
-    def test_a_clean_run_reports_no_failures(self):
-        result, calls = self._deliver(SEND_TO, None)
-        self.assertTrue(result["delivered"])
-        self.assertNotIn("rpc_failed", result)
-        self.assertEqual(calls, ["project.set_resolution", "textures.apply_mesh_maps"])
-
-    def test_roundtrip_still_aborts_on_the_first_failure(self):
-        """A roundtrip's later steps assume the earlier ones landed."""
-        result, calls = self._deliver(ROUND_TRIP, "project.set_resolution")
-        self.assertIsNone(result)
-        self.assertNotIn("textures.apply_mesh_maps", calls)
-        self.assertIn("closed", calls)
-
-
 class TestHighPolyPath(unittest.TestCase):
     """The companion high-poly file is derived from the main export path."""
 
@@ -1431,75 +910,11 @@ class TestHighPolyPath(unittest.TestCase):
             "C:/tmp/asset.v002_source.fbx",
         )
 
-    def test_context_exposes_high_poly_token(self):
-        bridge = SubstanceBridge()
-        cli, js = bridge._build_contexts(
-            fbx_path="C:\\tmp\\a.fbx",
-            manifest_path="C:\\tmp\\a.json",
-            output_dir="C:\\tmp",
-            params={},
-            high_poly_path="C:\\tmp\\a_high.fbx",
-        )
-        self.assertEqual(cli["HIGH_POLY_PATH"], "C:/tmp/a_high.fbx")
-        self.assertEqual(js["HIGH_POLY_PATH"], "C:/tmp/a_high.fbx")
-
-    def test_context_token_is_empty_without_a_high_poly(self):
-        # A template referencing __HIGH_POLY_PATH__ must degrade to an empty
-        # slot, never to a path pointing at a file that was not written.
-        bridge = SubstanceBridge()
-        cli, _js = bridge._build_contexts(
-            fbx_path="C:/tmp/a.fbx",
-            manifest_path="C:/tmp/a.json",
-            output_dir="C:/tmp",
-            params={},
-        )
-        self.assertEqual(cli["HIGH_POLY_PATH"], "")
-
-
-class TestProjectSetupOps(unittest.TestCase):
-    """Resolution / high-poly reach Painter as *appended* RPC ops, and only
-    when the user actually asked for them -- an ordinary send must keep an
-    empty RPC_OPS so it never waits on the plugin endpoint."""
-
-    def _ops(self, high_poly=None, referenced=(), **params):
-        return SubstanceBridge._project_setup_ops(high_poly, set(referenced), params)
-
-    def test_nothing_requested_yields_no_ops(self):
-        self.assertEqual(self._ops(), [])
-
-    def test_resolution_requires_the_template_to_claim_it(self):
-        # A stale panel value must not leak into a template (render.py)
-        # that never surfaced the widget.
-        self.assertEqual(self._ops(PAINTER_RESOLUTION=4096), [])
-
-    def test_resolution_dispatched_when_claimed(self):
-        ops = self._ops(referenced=["PAINTER_RESOLUTION"], PAINTER_RESOLUTION=4096)
-        self.assertEqual(ops, [("project.set_resolution", {"size": 4096})])
-
-    def test_project_default_resolution_is_inert(self):
-        # The "Project default" choice is 0 -- leave Painter alone and skip
-        # the round-trip entirely.
-        self.assertEqual(
-            self._ops(referenced=["PAINTER_RESOLUTION"], PAINTER_RESOLUTION=0), []
-        )
-
-    def test_high_poly_dispatched_when_a_file_was_written(self):
-        ops = self._ops(high_poly="C:\\tmp\\a_high.fbx")
-        self.assertEqual(
-            ops, [("bake.set_high_poly", {"mesh_path": "C:/tmp/a_high.fbx"})]
-        )
-
-    def test_resolution_precedes_high_poly(self):
-        # Resolution first: resizing a texture set after pointing it at a
-        # bake source is the order Painter's own dialog implies.
-        ops = self._ops(
-            high_poly="C:/tmp/a_high.fbx",
-            referenced=["PAINTER_RESOLUTION"],
-            PAINTER_RESOLUTION=2048,
-        )
-        self.assertEqual(
-            [name for name, _ in ops], ["project.set_resolution", "bake.set_high_poly"]
-        )
+    def test_the_high_poly_rides_in_the_scripts_args(self):
+        args = _args(high_poly_path="C:\\tmp\\a_source.fbx")
+        self.assertEqual(args["HIGH_POLY"], "C:/tmp/a_source.fbx")
+        # Without one the slot is empty, never a path to a file not written.
+        self.assertEqual(_args()["HIGH_POLY"], "")
 
 
 class TestTemplatesClaimSetupParams(unittest.TestCase):
@@ -1513,22 +928,23 @@ class TestTemplatesClaimSetupParams(unittest.TestCase):
         text = (_TEMPLATE_DIR / f"{stem}.py").read_text(encoding="utf-8")
         return params.Parameters.referenced_keys(text)
 
-    def test_import_claims_resolution_and_bake_source(self):
-        keys = self._referenced("import")
+    def test_new_project_claims_resolution_and_bake_source(self):
+        keys = self._referenced("new_project")
         self.assertIn("PAINTER_RESOLUTION", keys)
         self.assertIn("BAKE_SOURCE_SET", keys)
 
-    def test_reimport_claims_resolution_and_bake_source(self):
-        keys = self._referenced("reimport")
+    def test_update_mesh_claims_resolution_and_bake_source(self):
+        keys = self._referenced("update_mesh")
         self.assertIn("PAINTER_RESOLUTION", keys)
         self.assertIn("BAKE_SOURCE_SET", keys)
 
-    def test_render_claims_neither(self):
-        # render.py works on the open project and exports nothing -- neither
-        # knob belongs on its panel.
-        keys = self._referenced("render")
-        self.assertNotIn("PAINTER_RESOLUTION", keys)
-        self.assertNotIn("BAKE_SOURCE_SET", keys)
+    def test_a_script_on_a_project_claims_neither(self):
+        # It exports nothing: neither knob belongs on its panel.
+        for stem in ("bake_lighting", "bake_mesh_maps", "export_textures"):
+            with self.subTest(stem):
+                keys = self._referenced(stem)
+                self.assertNotIn("PAINTER_RESOLUTION", keys)
+                self.assertNotIn("BAKE_SOURCE_SET", keys)
 
     def test_the_export_bake_source_checkbox_is_gone(self):
         """The set's contents are the switch; a second control could disagree.
@@ -1539,7 +955,7 @@ class TestTemplatesClaimSetupParams(unittest.TestCase):
         from mayatk.mat_utils.substance_bridge import parameters as params
 
         self.assertNotIn("PAINTER_HIGH_POLY", params.PARAMS)
-        for stem in ("import", "reimport", "bake_lighting", "render"):
+        for stem in ("new_project", "update_mesh", "bake_lighting", "bake_mesh_maps", "export_textures"):
             with self.subTest(template=stem):
                 self.assertNotIn("PAINTER_HIGH_POLY", self._referenced(stem))
 
@@ -1549,10 +965,10 @@ class TestTemplatesClaimSetupParams(unittest.TestCase):
         from mayatk.mat_utils.substance_bridge import parameters as params
 
         self.assertNotIn("PAINTER_UNPACK_MAPS", params.PARAMS)
-        self.assertNotIn("PAINTER_UNPACK_MAPS", self._referenced("import"))
+        self.assertNotIn("PAINTER_UNPACK_MAPS", self._referenced("new_project"))
 
-    def test_import_claims_the_texture_affix(self):
-        self.assertIn("PAINTER_TEXTURE_AFFIX", self._referenced("import"))
+    def test_new_project_claims_the_texture_affix(self):
+        self.assertIn("PAINTER_TEXTURE_AFFIX", self._referenced("new_project"))
 
     def test_setup_params_are_registered(self):
         from mayatk.mat_utils.substance_bridge import parameters as params
@@ -1739,21 +1155,11 @@ class TestMeshMapAssignments(unittest.TestCase):
             SubstanceBridge._mesh_map_assignments({"M": {"normal": "n.png"}}, []), {}
         )
 
-    def test_wiring_op_is_dispatched_only_with_a_manifest(self):
-        without = SubstanceBridge._project_setup_ops(None, set(), {})
-        self.assertEqual(without, [])
-        with_manifest = SubstanceBridge._project_setup_ops(
-            None, set(), {}, manifest_path=r"C:\out\a.materials.json"
-        )
-        self.assertEqual(
-            with_manifest,
-            [
-                (
-                    "textures.apply_mesh_maps",
-                    {"manifest_path": "C:/out/a.materials.json"},
-                )
-            ],
-        )
+    def test_the_wiring_reaches_the_script_only_with_a_manifest(self):
+        self.assertEqual(_args()["MANIFEST"], "")
+        args = _args(manifest_built=True, mesh_maps={"M": {"normal": "C:/n.png"}})
+        self.assertEqual(args["MANIFEST"], "C:/out/a.materials.json")
+        self.assertEqual(args["MESH_MAPS"], {"M": {"normal": "C:/n.png"}})
 
 
 class TestTextureAffixNaming(unittest.TestCase):

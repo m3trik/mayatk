@@ -12,8 +12,10 @@ covers exactly the target's projected bounding box; an overhead source
 draws the footprint), world-space light reads, the material wiring VP2
 renders per pixel, the target/source stamps, re-attaching (for_node /
 from_plane), the Utility operations (set_source, unbake, rebuild),
-silhouette recalculation, bake-to-keyframes (with the fade, the rotation
-unroll and the sparse visibility mirror), and the export metadata contract.
+silhouette recalculation, bake-to-keyframes (the transform and the
+rotation unroll; the fade is never keyed), the fade against the shared model
+(``pythontk.ShadowProjection.fade``), and the export metadata contract
+(shadows v3: a horizon map on every plane).
 
 Reference geometry: a 2x2x2 cube at the origin -> contact (0, -1, 0),
 objectHeight 2, footprintRadius = hypot(2, 2) / 2 = 1.4142, ground 0.
@@ -37,6 +39,26 @@ except ImportError:
 import pythontk as ptk
 from pythontk import HeightFieldMap, ShadowAtlas, ShadowProjection
 from base_test import MayaTkTestCase
+
+
+def _drop_fade_node(plane):
+    """Turn *plane*'s rig into one built before the fade node (shadows v2):
+    its ``opacity`` feeds the silhouette's multiplier itself, and a live
+    expression drives it with the preview."""
+    fade = ShadowRig._fade_node(plane)
+    mult = cmds.listConnections(
+        f"{fade}.output", source=False, destination=True, type="multiplyDivide"
+    )[0]
+    for chan in "XYZ":
+        cmds.connectAttr(f"{plane}.opacity", f"{mult}.input2{chan}", force=True)
+    expr = f"{plane.split('|')[-1]}_expr"
+    text = cmds.expression(expr, query=True, string=True) if cmds.objExists(expr) else None
+    cmds.delete(fade)
+    if text:
+        cmds.expression(
+            expr, edit=True, string=text.replace(f"{fade}.input2 =", f"{plane}.opacity =")
+        )
+    assert ShadowRig._fade_node(plane) is None
 
 
 class TestShadowRig(MayaTkTestCase):
@@ -75,7 +97,7 @@ class TestShadowRig(MayaTkTestCase):
     # ------------------------------------------------------ model reference
     @staticmethod
     def _plane_state(plane):
-        return {
+        state = {
             ch: cmds.getAttr(f"{plane}.{ch}")
             for ch in (
                 "translateX",
@@ -84,9 +106,11 @@ class TestShadowRig(MayaTkTestCase):
                 "rotateY",
                 "scaleX",
                 "scaleZ",
-                "opacity",
             )
         }
+        # The fade the material draws (the preview, on its fade node).
+        state["opacity"] = ShadowRig.viewport_fade(plane)
+        return state
 
     def assertPlaneMatchesModel(self, plane, places=3):
         """The expression's placement equals the pythontk model's for the
@@ -205,7 +229,8 @@ class TestShadowRig(MayaTkTestCase):
 
     def test_material_wiring(self):
         """standardSurface with the silhouette in baseColor and
-        ``file alpha x plane.opacity`` into opacity — the one wiring VP2
+        ``file alpha x plane.opacity x the preview fade`` into opacity (the
+        fade on the material's ``<plane>_fade``, never the plane) — the one wiring VP2
         renders per pixel (a Stingray transparent graph draws a solid
         square: measured 2026-09-02)."""
         rig = self._make()
@@ -221,9 +246,24 @@ class TestShadowRig(MayaTkTestCase):
             cmds.listConnections(f"{mult}.input1X", source=True, plugs=True),
             [f"{file_node}.outAlpha"],
         )
+        fade = ShadowRig._fade_node(plane)
+        self.assertEqual(cmds.nodeType(fade), "multDoubleLinear")
+        for chan in "XYZ":
+            self.assertEqual(
+                cmds.listConnections(f"{mult}.input2{chan}", source=True, plugs=True),
+                [f"{fade}.output"],
+            )
         self.assertEqual(
-            cmds.listConnections(f"{mult}.input2X", source=True, plugs=True),
+            cmds.listConnections(f"{fade}.input1", source=True, plugs=True),
             [f"{plane}.opacity"],
+        )
+        self.assertEqual(
+            cmds.nodeType(cmds.listConnections(f"{fade}.input2", source=True)[0]),
+            "expression",
+        )
+        self.assertFalse(
+            cmds.listConnections(f"{plane}.opacity", source=True, destination=False),
+            "the plane's opacity is authored, never the preview's",
         )
         self.assertEqual(
             cmds.listConnections(f"{shader}.opacity", source=True, plugs=True),
@@ -417,14 +457,14 @@ class TestShadowRig(MayaTkTestCase):
         follows the ray through the contact) and fades with the rise."""
         rig = self._make()
         plane = rig.shadow_plane
-        opacity_grounded = cmds.getAttr(f"{plane}.opacity")
+        opacity_grounded = ShadowRig.viewport_fade(plane)
         self.assertGreater(opacity_grounded, 0.0)
 
         cmds.setAttr(f"{self.cube}.translateY", 3)  # contact y = 2
         model = self.assertPlaneMatchesModel(plane)
         self.assertAlmostEqual(model.k_base, 10.0 / 8.0, places=4)
         self.assertAlmostEqual(model.anchor[0], 5 - 5 * 1.25, places=4)
-        self.assertLess(cmds.getAttr(f"{plane}.opacity"), opacity_grounded * 0.55)
+        self.assertLess(ShadowRig.viewport_fade(plane), opacity_grounded * 0.55)
 
     def _edge_x(self, plane, local_z):
         """World X of the plane's near (``local_z = -0.5``) or far (``+0.5``)
@@ -818,12 +858,14 @@ class TestShadowRig(MayaTkTestCase):
 
     # ------------------------------------------------------------------ bake
     def test_bake(self):
-        """bake() keys the driven channels AND the fade over the range and
-        removes the expression + driver nodes; values survive the bake."""
+        """bake() keys the driven transform channels over the range and
+        removes the expression + driver nodes; values survive the bake. The
+        fade is not keyed (shadows v3: every reader evaluates it from the
+        record): the baked plane's viewport fade holds at its intensity."""
         rig = self._make()
         plane = rig.shadow_plane
         driven_tx = cmds.getAttr(f"{plane}.translateX")
-        driven_opacity = cmds.getAttr(f"{plane}.opacity")
+        cmds.setAttr(f"{plane}.shadowIntensity", 0.7)
 
         cmds.playbackOptions(min=1, max=3)
         baked = rig.bake(1, 3)
@@ -835,14 +877,12 @@ class TestShadowRig(MayaTkTestCase):
             cmds.keyframe(f"{plane}.translateX", q=True, keyframeCount=True), 3
         )
         self.assertEqual(
-            cmds.keyframe(f"{plane}.opacity", q=True, keyframeCount=True), 3
+            cmds.keyframe(f"{plane}.opacity", q=True, keyframeCount=True), 0
         )
         self.assertAlmostEqual(
             cmds.getAttr(f"{plane}.translateX", time=2), driven_tx, places=3
         )
-        self.assertAlmostEqual(
-            cmds.getAttr(f"{plane}.opacity", time=2), driven_opacity, places=3
-        )
+        self.assertAlmostEqual(ShadowRig.viewport_fade(plane), 0.7, places=6)
         # A second bake finds no live expression -> no-op.
         self.assertEqual(ShadowRig.bake_planes([plane]), [])
 
@@ -860,23 +900,206 @@ class TestShadowRig(MayaTkTestCase):
         jumps = [abs(b - a) for a, b in zip(values, values[1:])]
         self.assertLess(max(jumps), 90.0, values)
 
-    def test_bake_mirrors_fade_to_sparse_visibility(self):
-        """A baked fade that reaches zero (the target rising past fadeHeight)
-        leaves SPARSE visibility keys bounding the fade — the pairs Unity's
-        opacity importer rebuilds a fade from — not one key per frame."""
+    def test_a_baked_plane_takes_no_part_in_render_effects(self):
+        """Bug-class: a v2 bake keyed the fade on the plane's ``opacity`` and
+        mirrored its zero runs to visibility keys, so every shadow plane rode
+        the ``render_effects`` record -- a second statement of a fade the
+        record now states once (its terms, ``ShadowProjection.fade``). A
+        fade that reaches zero (the target rising past fadeHeight) leaves no
+        opacity or visibility key, and the record lists no track for the
+        plane. Changed: 2026-11-07."""
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
         rig = self._make()
         plane = rig.shadow_plane
         cmds.setKeyframe(self.cube, attribute="translateY", t=1, v=0)
         cmds.setKeyframe(self.cube, attribute="translateY", t=12, v=10)
         cmds.setKeyframe(self.cube, attribute="translateY", t=24, v=0)
         cmds.playbackOptions(min=1, max=24)
+        cmds.currentTime(12)
+        self.assertEqual(ShadowRig.viewport_fade(plane), 0.0, "the live fade")
         rig.bake(1, 24)
-        self.assertEqual(cmds.getAttr(f"{plane}.opacity", time=12), 0.0)
-        vis_values = cmds.keyframe(f"{plane}.visibility", q=True, valueChange=True)
-        self.assertTrue(vis_values)
-        self.assertLessEqual(len(vis_values), 6, vis_values)
-        self.assertIn(0.0, vis_values)
-        self.assertIn(1.0, vis_values)
+        for channel in ("opacity", "visibility"):
+            with self.subTest(channel=channel):
+                self.assertEqual(
+                    cmds.keyframe(f"{plane}.{channel}", q=True, keyframeCount=True), 0
+                )
+        self.assertEqual(RenderEffects.visibility_tracks(), [])
+
+    def test_a_centimetre_rig_exported_in_metres_previews_the_records_fade(self):
+        """Bug: the record's lengths are written in the export's unit (the
+        working one at the write, which the Scene Exporter switches), while
+        the rig's preview ramps the source's rise over ONE RIG UNIT -- so a
+        centimetre rig exported in metres stated nothing of its 1 cm ramp and
+        every reader ramped over the record's unit, a metre: half its
+        preview's fade here, and a hundredth in the ramp. The plane states
+        its ramp (``source_ramp``): one rig unit, in the record's. Added:
+        2026-11-07."""
+        rig = self._make()  # a centimetre rig
+        plane = rig.shadow_plane
+        cmds.setAttr(f"{plane}.falloffPower", 0.0)  # the ramp alone decides
+        C = cmds.xform(rig.contact_locator, q=True, ws=True, t=True)
+        cmds.xform(rig.light, ws=True, t=(C[0] + 30.0, C[1] + 0.5, C[2]))
+        live = ShadowRig.viewport_fade(plane)
+        self.assertAlmostEqual(live, 0.5, places=6, msg="half a centimetre in")
+        cmds.currentUnit(linear="m")
+        self.addCleanup(cmds.currentUnit, linear="cm")
+        rec = ShadowRig.plane_record(plane)
+        unit = ShadowRig.unit_scale()
+        self.assertEqual(unit, 1.0)
+        self.assertAlmostEqual(rec["source_ramp"], 0.01, places=9)
+        C = cmds.xform(rig.contact_locator, q=True, ws=True, t=True)
+        L = cmds.xform(rig.light, q=True, ws=True, t=True)
+        self.assertAlmostEqual(ptk.ShadowRecord.fade(rec, unit, C, L), live, places=6)
+
+    def test_an_export_retires_a_v2_bakes_fade_keys(self):
+        """Bug: a plane baked under shadows v2 kept its keyed ``opacity`` and
+        the visibility keys mirrored from it -- ``bake_planes`` skips a baked
+        plane, and only Set Source and Unbake cleared them -- so its export
+        still shipped a ``render_effects`` track for it, and every v3 reader,
+        which evaluates the fade itself, faded it twice. The export strips
+        them before any record is produced, holds the plane's fade at its
+        intensity, and says so once. Added: 2026-11-07."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        rig = self._make()
+        plane = rig.shadow_plane
+        leaf = plane.split("|")[-1]
+        cmds.setAttr(f"{plane}.shadowIntensity", 0.7)
+        cmds.playbackOptions(min=1, max=3)
+        rig.bake(1, 3)
+        # What a v2 bake left: no fade node, the fade keyed, its zero run
+        # mirrored.
+        _drop_fade_node(plane)
+        for t, v in ((1, 0.6), (2, 0.0), (3, 0.4)):
+            cmds.setKeyframe(plane, attribute="opacity", time=t, value=v)
+        RenderEffects.sync_visibility_from_opacity([plane])
+        self.assertGreater(
+            cmds.keyframe(f"{plane}.visibility", q=True, keyframeCount=True), 0
+        )
+        self.assertIn(leaf, [t["node"] for t in RenderEffects.visibility_tracks()])
+
+        with FbxUtils.export_prepared(FbxUtils.export_context()) as snapshot:
+            effects = snapshot.produced.get("render_effects")
+        tracks = effects.payload.get("tracks", []) if effects is not None else []
+        self.assertNotIn(leaf, [t["node"] for t in tracks])
+        for channel in ("opacity", "visibility"):
+            with self.subTest(channel=channel):
+                self.assertEqual(
+                    cmds.keyframe(f"{plane}.{channel}", q=True, keyframeCount=True), 0
+                )
+        self.assertAlmostEqual(ShadowRig.viewport_fade(plane), 0.7, places=6)
+        # The hold is on its new fade node, never on the opacity the exporter
+        # reads as authored (it held 0.7 there: the intensity shipped twice).
+        self.assertIsNotNone(ShadowRig._fade_node(plane))
+        self.assertEqual(cmds.getAttr(f"{plane}.opacity"), 1.0)
+        self.assertTrue(cmds.getAttr(f"{plane}.visibility"))
+        told = [n for n in snapshot.noted.get("shadows", []) if leaf in n]
+        self.assertEqual(len(told), 1, snapshot.noted)
+        with FbxUtils.export_prepared(FbxUtils.export_context()) as again:
+            pass
+        self.assertEqual([n for n in again.noted.get("shadows", []) if leaf in n], [])
+
+    def test_a_failed_rebake_and_a_left_out_plane_are_told_once(self):
+        """Bug: an export that could not re-bake a plane's existing map
+        shipped the old one in silence, and a plane left out with no map was
+        only logged -- on every authoring publish, each dial change. Both go
+        through the export's report (``ctx.note``), once a session per
+        plane. Added: 2026-11-07."""
+        rig = self._make()
+        plane = rig.shadow_plane
+        self._textures.append(rig.horizon_path)
+        ShadowRig.export_record(ptk.ExportContext())  # its map baked
+        self.assertTrue(os.path.exists(rig.horizon_path))
+        cmds.delete(self.cube)  # no target to re-bake from
+        first, second = ptk.ExportContext(), ptk.ExportContext()
+        self.assertIsNotNone(ShadowRig.export_record(first))
+        ShadowRig.export_record(second)
+        told = [n for n in first.notes if "re-baked" in n]
+        self.assertEqual(len(told), 1, first.notes)
+        self.assertIn("Box_shadow", told[0])
+        self.assertEqual([n for n in second.notes if "re-baked" in n], [])
+        # Its map gone too: left out, said once.
+        os.remove(rig.horizon_path)
+        cmds.setAttr(f"{plane}.{ShadowRig._HORIZON_TEX_ATTR}", "", type="string")
+        first, second = ptk.ExportContext(), ptk.ExportContext()
+        self.assertIsNone(ShadowRig.export_record(first))
+        self.assertIsNone(ShadowRig.export_record(second))
+        self.assertEqual(len([n for n in first.notes if "no horizon map" in n]), 1)
+        self.assertEqual([n for n in second.notes if "no horizon map" in n], [])
+
+    def test_the_live_fade_is_the_shared_models(self):
+        """The expression's fade (the viewport preview) equals
+        ``ptk.ShadowProjection.fade`` evaluated in metres from the record's
+        terms at every frame within 1e-6 -- a point source and a sun, the
+        source dropping under the contact (the ramp of one rig unit: a
+        centimetre here, its ``source_ramp``) and the target rising (the rise
+        fade). Measured 2026-11-07
+        against a v2 bake's keys too: 3.4e-8 over 240 keys. Added: 2026-11-07."""
+        cmds.setAttr(f"{self.cube}.translateY", 1)
+        for kind in ("point", "sun"):
+            with self.subTest(source=kind):
+                if kind == "point":
+                    rig = self._make()
+                    for t, p in ((1, (5, 10, 5)), (40, (5, 0.0, 2)), (60, (-3, 6, -2))):
+                        for ax, val in zip("XYZ", p):
+                            cmds.setKeyframe(
+                                rig.light, attribute="translate" + ax, t=t, v=val
+                            )
+                else:
+                    sun = self._sun(name="fadeSunShape")
+                    for t, r in ((1, (-45, 20, 0)), (30, (-3, 90, 0)), (40, (5, 120, 0))):
+                        for ax, val in zip("XYZ", r):
+                            cmds.setKeyframe(sun, attribute="rotate" + ax, t=t, v=val)
+                    rig = self._make(source_name=sun)
+                for t, v in ((1, 1), (30, 1), (45, 3.5), (60, 1)):
+                    cmds.setKeyframe(self.cube, attribute="translateY", t=t, v=v)
+                plane = rig.shadow_plane
+                cmds.setAttr(f"{plane}.shadowIntensity", 0.8)
+                cmds.setAttr(f"{plane}.falloffPower", 1.7)
+                cmds.setAttr(f"{plane}.fadeHeight", 3.0)
+                rec = ShadowRig.plane_record(plane)
+                unit = ShadowRig.unit_scale()
+                fades, branches = [], set()
+                for t in range(1, 61):
+                    cmds.currentTime(t)
+                    C = cmds.xform(rig.contact_locator, q=True, ws=True, t=True)
+                    terms = dict(
+                        max_stretch=rec["max_stretch"],
+                        intensity=rec["intensity"],
+                        falloff_power=rec["falloff_power"],
+                        fade_height=rec["fade_height"] * unit,
+                        source_ramp=rec["source_ramp"] * unit,
+                    )
+                    args = (
+                        [c * unit for c in C],
+                        None,
+                        rec["ground"] * unit,
+                        rec["radius"] * unit,
+                        rec["height"] * unit,
+                    )
+                    if kind == "sun":
+                        m = cmds.xform(rig.light, q=True, ws=True, matrix=True)
+                        model = ShadowProjection.fade(
+                            *args, direction=[-v for v in m[8:11]], **terms
+                        )
+                    else:
+                        L = cmds.xform(rig.light, q=True, ws=True, t=True)
+                        model = ShadowProjection.fade(
+                            args[0], [c * unit for c in L], *args[2:], **terms
+                        )
+                        if 0.0 < L[1] - C[1] < 1.0:
+                            branches.add("ramp")
+                    if C[1] > 0.0:
+                        branches.add("rising")
+                    live = ShadowRig.viewport_fade(plane)
+                    fades.append(abs(live - model))
+                self.assertLess(max(fades), 1e-6)
+                self.assertIn("rising", branches)
+                if kind == "point":
+                    self.assertIn("ramp", branches)
+                ShadowRig.delete_rigs([plane])
 
     def test_bake_planes_batch(self):
         """bake_planes(None) bakes every live rig in a single pass."""
@@ -1036,11 +1259,17 @@ class TestShadowRig(MayaTkTestCase):
         recs = {r["name"]: r for r in payload["planes"]}
         self.assertIn("Box_shadow", recs)
         rec = recs["Box_shadow"]
-        self.assertEqual(rec["texture"], "Box_shadow.png")
+        self.assertEqual(rec["silhouette"]["texture"], "Box_shadow.png")
         self.assertAlmostEqual(rec["intensity"], 1.0, places=3)
-        # v2: the engine's runtime inputs ride the record (the contract in
-        # mayatk/docs/shadow_rig_morphing.md).
-        self.assertEqual(rec["type"], "projected")
+        # v3: the engine's runtime inputs ride the record (the contract in
+        # mayatk/docs/shadow_rig_morphing.md); a projected rig's type is its
+        # silhouette's draw, and it carries a horizon map like any rig.
+        self.assertNotIn("type", rec)
+        self.assertTrue(rec["silhouette"]["draw"])
+        self.assertEqual(rec["horizon"]["texture"], "Box_horizon.png")
+        self._textures.append(rig.horizon_path)
+        self.assertAlmostEqual(rec["falloff_power"], 1.2, places=6)
+        self.assertAlmostEqual(rec["fade_height"], 4.0, places=3)  # 2 x height
         self.assertEqual(rec["source"], ShadowRig.DEFAULT_SOURCE_NAME)
         self.assertEqual(rec["source_type"], "point")
         self.assertTrue(rec["follow_source"])
@@ -1049,8 +1278,10 @@ class TestShadowRig(MayaTkTestCase):
         self.assertAlmostEqual(rec["height"], 2.0, places=3)
         self.assertAlmostEqual(rec["max_stretch"], 6.0, places=3)
         self.assertEqual(len(rec["canvas"]), 4)
-        self.assertNotIn("atlas", rec)
-        self.assertNotIn("horizon", rec)
+        self.assertNotIn("canvas", rec["silhouette"])
+        self.assertAlmostEqual(rec["source_ramp"], 1.0, places=6)  # one cm, in cm
+        self.assertNotIn("atlas", rec["silhouette"])
+        self.assertEqual(ptk.ShadowRecord.validate(payload).errors, [])
         # Classmethod texture resolution (feeds the record) works off the plane.
         tex = ShadowRig._plane_texture_path(rig.shadow_plane)
         self.assertTrue(tex and os.path.basename(tex) == "Box_shadow.png")
@@ -1066,6 +1297,37 @@ class TestShadowRig(MayaTkTestCase):
         cmds.delete("Box_shadow_grp")
         ShadowRig.refresh_export_metadata()
         self.assertIsNone(ptk.SceneRecords.SHADOWS.read_text(DataNodes))
+
+    def test_an_export_bakes_the_map_a_plane_lacks(self):
+        """Every plane carries its horizon map (shadows v3): a rig with none
+        -- built before every rig baked one -- has it baked by the record's
+        producer, and an export re-bakes a map whose target changed; a plane
+        that cannot be baked (its target gone) is left out, with a warning,
+        rather than published without its map. Added: 2026-11-07."""
+        rig = self._make()
+        plane = rig.shadow_plane
+        self._textures.append(rig.horizon_path)
+        os.remove(rig.horizon_path)
+        cmds.setAttr(f"{plane}.{ShadowRig._HORIZON_TEX_ATTR}", "", type="string")
+        self.assertNotIn("horizon", ShadowRig.plane_record(plane))
+        record = ShadowRig.export_record(ptk.ExportContext())
+        (rec,) = record.payload["planes"]
+        self.assertEqual(rec["horizon"]["texture"], "Box_horizon.png")
+        self.assertTrue(os.path.exists(rig.horizon_path))
+        # The geometry changed: an export re-bakes, an authoring publish does not.
+        stamp = cmds.getAttr(f"{plane}.{ShadowRig._HORIZON_HASH_ATTR}")
+        cmds.polyExtrudeFacet(f"{self.cube}.f[1]", localTranslateZ=1.0)
+        ShadowRig.export_record(ptk.ExportContext(mode=ptk.ExportContext.AUTHORING))
+        self.assertEqual(cmds.getAttr(f"{plane}.{ShadowRig._HORIZON_HASH_ATTR}"), stamp)
+        ShadowRig.export_record(ptk.ExportContext())
+        self.assertNotEqual(cmds.getAttr(f"{plane}.{ShadowRig._HORIZON_HASH_ATTR}"), stamp)
+        # No target, no map: left out.
+        os.remove(rig.horizon_path)
+        cmds.setAttr(f"{plane}.{ShadowRig._HORIZON_TEX_ATTR}", "", type="string")
+        cmds.delete(self.cube)
+        ctx = ptk.ExportContext()
+        self.assertIsNone(ShadowRig.export_record(ctx))
+        self.assertTrue(any("no horizon map" in note for note in ctx.notes), ctx.notes)
 
     # ------------------------------------------------------------------ horizon rig
     def _record(self, plane):
@@ -1088,8 +1350,9 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(ShadowRig.plane_type(rig.shadow_plane), "horizon")
         self.assertPlaneMatchesModel(rig.shadow_plane)
         rec = self._record("Box_shadow")
-        self.assertEqual(rec["type"], "horizon")
-        self.assertEqual(rec["texture"], "Box_shadow.png")
+        self.assertNotIn("type", rec)
+        self.assertEqual(rec["silhouette"]["texture"], "Box_shadow.png")
+        self.assertFalse(rec["silhouette"]["draw"], "the march's fallback")
         hz = rec["horizon"]
         self.assertEqual(hz["texture"], "Box_horizon.png")
         # Nothing a reader derives: mapping and encoding are the record
@@ -1311,7 +1574,7 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(
             os.path.basename(ShadowRig._plane_texture_path(box)), "Box_shadow.png"
         )
-        rec = self._record("Box_shadow")
+        rec = self._record("Box_shadow")["silhouette"]
         self.assertEqual(rec["texture"], "Box_shadow.png")
         self.assertEqual(rec["atlas"]["texture"], "shadow_atlas_projected.png")
         sx, sy, ox, oy = rec["atlas"]["rect"]
@@ -1363,7 +1626,7 @@ class TestShadowRig(MayaTkTestCase):
             ),
             [(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)],
         )
-        self.assertNotIn("atlas", self._record("Box_shadow"))
+        self.assertNotIn("atlas", self._record("Box_shadow")["silhouette"])
 
     def test_a_packed_plane_whose_tile_vanished_leaves_the_atlas(self):
         """Its rect would otherwise be handed to another plane by the next
@@ -1379,7 +1642,7 @@ class TestShadowRig(MayaTkTestCase):
         os.remove(ShadowRig._plane_texture_path(box))
         ShadowRig.pack_atlas([crate])
         self.assertFalse(ShadowRig.plane_is_atlased(box))
-        self.assertNotIn("atlas", self._record("Box_shadow"))
+        self.assertNotIn("atlas", self._record("Box_shadow")["silhouette"])
         self.assertEqual(
             sorted(
                 tuple(cmds.polyEditUV(f"{box}.map[{i}]", query=True)) for i in range(4)
@@ -1391,7 +1654,7 @@ class TestShadowRig(MayaTkTestCase):
         self.assertTrue(ShadowRig.plane_is_atlased(crate))
         gutter = ShadowAtlas.GUTTER
         self.assertAlmostEqual(
-            self._record("Crate_shadow")["atlas"]["rect"][0],
+            self._record("Crate_shadow")["silhouette"]["atlas"]["rect"][0],
             (32 - 2 * gutter) / 32,
             places=6,
         )
@@ -1494,7 +1757,7 @@ class TestDetachPlanes(MayaTkTestCase):
 
         # Its links broken by hand, as on the production plane: the fade
         # holds a value of its own.
-        fade = f"{self.plane}.opacity"
+        fade = ShadowRig._fade_plug(self.plane)
         for src in (
             cmds.listConnections(fade, source=True, destination=False, plugs=True) or []
         ):
@@ -1532,6 +1795,35 @@ class TestDetachPlanes(MayaTkTestCase):
         self.assertEqual(cmds.listConnections(f"{shader}.outColor", type="file"), [tex])
         self.assertEqual(cmds.getAttr(f"{tex}.fileTextureName"), path)
         self.assertTrue(cmds.polyEvaluate(self.plane, face=True))
+
+    def test_detach_bakes_a_baked_planes_fade_where_it_stands(self):
+        """Bug: a bake holds a plane's ``opacity`` at its intensity (the fade
+        is every reader's to evaluate), so detaching a baked plane multiplied
+        its intensity into the PNG, not the fade it draws. It bakes the
+        model's fade at the current frame, the source and contact where they
+        stand (``ShadowRecord.fade`` over the plane's record). Added:
+        2026-11-07."""
+        from PIL import Image
+
+        cmds.setAttr(f"{self.plane}.shadowIntensity", 0.9)
+        cmds.setAttr(f"{self.plane}.falloffPower", 2.0)  # well under the intensity
+        cmds.playbackOptions(min=1, max=2)
+        ShadowRig.bake_planes([self.plane], 1, 2)
+        cmds.currentTime(1)
+        self.assertAlmostEqual(ShadowRig.viewport_fade(self.plane), 0.9, places=6)
+        want = ptk.ShadowRecord.fade(
+            ShadowRig.plane_record(self.plane),
+            ShadowRig.unit_scale(),
+            cmds.xform(self.rig.contact_locator, q=True, ws=True, t=True),
+            cmds.xform(self.rig.light, q=True, ws=True, t=True),
+        )
+        self.assertLess(want, 0.8)
+        with Image.open(self.rig.texture_path) as image:
+            peak = max(image.convert("RGBA").getchannel("A").getdata())
+        path = ShadowRig.detach_planes([self.plane])[self.plane]
+        with Image.open(path) as image:
+            alpha = image.convert("RGBA").getchannel("A")
+        self.assertAlmostEqual(max(alpha.getdata()), round(peak * want), delta=1)
 
     def test_detach_is_one_undo_step(self):
         was = cmds.undoInfo(query=True, state=True)
@@ -1614,7 +1906,19 @@ class TestIntensityAndGround(MayaTkTestCase):
             cmds.disconnectAttr(src, plug)
 
     def _get(self, attr):
+        if attr == "opacity":  # the fade the material draws
+            return ShadowRig.viewport_fade(self.plane)
         return cmds.getAttr(f"{self.plane}.{attr}")
+
+    def _cut_fade(self):
+        """Break the expression's drive on the preview fade, as by hand; its
+        plug."""
+        plug = ShadowRig._fade_plug(self.plane)
+        for src in (
+            cmds.listConnections(plug, source=True, destination=False, plugs=True) or []
+        ):
+            cmds.disconnectAttr(src, plug)
+        return plug
 
     def test_a_live_rig_takes_the_dial_through_its_expression(self):
         before = self._get("opacity")
@@ -1626,14 +1930,15 @@ class TestIntensityAndGround(MayaTkTestCase):
         self.assertAlmostEqual(record["intensity"], 0.5)
 
     def test_a_static_fade_is_rescaled(self):
-        self._cut("opacity")
-        cmds.setAttr(f"{self.plane}.opacity", 0.8)
+        cmds.setAttr(self._cut_fade(), 0.8)
         ShadowRig.set_intensity([self.plane], 0.5)
         self.assertAlmostEqual(self._get("opacity"), 0.4, places=5)
         ShadowRig.set_intensity([self.plane], 1.0)
         self.assertAlmostEqual(self._get("opacity"), 0.8, places=5)
 
     def test_a_keyed_fade_keeps_its_shape(self):
+        """A version 2 bake's keyed fade (a plane with no fade node)."""
+        _drop_fade_node(self.plane)
         self._cut("opacity")
         cmds.setKeyframe(self.plane, attribute="opacity", time=1, value=0.8)
         cmds.setKeyframe(self.plane, attribute="opacity", time=10, value=0.4)
@@ -1717,8 +2022,7 @@ class TestIntensityAndGround(MayaTkTestCase):
             )
 
     def test_one_undo_step(self):
-        self._cut("opacity")
-        cmds.setAttr(f"{self.plane}.opacity", 0.8)
+        cmds.setAttr(self._cut_fade(), 0.8)
         was = cmds.undoInfo(query=True, state=True)
         cmds.undoInfo(state=True, infinity=True)
         self.addCleanup(cmds.undoInfo, state=was)
@@ -1814,6 +2118,346 @@ class TestPanelReadings(MayaTkTestCase):
         with mock.patch.object(ShadowRig, "_plane_texture_path", return_value=relative):
             self.assertEqual(ShadowRig.delete_orphaned_textures([live]), [])
         self.assertTrue(os.path.exists(live))
+
+
+class TestTheFadeNeverShips(MayaTkTestCase):
+    """A live shadow rig through the Scene Exporter: the plane's placement
+    may ship keyed (its documented FBX export), its fade never -- every
+    reader evaluates it from the record (shadows v3) -- with or without
+    shots. The preview fade is a lookdev aid on the plane's material
+    (``<plane>_fade``), composed over the plane's own ``opacity``, which
+    stays the authored value: driven by the preview, the bake that every
+    write with a take makes keyed it (``opacity.opacity`` in every take) and
+    a reader playing it faded twice. Added: 2026-11-08"""
+
+    PLACEMENT = ("Lcl Translation", "Lcl Rotation", "Lcl Scaling")
+
+    def _scene(self):
+        cmds.currentUnit(time="film")
+        cmds.playbackOptions(minTime=1, maxTime=48, animationStartTime=1, animationEndTime=48)
+        cmds.currentTime(1)
+        cube = cmds.polyCube(name="Box", width=2, height=2, depth=2)[0]
+        cmds.move(0, 1, 0, cube)
+        rig = ShadowRig.create([cube], light_pos=(-6, 4, 3), texture_res=32)
+        self.addCleanup(
+            lambda: rig.texture_path and os.path.exists(rig.texture_path) and os.remove(rig.texture_path)
+        )
+        for frame, x in ((1, -6.0), (48, 6.0)):
+            cmds.setKeyframe(rig.light, attribute="translateX", time=frame, value=x)
+        return cube, rig
+
+    def _export(self, rig, cube, shots):
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("FBX plugin not available")
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        if shots:
+            store.define_shot("Sweep", 1, 48, objects=[rig.light])
+        artifacts = ptk.TempArtifacts("shadow_fade_export", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        out = artifacts.dir_path()
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False
+        name = "shots" if shots else "shotless"
+        self.assertTrue(
+            exporter.perform_export(
+                export_dir=out,
+                objects=[cube, rig.light, rig.group],
+                output_name=name,
+                tasks={"export_data_node": True, "smart_bake": True},
+            )
+        )
+        fbx = ptk.FbxFile.load(
+            os.path.join(out, f"{name}.fbx"),
+            decode_arrays=("KeyTime",),
+            raw_payloads=False,
+        )
+        leaf = rig.shadow_plane.split("|")[-1]
+        return {
+            take: {(prop, channel) for node, prop, channel in curves if node == leaf}
+            for take, curves in fbx.take_curves().items()
+        }
+
+    def test_the_planes_placement_ships_and_its_fade_never(self):
+        for shots in (False, True):
+            with self.subTest(shots=shots):
+                cmds.file(new=True, force=True)
+                cube, rig = self._scene()
+                plane = rig.shadow_plane
+                takes = self._export(rig, cube, shots)
+                self.assertEqual(len(takes), 1, takes)
+                (channels,) = takes.values()
+                self.assertTrue(
+                    {prop for prop, _c in channels} & set(self.PLACEMENT),
+                    f"the placement ships keyed: {sorted(channels)}",
+                )
+                shipped_fade = sorted(
+                    (prop, c) for prop, c in channels if prop not in self.PLACEMENT
+                )
+                self.assertEqual(shipped_fade, [], "no fade or visibility channel ships")
+                # The preview still fades, on the material, over the authored value.
+                self.assertFalse(
+                    cmds.listConnections(
+                        f"{plane}.{ShadowRig.OPACITY_ATTR}", source=True, destination=False
+                    ),
+                    "the plane's opacity is the authored value, not the preview",
+                )
+                fades = []
+                for frame in (1, 24, 48):
+                    cmds.currentTime(frame)
+                    fades.append(ShadowRig.viewport_fade(plane))
+                self.assertGreater(max(fades) - min(fades), 1e-3, "the preview fades")
+
+    def test_a_rig_built_before_the_fade_node_is_moved_over_at_export(self):
+        """A live rig whose expression still drives the plane's opacity (built
+        before the fade node) is moved onto its material by the export's
+        stage (``ShadowRig.retire_preview_fade``): no take keys its fade, its
+        preview still fades, and the plane's opacity is authored again."""
+        cube, rig = self._scene()
+        plane, mult = rig.shadow_plane, rig.opacity_mult
+        fade = ShadowRig._fade_node(plane)
+        expr = f"{plane.split('|')[-1]}_expr"
+        text = cmds.expression(expr, query=True, string=True)
+        for chan in "XYZ":
+            cmds.connectAttr(f"{plane}.opacity", f"{mult}.input2{chan}", force=True)
+        cmds.delete(fade)
+        cmds.expression(
+            expr, edit=True, string=text.replace(f"{fade}.input2 =", f"{plane}.opacity =")
+        )
+        self.assertIsNone(ShadowRig._fade_node(plane))
+        self.assertTrue(
+            cmds.listConnections(f"{plane}.opacity", source=True, type="expression"),
+            "the old rig: its expression drives the plane's opacity",
+        )
+        takes = self._export(rig, cube, shots=False)
+        (channels,) = takes.values()
+        self.assertEqual(
+            sorted((p, c) for p, c in channels if p not in self.PLACEMENT), []
+        )
+        self.assertTrue(ShadowRig._fade_node(plane), "moved onto the material")
+        self.assertFalse(
+            cmds.listConnections(f"{plane}.opacity", source=True, destination=False)
+        )
+        self.assertEqual(cmds.getAttr(f"{plane}.opacity"), 1.0)
+        fades = []
+        for frame in (1, 24, 48):
+            cmds.currentTime(frame)
+            fades.append(ShadowRig.viewport_fade(plane))
+        self.assertGreater(max(fades) - min(fades), 1e-3, "the preview still fades")
+
+
+class TestAuthoredFadeKeys(MayaTkTestCase):
+    """Bug: an artist's keyed ``opacity`` or ``visibility`` on a shadow plane
+    was taken for a bake's -- Unbake and Set Source deleted every curve on
+    both (and showed the plane), every export deleted a baked plane's keyed
+    opacity as a version 2 bake's fade, and Set Intensity rescaled it. A v2
+    bake is a plane with no fade node, which every rig since has; keys on
+    any other are authored and stay. Added: 2026-11-08."""
+
+    OPACITY = ((1, 1.0), (2, 0.25), (3, 0.75))
+    VISIBILITY = ((1, 1.0), (2, 0.0), (3, 1.0))
+
+    def setUp(self):
+        super().setUp()
+        cmds.playbackOptions(min=1, max=3)
+        self.cube = cmds.polyCube(name="KeyBox", width=2, height=2, depth=2)[0]
+        self.rig = self._rig(self.cube)
+        self.plane = self.rig.shadow_plane
+
+    def _rig(self, target, **kwargs):
+        rig = ShadowRig.create([target], light_pos=(5, 10, 5), texture_res=32, **kwargs)
+        for path in (rig.texture_path, rig.horizon_path):
+            if path:
+                self.addCleanup(lambda p=path: os.path.exists(p) and os.remove(p))
+        return rig
+
+    def _key(self, plane=None):
+        plane = plane or self.plane
+        for t, v in self.OPACITY:
+            cmds.setKeyframe(plane, attribute="opacity", time=t, value=v)
+        for t, v in self.VISIBILITY:
+            cmds.setKeyframe(plane, attribute="visibility", time=t, value=v)
+
+    def _values(self, plane, attr):
+        return [
+            round(v, 5)
+            for v in cmds.keyframe(f"{plane}.{attr}", query=True, valueChange=True) or []
+        ]
+
+    def assertKeysKept(self, plane=None):
+        plane = plane or self.plane
+        for attr, keys in (("opacity", self.OPACITY), ("visibility", self.VISIBILITY)):
+            with self.subTest(attr=attr):
+                self.assertEqual(self._values(plane, attr), [v for _t, v in keys])
+
+    def test_unbake_keeps_them(self):
+        self.rig.bake(1, 3)
+        self._key()
+        self.assertEqual(ShadowRig.unbake_planes([self.plane]), [self.plane])
+        self.assertTrue(ShadowRig.plane_is_live(self.plane))
+        self.assertKeysKept()
+
+    def test_set_source_keeps_them(self):
+        self.rig.bake(1, 3)
+        self._key()
+        self.rig.set_source("shadow_source", size=32)
+        self.assertTrue(ShadowRig.plane_is_live(self.plane))
+        self.assertKeysKept()
+
+    def test_an_export_keeps_them(self):
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.rig.bake(1, 3)
+        self._key()
+        with FbxUtils.export_prepared(FbxUtils.export_context()):
+            pass
+        self.assertKeysKept()
+        self.assertEqual(ShadowRig.retire_v2_fade([self.plane]), [])
+
+    def test_set_intensity_leaves_them(self):
+        self._key()
+        ShadowRig.set_intensity([self.plane], 0.5)
+        self.assertKeysKept()
+
+    def test_a_v2_bakes_fade_is_still_cleared_by_unbake(self):
+        """The v2 case the rule keeps: a plane with no fade node, its fade
+        keyed -- Unbake clears it and the plane draws the live preview over an
+        authored opacity of 1."""
+        self.rig.bake(1, 3)
+        _drop_fade_node(self.plane)
+        self._key()
+        ShadowRig.unbake_planes([self.plane])
+        for attr in ("opacity", "visibility"):
+            with self.subTest(attr=attr):
+                self.assertEqual(self._values(self.plane, attr), [])
+        self.assertTrue(cmds.getAttr(f"{self.plane}.visibility"))
+        self.assertIsNotNone(ShadowRig._fade_node(self.plane))
+        self.assertEqual(cmds.getAttr(f"{self.plane}.opacity"), 1.0)
+
+    def test_a_rig_built_before_the_fade_node_bakes_and_unbakes_unsquared(self):
+        """Bug: a rig built before the fade node, baked, held its fade (the
+        intensity) on the plane's ``opacity`` -- which the exporter reads as
+        authored -- and Unbake kept it there under the rebuilt fade, so the
+        preview drew the intensity squared. The bake gives it its fade node
+        first: the hold lands there, the opacity is 1 again."""
+        cmds.setAttr(f"{self.plane}.shadowIntensity", 0.6)
+        _drop_fade_node(self.plane)
+        self.rig.bake(1, 3)
+        node = ShadowRig._fade_node(self.plane)
+        self.assertIsNotNone(node)
+        self.assertEqual(cmds.getAttr(f"{self.plane}.opacity"), 1.0)
+        self.assertAlmostEqual(ShadowRig.viewport_fade(self.plane), 0.6, places=6)
+        ShadowRig.unbake_planes([self.plane])
+        self.assertEqual(cmds.getAttr(f"{self.plane}.opacity"), 1.0)
+        live = cmds.getAttr(f"{node}.input2")
+        self.assertAlmostEqual(ShadowRig.viewport_fade(self.plane), live, places=6)
+
+    def test_a_scoped_export_retires_only_the_planes_it_ships(self):
+        """Bug: the export stages ran on every plane in the scene, so a
+        selection export deleted the v2 fade keys of -- and rebuilt the
+        expression of -- planes it did not ship. Each runs on the write's
+        scope, and the move is told in the export's report."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        other = cmds.polyCube(name="OtherBox", width=2, height=2, depth=2)[0]
+        cmds.move(6, 0, 0, other)
+        far = self._rig(other)
+        for rig in (self.rig, far):  # v2 bakes: no fade node, the fade keyed
+            rig.bake(1, 3)
+            _drop_fade_node(rig.shadow_plane)
+            self._key(rig.shadow_plane)
+        group = cmds.listRelatives(self.plane, parent=True, fullPath=True)[0]
+        with FbxUtils.export_prepared(FbxUtils.export_context(scope=[group])):
+            pass
+        self.assertEqual(self._values(self.plane, "opacity"), [])
+        self.assertKeysKept(far.shadow_plane)
+
+        # Live rigs built before the fade node: only the shipped one moves.
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(min=1, max=3)
+        near = self._rig(cmds.polyCube(name="NearBox", width=2, height=2, depth=2)[0])
+        other = cmds.polyCube(name="OtherBox", width=2, height=2, depth=2)[0]
+        cmds.move(6, 0, 0, other)
+        far = self._rig(other)
+        for rig in (near, far):
+            _drop_fade_node(rig.shadow_plane)
+        group = cmds.listRelatives(near.shadow_plane, parent=True, fullPath=True)[0]
+        with FbxUtils.export_prepared(FbxUtils.export_context(scope=[group])) as snap:
+            pass
+        self.assertIsNotNone(ShadowRig._fade_node(near.shadow_plane))
+        self.assertIsNone(ShadowRig._fade_node(far.shadow_plane))
+        self.assertTrue(
+            cmds.listConnections(
+                f"{far.shadow_plane}.opacity", source=True, type="expression"
+            )
+        )
+        leaf = near.shadow_plane.split("|")[-1]
+        told = [n for n in snap.noted.get("shadows", []) if leaf in n]
+        self.assertEqual(len(told), 1, snap.noted)
+        self.assertIn("preview fade", told[0])
+
+    def test_a_failed_horizon_bake_still_builds_a_projected_rig(self):
+        """Regression: create() bakes every rig's horizon map inside its
+        rollback, so a failed bake aborted a Projected rig that built before
+        the map existed. It warns and builds; a Horizon rig, which draws the
+        map, still fails and rolls back."""
+        from unittest import mock
+
+        cube = cmds.polyCube(name="FailBox", width=2, height=2, depth=2)[0]
+        before = len(ShadowRig.find_shadow_planes())
+        with mock.patch.object(
+            ShadowRig, "bake_horizon", side_effect=ValueError("no mesh")
+        ):
+            rig = self._rig(cube, source_name="fail_source")
+            self.assertTrue(cmds.objExists(rig.shadow_plane))
+            self.assertEqual(len(ShadowRig.find_shadow_planes()), before + 1)
+            with self.assertRaises(ValueError):
+                self._rig(cube, source_name="fail_source2", rig_type="horizon")
+        self.assertEqual(len(ShadowRig.find_shadow_planes()), before + 1)
+
+    def test_a_referenced_plane_with_no_map_is_left_out_as_referenced(self):
+        """A referenced plane built before shadows v3 has no horizon map. An
+        export bakes it one (its stamps are reference edits); in a locked
+        reference, which refuses them, it is left out, and the note says why
+        -- it said its targets were gone."""
+        for attr in (
+            ShadowRig._HORIZON_TEX_ATTR,
+            ShadowRig._HORIZON_HASH_ATTR,
+            *ShadowRig._HORIZON_INT_ATTRS,
+            *ShadowRig._HORIZON_FLOAT_ATTRS,
+        ):
+            if cmds.attributeQuery(attr, node=self.plane, exists=True):
+                cmds.deleteAttr(f"{self.plane}.{attr}")
+        if self.rig.horizon_path and os.path.exists(self.rig.horizon_path):
+            os.remove(self.rig.horizon_path)
+        store = ptk.TempArtifacts("shadow_ref_horizon", policy="scoped")
+        self.addCleanup(store.cleanup)
+        scene = os.path.join(store.dir_path(), "shadow_ref_src.ma")
+        cmds.file(rename=scene)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        ref = cmds.file(scene, reference=True, namespace="ref")
+        (plane,) = ShadowRig.find_shadow_planes()
+        self.assertEqual(ShadowRig.bake_horizon_maps([plane]), [plane])
+        horizon = ShadowRig._plane_horizon_path(plane)
+        if horizon and os.path.exists(horizon):
+            os.remove(horizon)
+        cmds.file(ref, removeReference=True)
+        cmds.file(new=True, force=True)
+        cmds.file(scene, reference=True, namespace="ref", lockReference=True)
+        (plane,) = ShadowRig.find_shadow_planes()
+        ctx = ptk.ExportContext()
+        self.assertIsNone(ShadowRig.export_record(ctx))
+        told = [n for n in ctx.notes if "Left out" in n]
+        self.assertEqual(len(told), 1, ctx.notes)
+        self.assertIn("referenced", told[0])
+        self.assertNotIn("targets are gone", told[0])
 
 
 if __name__ == "__main__":

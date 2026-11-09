@@ -289,12 +289,10 @@ class TestSessionHook(MayaTkTestCase):
 
         def shots(ctx):
             seen.append("shots")
-            return SR.SHOTS.make(
-                {"shots": [{"clip": "A", "start": 1, "end": 5, "objects": []}]}
-            )
+            return SR.SHOTS.make({"shots": [{"clip": "A"}]})
 
         def audio(ctx):
-            seen.append(("audio", SR.declared_takes(ctx.record)[0]["name"]))
+            seen.append(("audio", ctx.record(SR.SHOTS)["shots"][0]["clip"]))
             return None
 
         def lightmaps(ctx):
@@ -373,6 +371,64 @@ class TestSessionHookSplitStagesTheProxies(MayaTkTestCase):
         self.assertNotIn("__opacity", text)
 
 
+class TestSessionHookShipsOneTakePerShot(MayaTkTestCase):
+    """A File > Export through the opt-in hook ships exactly the shots'
+    takes: Maya writes its whole-timeline ``Take 001`` beside a split, and
+    the hook drops it after the write with the step the Scene Exporter and
+    the hand-offs use (``FbxUtils.drop_undeclared_takes``). Before the fix
+    the file carried ``['Take 001', 'Intro', 'Outro']``. Added: 2026-11-05."""
+
+    def setUp(self):
+        super().setUp()
+        _clear_export_state()
+        ShotStore.clear_active()
+
+    def tearDown(self):
+        ShotStore.clear_active()
+        _clear_export_state()
+        super().tearDown()
+
+    def _keyed_cube(self):
+        cmds.currentUnit(time="film")
+        cube = self.create_test_cube("takeCube")
+        cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=60, v=10)
+        cmds.playbackOptions(minTime=1, maxTime=60)
+        return cube
+
+    def _file_export(self, fname, cube):
+        out = os.path.join(tempfile.gettempdir(), fname)
+        self.addCleanup(lambda: os.path.exists(out) and os.remove(out))
+        cmds.select(cube, replace=True)
+        cmds.file(
+            out, force=True, options="v=0;", type="FBX export", exportSelected=True
+        )
+        return ptk.FbxFile.load(out, raw_payloads=False)
+
+    def test_a_file_export_ships_one_take_per_shot_and_no_other(self):
+        cube = self._keyed_cube()
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Intro", 1, 30)
+        store.define_shot("Outro", 31, 60)
+        FbxUtils.enable_auto_takes()
+
+        fbx = self._file_export("mtk_hook_takes.fbx", cube)
+
+        self.assertEqual(sorted(fbx.take_names()), ["Intro", "Outro"])
+        windows = fbx.take_windows()  # seconds; the scene runs at film (24 fps)
+        self.assertAlmostEqual(windows["Intro"][0] * 24, 1, places=3)
+        self.assertAlmostEqual(windows["Outro"][1] * 24, 60, places=3)
+
+    def test_a_file_export_with_no_shots_keeps_its_one_whole_timeline_take(self):
+        cube = self._keyed_cube()
+        FbxUtils.enable_auto_takes()
+
+        fbx = self._file_export("mtk_hook_no_shots.fbx", cube)
+
+        self.assertEqual(len(fbx.take_names()), 1, fbx.take_names())
+
+
 class TestProducerContract(MayaTkTestCase):
     """What the export pipeline relies on from the producer table."""
 
@@ -402,11 +458,12 @@ class TestProducerContract(MayaTkTestCase):
         self.assertIsNone(DataNodes.get_internal_node(create=False))
 
     def test_a_decision_is_an_input_so_a_second_publish_cannot_undo_it(self):
-        """The clip mode rides the shot record because the context carries it
-        -- and publishing again with the same context produces the same record.
-        The old pipeline patched it on after the producers, and the bracket's
-        second producer run overwrote the patch (three exports shipped the
-        wrong clip origin while logging the right one)."""
+        """Publishing again with the same context produces the same record.
+        The old pipeline patched decisions on after the producers, and the
+        bracket's second producer run overwrote the patch (three exports
+        shipped the wrong clip origin while logging the right one). The shot
+        record states its clips alone (v3): no mode, no range -- and the
+        scene's rate, for a GLB."""
         cube = self.create_test_cube("modeCube")
         cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
         cmds.setKeyframe(cube, attribute="translateX", t=20, v=1)
@@ -415,14 +472,13 @@ class TestProducerContract(MayaTkTestCase):
         self.addCleanup(ShotStore.clear_active)
         store.define_shot("Intro", 1, 20)
 
-        ctx = FbxUtils.export_context(clip_mode="full")
+        ctx = FbxUtils.export_context()
         first = FbxUtils.publish(ctx)
-        second = FbxUtils.publish(FbxUtils.export_context(clip_mode="full"))
+        second = FbxUtils.publish(FbxUtils.export_context())
         meta = SR.SHOTS.load(DataNodes)
-        self.assertEqual(meta["clip_mode"], "full")
+        rate = mel.eval("currentTimeUnitToFPS")
         self.assertEqual(
-            [(s["clip"], s["start"], s["end"]) for s in meta["shots"]],
-            [("Intro", 1, 20)],
+            meta, {"version": SR.SHOTS.version, "shots": [{"clip": "Intro"}], "fps": rate}
         )
         self.assertEqual(
             first.written[SR.SHOTS.key], second.written[SR.SHOTS.key], "idempotent"
@@ -534,6 +590,9 @@ class TestExportHandoffBlock(MayaTkTestCase):
         """Stamped by the commit AFTER every record is written, from the
         channels the carrier then holds."""
         cube = cmds.polyCube(name="handoffBox")[0]
+        # The set its marker names, at UV index 1: one an object lacks is
+        # refused, never published on faith (lightmaps v3, 2026-11-07).
+        cmds.polyUVSet(cube, copy=True, uvSet="map1", newUVSet="lightmap")
         cmds.addAttr(cube, longName="lightmapInfo", dataType="string")
         cmds.setAttr(
             f"{cube}.lightmapInfo",
@@ -647,7 +706,7 @@ class TestAudioShotsAutoExportCompose(MayaTkTestCase):
         self.assertIn('"audio"', text)
         self.assertIn("footstep", text)
         manifest = SR.AUDIO.load(DataNodes)
-        self.assertEqual({e["clip"] for e in manifest["events"]}, {"Intro"})
+        self.assertEqual({c["clip"] for c in manifest["cues"]}, {"Intro"})
 
         # Distinct records on the one carrier node -- and no take list beside
         # the shot record: the clips carry their ranges, so a separate list

@@ -11,7 +11,7 @@ that the whole stand follows.
 (`rig_utils/articulated_rig/`) · the math `ptk.ArticulationModel`,
 `ptk.ArticulationAnalysis` and the plan's host-free half `ptk.ArticulationPlan`
 (pythontk `geo_utils/articulation/`) · the runtimes
-unitytk `ArticulatedRigController` and the WebXR preview's `articulated_rig`
+unitytk `ArticulatedRig` / `ArticulatedJoint` and the WebXR preview's `articulated_rig`
 script ([WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md))
 · the Blender twin blendertk `btk.ArticulatedRig` (same names, behaviour and
 panel; its end control is solved by blendertk and baked into the file at save).
@@ -218,37 +218,59 @@ controls are Maya controllers, so the export's **Exclude Rig Helpers** sweep
 drops them with their groups (`RigGraphExtractor.machinery` seeds every
 controller-tagged transform).
 
-**The `articulation` record** (`ptk.SceneRecords.ARTICULATION`, v1, on the
+**The `articulation` record** (`ptk.SceneRecords.ARTICULATION`, v2, on the
 `data_export` carrier; produced by `ArticulatedRig.export_record`, published at
 build and on every edit, opted into every FBX export):
 
 ```json
-{"version": 1,
+{"version": 2,
  "rigs": [{"name": "magnifying_glass",
            "joints": [{"name": "magnifying_glass_LEG_1_jnt", "parent": null,
-                       "t": [x, y, z], "q": [x, y, z, w], "rotate_order": "zyx",
+                       "t": [x, y, z], "q": [x, y, z, w],
+                       "anchor": {"t": [0, 0, 0], "q": [0, 0, 0, 1]},
+                       "rotate_order": "zyx",
                        "channels": [{"channel": "rx", "min": null, "max": null, "weight": 1.0},
                                     {"channel": "rz", "min": -30, "max": 60, "weight": 1.0}]}, …],
            "grab": [{"node": "LEG_1", "joint": 0}, …]}]}
 ```
 
-- `t` / `q`: the joint's rest translate and orient **in its parent's space**
-  (the root joints' parent is `<name>_RIG`: rig space). A joint poses as
+- **glTF's frame** (`ptk.SceneRecords.FRAME`): every length in metres, every
+  rotation a quaternion `(x, y, z, w)`, each in its parent joint's frame -- so
+  no axis converts, whatever the scene's up axis. A length is the FBX's own
+  value x 0.01, as glTF frames the file: Maya's FBX writer writes every local
+  in centimetres whatever the working unit or its own unit conversion (which
+  rides the root's scale and the file's UnitScaleFactor), and FBX2glTF reads
+  a local as the file value x 0.01 whatever the UnitScaleFactor, so a GLB's
+  joint local is the record's exactly. `export_record` writes the plan's
+  centimetres x 0.01 (`ArticulatedRig.unit_scale`), the same numbers under
+  every Units setting. Unity's FBX import converts the file's unit into the
+  locals instead, and its importer scales the record by that conversion
+  (measured 2026-11-08: a joint 24 in the file imports at 0.24 from a
+  centimetre file, 24 from a metre one).
+- `t` / `q`: the joint's rest translate and orient **in its parent joint's
+  frame** (the root joints' parent is `<name>_RIG`: rig space). `anchor` is the
+  frame its channels turn and slide in, in that rest frame: a part poses as
+  `rest · A · pose(channels) · A⁻¹`. A Maya rig nests each joint on its pivot,
+  so its anchors are the identity and a joint poses as
   `rotation = q ⊗ Euler(rotate_order; rx, ry, rz)`,
   `translation = t + q·(tx, ty, tz)` -- Maya's `[R][JO][T]`, and the local TRS
-  the FBX hop delivers.
-- Channels in degrees and in the parent's units; `null` limits are unbounded;
-  `weight` is how readily a grab moves that channel against the others.
-- **No `unit_scale`:** a runtime measures its own unit against the rest
-  translations of the joints that cannot slide (`ArticulationModel.scale_of`),
-  which covers an FBX unit conversion and a scaled prop alike (measured on the
-  magnifier's GLB: 0.01, centimetres to metres, under a ×2.47 asset node).
+  the FBX hop delivers. The MEL solver turns each joint about its own origin,
+  so the plan (`ptk.ArticulationPlan.check` and `joint_records`) and
+  `SolverExpression` (`ptk.ArticulationPlan.refuse_anchors`) refuse an anchor
+  that is not the identity; anchors are a runtime's
+  (a flat model rigged in an engine: every part under the root, its hinges in
+  its anchors).
+- A part is posed from its parent JOINT's pose, never its node's scene
+  parent's: a runtime places each part from the joint chain.
+- Channels in degrees and in metres; `null` limits are unbounded; `weight` is
+  how readily a grab moves that channel against the others.
 - `grab`: the parts a hand takes, each by name UNDER its joint's node (a
   production assembly repeats part names).
+- A version 1 record (no anchors, the file's own units, which a runtime
+  measured off the rest pose) is refused: re-export.
 
-The GLB conversion binds it as root `extras.articulation`: the record with a
-glTF node index on every joint and grab entry
-(`ptk.MeshConvert.apply_glb_articulation`, run by `fbx_to_glb`).
+A GLB carries the record as it stands, under its key in the root `extras`
+(one layout, two containers); each reader finds the joints and parts by name.
 
 ## The runtimes
 
@@ -264,8 +286,8 @@ channel, the joints' values, **Reset** and **Joint axes**. The model in the
 script is exported by name (`import { ArticulationModel } from
 './articulated_rig.js'`, no three.js) for a production app to vendor.
 
-**Unity** -- unitytk's `ArticulatedRigController` (component `articulated_rig`):
-the importer attaches it from the record and adds a convex collider to each
+**Unity** -- unitytk's `ArticulatedRig` on the rig root and an `ArticulatedJoint`
+on each part: the importer fills them from the record by reference and adds a convex collider to each
 grabbed part without one; a grab API independent of any input system
 (`BeginGrab` / `UpdateGrab` / `EndGrab` / `ReturnToAnimation`, `grabRotation`
 Hand / Keep / Free), `ArticulatedRigPointerGrab` for the mouse, and an XR

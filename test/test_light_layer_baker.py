@@ -88,7 +88,8 @@ class TestLightLayerBaker(MayaTkTestCase):
         self.assertEqual(attrs["color"], [1.0, 1.0, 1.0])
         self.assertEqual(attrs["aiUseColorTemperature"], 0)
         self.assertNotIn("aiColorTemperature", attrs)
-        self.assertAlmostEqual(attrs["intensity"], 2.0 * math.pi)
+        # At 1: the viewer draws a bake as stored, as Arnold renders it (2026-11-07).
+        self.assertAlmostEqual(attrs["intensity"], 2.0)
         self.assertEqual(canon["existing"], {self.office: {"intensity": 0.0}})
         self.assertEqual(canon["group"], self.Baker.GROUP)
 
@@ -179,7 +180,7 @@ class TestLightLayerBaker(MayaTkTestCase):
         self.assertEqual(during[self.office], 0.0)  # the scene's own light off
         layer = [s for s in during if s.startswith(f"|{self.Baker.GROUP}|")]
         self.assertEqual(len(layer), 1)
-        self.assertAlmostEqual(during[layer[0]], 2.0 * math.pi, places=4)
+        self.assertAlmostEqual(during[layer[0]], 2.0, places=4)
         self.assertTrue(self.seen[0]["settings"]["refuse_unlit"])
         # handed back as found
         self.assertAlmostEqual(cmds.getAttr(f"{self.office}.intensity"), 1.5)
@@ -192,14 +193,14 @@ class TestLightLayerBaker(MayaTkTestCase):
             info = json.load(f)
         checked = ptk.LightLayerInfo.validate(info)  # the contract capture_bake reads
         self.assertEqual((checked.errors, checked.warnings), ([], []))
-        self.assertEqual((info["kind"], info["gain"]), ("light", math.pi))
+        self.assertEqual((info["kind"], info["gain"]), ("light", 1.0))
         self.assertEqual(info["spec"], KEY)
         # Its lights, as the lightmap record carries them: a capture lights their
         # highlights into the layer (the scene's own light at 0 is no part of it).
         (light,) = info["lights"]
         self.assertEqual(light["type"], "spot")
         self.assertAlmostEqual(light["position"][1], 5.0, places=4)
-        self.assertAlmostEqual(light["intensity"], 2.0 * math.pi, places=4)
+        self.assertAlmostEqual(light["intensity"], 2.0, places=4)
 
     def test_a_set_bakes_its_members(self):
         box = cmds.polyCube(name="layerBox")[0]

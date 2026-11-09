@@ -278,8 +278,8 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
     def test_sync_reads_any_nonzero_opacity_as_visible(self):
         """Sub-1.0 opacity (even 0.001) mirrors to visible -- only a literal
-        0.0 marks the object hidden: the ``> 0`` rule the GLB's presence
-        fallback (``ptk.MeshConvert._presence_keys``) applies too."""
+        0.0 marks the object hidden: the ``> 0`` rule the ``render_effects``
+        record states for every reader ("hidden at 0")."""
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
         RenderEffects.create(objects=[self.cube], mode="attribute")
@@ -727,9 +727,8 @@ class TestChannelRecords(MayaTkTestCase):
 
 class TestPrepareForExport(MayaTkTestCase):
     """prepare_for_export stages the curve-proxy transport and writes nothing the
-    export reads back: presence is derived from the authored channels where the
-    GLB is built (``ptk.MeshConvert._presence_keys``) and the proxy carries each
-    object's curve to Unity, so an opacity keyed by hand gets no visibility
+    export reads back: an opacity at 0 is presence by the ``render_effects``
+    contract and the proxy carries each object's curve to every reader, so an opacity keyed by hand gets no visibility
     mirror, and authored visibility is never touched."""
 
     def test_hand_keyed_opacity_gets_no_visibility_mirror(self):
@@ -1384,10 +1383,10 @@ class TestHighlightColourStops(MayaTkTestCase):
         stops = spec.color_stops.resolve([track.get(k) for k in spec.color_stops.keys])
         base = [0.0, 0.0, 0.0]
         self.assertEqual(
-            [round(c, 3) for c in spec.values(base, 0.0, stops)], [0.4, 0.0, 0.0]
+            [round(c, 3) for c in spec.values(base, 0.0, stops, {})], [0.4, 0.0, 0.0]
         )
         self.assertEqual(
-            [round(c, 3) for c in spec.values(base, 1.0, stops)], [0.2, 0.5, 1.0]
+            [round(c, 3) for c in spec.values(base, 1.0, stops, {})], [0.2, 0.5, 1.0]
         )
 
     def test_an_unknown_stop_is_refused(self):

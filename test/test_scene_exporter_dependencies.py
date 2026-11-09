@@ -8,8 +8,10 @@ Media, pinned over a preset too), every file a scene record names (pythontk
 ``FbxMedia.embed_dependencies``) and the audio its events play, while the
 texture passes stage their processed maps in scratch and the exporter keeps
 its own records off the export folder: nothing ships beside the FBX. The
-Unity half -- only the FBX copied into a project -- is unitytk's
-``test_embedded_dependencies_integration``.
+Unity half -- only the FBX copied into a project, every map resolved -- is
+the Unity package's samples' Edit Mode tests (``<F>SampleTests``, on the
+samples this exporter writes) and their twins' (``m3trik/test/unity_e2e/``:
+each sample delivered again by another producer or route).
 """
 
 import os
@@ -113,6 +115,44 @@ class TestSelfContainedFbx(MayaTkTestCase):
         embedded = {row["name"]: row["bytes"] for row in ptk.FbxMedia.embedded(fbx)}
         self.assertEqual(embedded.get(os.path.basename(png)), os.path.getsize(png))
 
+    def test_the_fbx_names_no_folder_of_this_machine(self):
+        """Bug: the delivered FBX carried the producer's user name and
+        folders -- the staging file under the user's temp folder in its
+        document URLs, Maya's project folder, each map's absolute source --
+        to whoever opened it. The deliverable names none (pythontk
+        ``FbxMedia.strip_machine_paths``), and its embedded map still
+        resolves: re-imported from a copy elsewhere, the file node reads the
+        map Maya extracted. Fixed: 2026-11-08"""
+        cube, png = self._textured_cube()
+        ok, fbx = self._export([cube], "portable")
+        self.assertTrue(ok and os.path.isfile(fbx))
+        with open(fbx, "rb") as fh:
+            data = fh.read().lower()
+        for folder in (os.path.expanduser("~"), self.project, self.images):
+            for spelling in (folder.replace("\\", "/"), folder.replace("/", "\\")):
+                self.assertFalse(spelling.lower().encode("utf-8") in data, spelling)
+        self.assertFalse(b"appdata" in data, "the user's AppData folder")
+        name = os.path.basename(png)
+        self.assertIn(name, [row["name"] for row in ptk.FbxMedia.embedded(fbx)])
+        self.assertIn(
+            name,
+            [n for m in ptk.FbxFile.load(fbx).materials() for n in m["textures"].values()],
+        )
+        # A reader finds the map with nothing beside the file.
+        elsewhere = os.path.join(self.out, "client")
+        os.makedirs(elsewhere)
+        copy = os.path.join(elsewhere, "portable.fbx")
+        with open(fbx, "rb") as src, open(copy, "wb") as dst:
+            dst.write(src.read())
+        os.remove(png)
+        cmds.file(new=True, force=True)
+        cmds.file(copy, i=True, type="FBX", ignoreVersion=True, options="fbx")
+        read = [cmds.getAttr(f"{node}.fileTextureName") for node in cmds.ls(type="file")]
+        self.assertTrue(read, "the import made no file node")
+        for path in read:
+            self.assertEqual(os.path.basename(path), name)
+            self.assertTrue(os.path.isfile(path), path)
+
     def test_nothing_ships_beside_the_fbx(self):
         """The deliverable is the FBX alone: its maps ride inside it, and the
         exporter's own record of what shipped (``.scene_data.json``) lives in
@@ -159,9 +199,10 @@ class TestSelfContainedFbx(MayaTkTestCase):
         self.assertTrue(mel.eval("FBXExportCameras -q"), "a content choice was lost")
 
     def test_the_shipped_audio_rides_inside_under_its_event_names(self):
-        """Unity matches an AudioClip to an ``audio`` event by name,
-        and an event names its TRACK, not the track's file: the file goes in
-        under the event's name, its extension kept."""
+        """Unity matches an AudioClip to an ``audio`` cue by its sound, the
+        file name the delivery carries -- the track id with its file's
+        extension, whatever the source file is called: the file goes in under
+        it."""
         import wave
 
         from mayatk.audio_utils._audio_utils import AudioUtils
@@ -192,7 +233,7 @@ class TestSelfContainedFbx(MayaTkTestCase):
         with open(written[f"{track}.wav"], "rb") as fh:
             self.assertEqual(
                 ptk.FbxMedia.record(fbx, ptk.SceneRecords.AUDIO.key)["media"],
-                {track: hashlib.sha256(fh.read()).hexdigest()},
+                {f"{track}.wav": hashlib.sha256(fh.read()).hexdigest()},
             )
 
     def test_processed_textures_stage_in_scratch_for_an_fbx(self):
