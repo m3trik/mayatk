@@ -54,20 +54,27 @@ class ShadowRig(ptk.LoggingMixin):
     under it, moved past :attr:`AUTO_RECALCULATE_DEG` -- and **Recalculate
     Silhouette** / **Reproject** do it by hand (a rig is reported stale at
     export past :attr:`_STALE_BEARING_DEG`). The plane's transform channels
-    and its ``opacity`` fade bake to keyframes for FBX.
+    bake to keyframes for FBX; its fade is never keyed -- every reader
+    evaluates it from the record (``ptk.ShadowProjection.fade``).
 
     Sources: any transform (the rig reads its world position) — a locator, a
     point/spot/area light — or a ``directionalLight``, whose *direction*
     (world -Z) is projected along instead of a position, the way a sun works.
 
-    Opacity: the source-size penumbra is in the PNG; the runtime fade on the
-    plane's keyable ``opacity`` (the RenderOpacity preset) lightens a shadow
-    as it elongates (``falloffPower``), kills it when the source drops below
-    the target, and fades a target rising off the ground (``fadeHeight``).
+    Opacity: the source-size penumbra is in the PNG; the fade
+    (``ptk.ShadowProjection.fade``, from the stamps the record publishes)
+    lightens a shadow as it elongates (``falloffPower``), kills it when the
+    source drops below the target, and fades a target rising off the ground
+    (``fadeHeight``). The expression writes it to the plane's material (its
+    ``<plane>_fade`` node, :attr:`FADE_SUFFIX`), composed over the plane's
+    own ``opacity`` (the RenderOpacity preset, the authored value, 1 unless
+    an artist animates it): the viewport's preview of what every reader
+    evaluates, on nothing the exporter reads -- driving the plane's
+    ``opacity``, the preview was baked into every take a write makes.
 
     Material: ``standardSurface`` with the silhouette in ``baseColor`` (black
-    RGB, silhouette in alpha) and ``file alpha x opacity`` into the shader's
-    opacity — the one wiring VP2 renders per pixel (the StingrayPBS graphs
+    RGB, silhouette in alpha) and ``file alpha x opacity x fade`` into the
+    shader's opacity — the one wiring VP2 renders per pixel (the StingrayPBS graphs
     can't preview the fade; measured 2026-09-02).
 
     Workflow for Unity:
@@ -78,15 +85,15 @@ class ShadowRig(ptk.LoggingMixin):
        (produced fresh at export time: ``FbxUtils.PRODUCERS``). For
        File > Export, the Game Exporter and the bridges, bake first with
        ShadowRig.bake() (or the panel's Bake to Keyframes button).
-    3. In Unity: with unitytk's ShadowPlaneController.cs deployed, the
+    3. In Unity: with the unitytk package installed, the
        import is automatic (unlit-transparent material bound to the
        silhouette, shadow casting/receiving + probes off). The silhouette
        PNG is an ordinary material texture, so Embed Textures ships it.
     4. WebXR / GLB: the sidecar's base-colour and alpha-mode sections carry
        the silhouette and the blend mode, and its unlit section marks the
        material ``KHR_materials_unlit`` (lit, the environment's specular
-       made a shadow brighter than its floor); the baked ``opacity`` ramp
-       rides the visibility-tracks channel.
+       made a shadow brighter than its floor); the record rides the GLB
+       as it stands, every plane's horizon map with it.
 
     A shadow that no longer moves (its links broken on purpose) becomes a
     plain textured plane with :meth:`detach_planes` -- one unlit
@@ -103,10 +110,19 @@ class ShadowRig(ptk.LoggingMixin):
     DEFAULT_SOURCE_NAME = "shadow_source"
     # Lift above the ground plane to avoid z-fighting (build + expression).
     GROUND_OFFSET = 0.01
-    # The RenderOpacity preset's attr: the same name Unity's importer and the
-    # visibility-tracks producer key on, so the fade needs no channel of its own.
+    # The RenderOpacity preset's attr: the plane's authored opacity, which the
+    # material multiplies the silhouette by (with the preview fade).
     OPACITY_ATTR = "opacity"
-    # Channels the expression drives (and bake() keys).
+    #: The material node the expression writes the preview fade to: a
+    #: ``multDoubleLinear``, ``input1`` the plane's authored ``opacity``,
+    #: ``input2`` the fade, its output the silhouette's multiplier. A preview
+    #: on the material, never on the plane: what drives an attribute the
+    #: exporter reads ships baked in every take (measured, 2026-11-08: the
+    #: plane's ``opacity`` keyed in the shot and the shotless take alike),
+    #: and every reader fades the plane itself from the record.
+    FADE_SUFFIX = "_fade"
+    # The transform channels the expression drives (and bake() keys). The fade
+    # is never keyed: every reader evaluates it from the record (shadows v3).
     BAKE_CHANNELS = (
         "translateX",
         "translateY",
@@ -114,7 +130,6 @@ class ShadowRig(ptk.LoggingMixin):
         "rotateY",
         "scaleX",
         "scaleZ",
-        OPACITY_ATTR,
     )
     #: The shadows record's key under its old name, retired here: read the
     #: declaration's (``ptk.SceneRecords.SHADOWS.key``).
@@ -267,6 +282,7 @@ class ShadowRig(ptk.LoggingMixin):
         self.ground_height = float(ground_height)
         self.shader = None
         self.opacity_mult = None
+        self.fade_node = None
         self.texture_path = None
         self.group = None
         self.plane_size = self.PLANE_SIZE
@@ -827,7 +843,8 @@ class ShadowRig(ptk.LoggingMixin):
             self._RECURSIVE_ATTR, node=self.shadow_plane, exists=True
         ):
             cmds.addAttr(self.shadow_plane, ln=self._RECURSIVE_ATTR, at="bool", dv=True)
-        # The rig type (the record's ``type``) and the runtime-placement flag.
+        # The rig type (the record's ``silhouette.draw``) and the
+        # runtime-placement flag.
         if not cmds.attributeQuery(
             self._TYPE_ATTR, node=self.shadow_plane, exists=True
         ):
@@ -1217,7 +1234,8 @@ class ShadowRig(ptk.LoggingMixin):
 
         Material properties:
         - Base color: the silhouette file (black RGB; alpha = silhouette)
-        - Opacity: file alpha x the plane's expression-driven ``opacity``
+        - Opacity: file alpha x the plane's authored ``opacity`` x the
+          expression's preview fade (:attr:`FADE_SUFFIX`)
         - No specular / metalness (a shadow reflects nothing)
         """
         if not self.texture_path:
@@ -1234,19 +1252,18 @@ class ShadowRig(ptk.LoggingMixin):
         cmds.connectAttr(f"{place2d}.outUV", f"{file_node}.uv")
         cmds.connectAttr(f"{place2d}.outUvFilterSize", f"{file_node}.uvFilterSize")
 
-        # file alpha (per pixel) x the plane's fade (the expression writes
-        # plane.opacity) -> the shader's opacity.
+        # file alpha (per pixel) x the plane's opacity x the preview fade (the
+        # expression writes the fade node) -> the shader's opacity.
         self.opacity_mult = cmds.shadingNode(
             "multiplyDivide",
             asUtility=True,
             name=f"{self.shadow_plane}_opacity_mult",
         )
-        fade_plug = f"{self.shadow_plane}.{self.OPACITY_ATTR}"
         for chan in ("X", "Y", "Z"):
             cmds.connectAttr(
                 f"{file_node}.outAlpha", f"{self.opacity_mult}.input1{chan}"
             )
-            cmds.connectAttr(fade_plug, f"{self.opacity_mult}.input2{chan}")
+        self._ensure_fade_node()
 
         if shader_type == "stingray":
             self.logger.warning(
@@ -1328,6 +1345,7 @@ class ShadowRig(ptk.LoggingMixin):
                 cmds.delete(stale)
             light_dm = self._make_world_decompose(self.light, "light")
             prologue = self._expr_positional(light_dm, contact_dm)
+        self._ensure_fade_node()
         self._build_expression(prologue + self._expr_model() + self._expr_opacity())
 
     def _make_world_decompose(self, node, suffix):
@@ -1449,10 +1467,10 @@ float $cw = 0.5 * ($w0 + $w1) * $wid;
 """
 
     def _expr_opacity(self):
-        """Expression epilogue: opacity = elongation falloff x light-height
-        fade x rise fade (target leaving the ground), written to the plane's
-        keyable ``opacity`` — the channel the material multiplies the file
-        alpha by, the bake keys, and the engines read."""
+        """Expression epilogue: the fade = elongation falloff x light-height
+        fade x rise fade (target leaving the ground), written to the
+        material's fade node (:meth:`_fade_plug`) -- the viewport's preview,
+        never the plane's own ``opacity``, which the exporter reads."""
         return f"""
 // Opacity: a shadow lightens as it elongates past its footprint (more
 // penumbra, more fill light), vanishes when the source drops below the
@@ -1466,7 +1484,7 @@ float $distOpacity = $intensity / max(0.001, pow($stretch, $power));
 float $heightFade = clamp(0.0, 1.0, $Ly - $Cy);
 float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH));
 
-{self.shadow_plane}.{self.OPACITY_ATTR} = clamp(0.0, 1.0, $distOpacity * $heightFade * $riseFade);
+{self._fade_plug(self.shadow_plane)} = clamp(0.0, 1.0, $distOpacity * $heightFade * $riseFade);
 """
 
     def _build_expression(self, body):
@@ -1482,6 +1500,173 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         """Bake this rig's driven channels to keyframes and remove the live
         expression (FBX-ready). See :meth:`bake_planes`."""
         return self.bake_planes([self.shadow_plane], start=start, end=end)
+
+    @classmethod
+    def _fade_node(cls, plane):
+        """The plane's preview fade node (:attr:`FADE_SUFFIX`): the
+        ``multDoubleLinear`` its authored ``opacity`` feeds; None for a rig
+        built before it (its expression drives ``opacity`` itself)."""
+        plug = f"{plane}.{cls.OPACITY_ATTR}"
+        if not cmds.objExists(plug):
+            return None
+        for node in (
+            cmds.listConnections(
+                plug, source=False, destination=True, type="multDoubleLinear"
+            )
+            or []
+        ):
+            if node.endswith(cls.FADE_SUFFIX):
+                return node
+        return None
+
+    @classmethod
+    def _fade_plug(cls, plane):
+        """The plug the plane's viewport fade lives on: its fade node's
+        ``input2`` -- else (a rig built before the node, a version 2 bake's
+        keyed fade) the plane's ``opacity``. Keys on the ``opacity`` of a
+        plane with a fade node are the artist's, never the fade."""
+        node = cls._fade_node(plane)
+        return f"{node}.input2" if node else f"{plane}.{cls.OPACITY_ATTR}"
+
+    @classmethod
+    def viewport_fade(cls, plane):
+        """The fade the plane's material draws now: its authored ``opacity``
+        times the preview fade (its fade node's output); the plane's
+        ``opacity`` for a rig built before the node."""
+        node = cls._fade_node(plane)
+        if node:
+            return float(cmds.getAttr(f"{node}.output"))
+        return float(cls._plane_attr(plane, cls.OPACITY_ATTR, 1.0))
+
+    def _ensure_fade_node(self):
+        """Give the material its preview fade node (:attr:`FADE_SUFFIX`),
+        between the plane's ``opacity`` and the silhouette's multiplier, if
+        it has none: a rig built before it is moved over as its expression
+        is rebuilt -- the plane's ``opacity`` is the authored value again (1,
+        unless keyed), its last preview value the fade's."""
+        if not (self.shadow_plane and self.opacity_mult):
+            return None
+        node = self._fade_node(self.shadow_plane)
+        if node:
+            self.fade_node = node
+            return node
+        own = f"{self.shadow_plane}.{self.OPACITY_ATTR}"
+        drawn = float(cmds.getAttr(own)) if cmds.objExists(own) else 1.0
+        sources = cmds.listConnections(own, source=True, destination=False) or []
+        node = cmds.shadingNode(
+            "multDoubleLinear",
+            asUtility=True,
+            name=f"{CoreUtils.leaf_name(self.shadow_plane)}{self.FADE_SUFFIX}",
+        )
+        cmds.connectAttr(own, f"{node}.input1")
+        cmds.setAttr(f"{node}.input2", drawn)
+        for chan in ("X", "Y", "Z"):
+            cmds.connectAttr(
+                f"{node}.output", f"{self.opacity_mult}.input2{chan}", force=True
+            )
+        # Without the node the plane's opacity was never authored: the old
+        # expression drove it, or a bake held the fade on it -- the authored
+        # value is the neutral one. Keys left on it stay: a version 2 bake's
+        # are cleared before this runs, any other are the artist's.
+        if any(cmds.nodeType(s) == "expression" for s in sources):
+            cmds.disconnectAttr(
+                cmds.listConnections(own, source=True, destination=False, plugs=True)[0],
+                own,
+            )
+        if not cmds.getAttr(own, lock=True) and not cmds.listConnections(
+            own, source=True, destination=False
+        ):
+            cmds.setAttr(own, 1.0)
+        self.fade_node = node
+        return node
+
+    @classmethod
+    def _write_planes(cls):
+        """The shadow planes the write in progress ships: its scope's
+        (``FbxUtils.write_context``), every plane for a write of the whole
+        scene. None outside a write, or before it knows its scope (a writer
+        that stages before it publishes): its publish (:meth:`export_record`)
+        and the bracket's re-stage after it reach them then. What the export
+        stages and the record's producer change, so a plane the write leaves
+        out is never touched."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        ctx = FbxUtils.write_context()
+        if ctx is None:
+            return []
+        if ctx.scope is None:
+            return cls.find_shadow_planes()
+        return cls.find_shadow_planes(ctx.scope) if ctx.scope else []
+
+    @classmethod
+    def stage_preview_fade(cls):
+        """The ``shadow_preview_fade`` export stage (``FbxUtils.STAGERS``):
+        :meth:`retire_preview_fade` on the planes the write ships
+        (:meth:`_write_planes`), never on one it leaves out.
+
+        Returns:
+            The planes moved over.
+        """
+        planes = cls._write_planes()
+        return cls.retire_preview_fade(planes) if planes else []
+
+    @classmethod
+    def stage_v2_fade(cls):
+        """The ``shadow_v2_fade`` export stage (``FbxUtils.STAGERS``):
+        :meth:`retire_v2_fade` on the planes the write ships
+        (:meth:`_write_planes`), never on one it leaves out.
+
+        Returns:
+            The planes stripped.
+        """
+        planes = cls._write_planes()
+        return cls.retire_v2_fade(planes) if planes else []
+
+    @classmethod
+    def retire_preview_fade(cls, planes=None, *, ctx=None):
+        """Move a live plane whose expression still drives its ``opacity``
+        (a rig built before the fade node) onto it: the fade node made, the
+        expression rebuilt to write the fade there, the plane's ``opacity``
+        the authored value again -- so no write bakes the preview into its
+        takes. One undo step; idempotent, so every export stages it on the
+        planes it ships (:meth:`stage_preview_fade`) and the record's producer
+        runs it again and says it once (*ctx*).
+
+        Returns:
+            The planes moved over.
+        """
+        moved = []
+        for plane in cls.find_shadow_planes(planes):
+            if not cls.plane_is_live(plane) or cmds.referenceQuery(
+                plane, isNodeReferenced=True
+            ):
+                continue
+            own = f"{plane}.{cls.OPACITY_ATTR}"
+            drivers = cmds.listConnections(own, source=True, destination=False) or []
+            if not any(cmds.nodeType(d) == "expression" for d in drivers):
+                continue
+            rig = cls.from_plane(plane)
+            if rig is None or not rig.opacity_mult or not (
+                rig.light and cmds.objExists(rig.light)
+            ):
+                continue
+            with CoreUtils.undo_chunk("Move Shadow Preview Fade"):
+                with Units.working_as(linear=cls.rig_unit(plane), angle=None):
+                    rig._relink_drivers(rig._ensure_fade_node)
+                    rig._relink_drivers(rig.setup_expression)
+            uuid = (cmds.ls(plane, uuid=True) or [str(plane)])[0]
+            cls._RETIRED[uuid] = (
+                f"{CoreUtils.leaf_name(plane)}: its preview fade moved off the "
+                "plane's opacity onto its material, so no take keys it -- every "
+                "reader evaluates the fade from the shadows record."
+            )
+            moved.append(plane)
+        if ctx is not None:
+            for plane in cls.find_shadow_planes(planes):
+                text = cls._RETIRED.pop((cmds.ls(plane, uuid=True) or [""])[0], None)
+                if text:
+                    cls._note_once(ctx, "preview_fade", plane, text)
+        return moved
 
     @staticmethod
     def _live_rig_nodes(plane):
@@ -1550,17 +1735,6 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             cmds.filterCurve(plug, filter="euler")
         except RuntimeError:
             pass  # a flat curve has nothing to unroll
-
-    @classmethod
-    def _mirror_fade_to_visibility(cls, plane):
-        """Sparse visibility keys around the baked fade's zero runs — the pairs
-        Unity's opacity importer rebuilds a fade from, and the keyed
-        visibility the GLB route needs before it will carry the ramp."""
-        if not cmds.attributeQuery(cls.OPACITY_ATTR, node=plane, exists=True):
-            return
-        from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
-
-        OpacityAttributeMode.sync_visibility_from_opacity([plane], windows=True)
 
     # ------------------------------------------------------------------ export metadata
     @staticmethod
@@ -1773,6 +1947,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             rig.group = parent[0]
         rig.contact_locator = cls._plane_contact(plane)
         rig.shader, rig.opacity_mult = cls._plane_shading(plane)
+        rig.fade_node = cls._fade_node(plane)
         rig.texture_path = cls._plane_texture_path(plane)
         rig.rig_type = cls.plane_type(plane)
         rig.horizon_path = cls._plane_horizon_path(plane)
@@ -1859,9 +2034,12 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
     @classmethod
     def _clear_baked_keys(cls, plane):
-        """Delete the baked keys on the driven channels (and the visibility
-        mirror) so an expression can drive the plane again."""
-        for ch in cls.BAKE_CHANNELS + ("visibility",):
+        """Delete the bake's keys on the driven channels
+        (:attr:`BAKE_CHANNELS`) so an expression can drive the plane again,
+        and a version 2 bake's fade (:meth:`_v2_fade_curves`). Every other
+        key is the artist's and stays: an ``opacity`` or ``visibility`` they
+        animated."""
+        for ch in cls.BAKE_CHANNELS:
             if not cmds.attributeQuery(ch, node=plane, exists=True):
                 continue
             curves = cmds.listConnections(
@@ -1869,8 +2047,40 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             )
             if curves:
                 cmds.delete(curves)
-        if cmds.attributeQuery("visibility", node=plane, exists=True):
+        cls._drop_v2_fade(plane)
+
+    @classmethod
+    def _v2_fade_curves(cls, plane):
+        """A version 2 bake's fade on *plane*: the curves keying its
+        ``opacity`` and the ``visibility`` mirrored from it; ``[]`` when it
+        has none. Only a plane with no fade node (:meth:`_fade_node`) can
+        hold one -- every rig since builds the node, a v2 bake never had it
+        -- so keys on a plane with the node are the artist's."""
+        if cls._fade_node(plane) is not None:
+            return []
+        keyed = {
+            ch: cmds.listConnections(
+                f"{plane}.{ch}", source=True, destination=False, type="animCurve"
+            )
+            or []
+            for ch in (cls.OPACITY_ATTR, "visibility")
+            if cmds.attributeQuery(ch, node=plane, exists=True)
+        }
+        if not keyed.get(cls.OPACITY_ATTR):
+            return []
+        return sorted({c for curves in keyed.values() for c in curves})
+
+    @classmethod
+    def _drop_v2_fade(cls, plane):
+        """Delete a version 2 bake's fade (:meth:`_v2_fade_curves`) and show
+        the plane its visibility keys hid. True when there was one."""
+        curves = cls._v2_fade_curves(plane)
+        if not curves:
+            return False
+        cmds.delete(curves)
+        if not cmds.getAttr(f"{plane}.visibility", lock=True):
             cmds.setAttr(f"{plane}.visibility", True)
+        return True
 
     @classmethod
     def unbake_planes(cls, planes=None):
@@ -2227,9 +2437,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                     # The tile is rewritten in place; the plane keeps sampling
                     # the atlas, so nothing else repacks.
                     bound = cls._write_atlas_tile(plane, "projected")
-                if rig.rig_type == "horizon":
-                    # The map depends on the geometry, not the source: re-bake only
-                    # when the target changed since the last bake.
+                if cls._horizon_params(plane):
+                    # Every rig's map depends on the geometry, not the source:
+                    # re-bake only when the target changed since the last bake.
                     params = cls._horizon_params(plane)
                     rig.bake_horizon(
                         size=params.get("size"),
@@ -2257,23 +2467,32 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
     def export_record(cls, ctx):
         """The ``shadows`` record for this scene, or ``None`` when it
         has no shadow planes -- the ``ptk.SceneRecords.SHADOWS`` producer
-        (``FbxUtils.PRODUCERS``).  Pure: it reads the planes' stamps and never
-        writes.  The payload joins Unity-side by GameObject name (unitytk's
-        ``ShadowPlaneController.cs``):
+        (``FbxUtils.PRODUCERS``).  It reads the planes' stamps, and writes one
+        kind of file: every plane carries its horizon map (v3), so a plane with
+        none has it baked here, and an export re-bakes one whose targets'
+        geometry changed (:meth:`bake_horizon_maps`).  A plane that still has
+        none (its targets gone) is left out, and one whose map could not be
+        re-baked ships the map it has: each said once a session in the
+        export's report (``ctx.note``).  A live plane's preview fade is moved
+        off its ``opacity`` and a version 2 bake's fade keys are stripped
+        first, each said once in the report (:meth:`retire_preview_fade`,
+        :meth:`retire_v2_fade`).  The payload joins
+        Unity-side by GameObject name (unitytk's ``ShadowPlaneImporter``):
 
-        ``{"version": 2, "unit_scale": <m per unit>, "planes": [...]}``
+        ``{"version": 3, "unit_scale": <m per unit>, "planes": [...]}``
 
         with one :meth:`plane_record` per plane (the ``version`` is stamped by
         the declaration).  Warns about planes whose silhouette was rasterized
-        from a bearing the source has since left (Recalculate fixes it;
-        nothing is rewritten here — an export must not write the project's
-        textures behind the user).
+        from a bearing the source has since left (Recalculate fixes it; a
+        silhouette is never rewritten here — an export must not redraw the
+        project's textures behind the user).
 
         Parameters:
-            ctx (ptk.ExportContext): The export's decisions; only its
-                ``scope`` is read. A scoped export names the export set's
-                planes alone (the record is ``export_scoped``): a plane it
-                leaves out would ship its silhouette with nothing to bind it to.
+            ctx (ptk.ExportContext): The export's decisions: its ``scope``
+                (a scoped export names the export set's planes alone -- the
+                record is ``export_scoped``: a plane it leaves out would ship
+                its silhouette with nothing to bind it to) and ``mode``; its
+                report takes the notes.
 
         Returns:
             ptk.Record | None: The record, or ``None`` when there is no plane
@@ -2284,12 +2503,41 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         planes = cls.find_shadow_planes(ctx.scope)
         if not planes:
             return None
+        # The retirements change the scene: on the planes this write ships
+        # alone (:meth:`_write_planes`) -- never in an authoring publish, nor
+        # in the snapshot's whole-scene pass, which must leave the scene as
+        # the scoped run did.
+        shipped = set(cls._write_planes()) if ctx.mode != ctx.AUTHORING else set()
+        staged = [p for p in planes if p in shipped]
+        if staged:
+            cls.retire_preview_fade(staged, ctx=ctx)
+            cls.retire_v2_fade(staged, ctx=ctx)
+        cls.bake_horizon_maps(planes, missing_only=ctx.mode == ctx.AUTHORING, ctx=ctx)
         records = []
         stale = []
         for plane in planes:
-            records.append(cls.plane_record(plane))
+            record = cls.plane_record(plane)
+            if "horizon" not in record:
+                cls._note_once(
+                    ctx,
+                    "left_out",
+                    plane,
+                    "Left out of the shadows record, with no horizon map: "
+                    f"{CoreUtils.leaf_name(plane)} "
+                    + (
+                        "(it is referenced, and none could be baked here). Bake "
+                        "its map in its source file."
+                        if cmds.referenceQuery(plane, isNodeReferenced=True)
+                        else "(its targets are gone, so none could be baked). "
+                        "Rebuild the rig, or Detach it into a plain plane."
+                    ),
+                )
+                continue
+            records.append(record)
             if cls.silhouette_is_stale(plane):
                 stale.append(CoreUtils.leaf_name(plane))
+        if not records:
+            return None
         if stale:
             cls.logger.warning(
                 "Shadow silhouette rasterized from a bearing the source has since "
@@ -2315,7 +2563,10 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        record = cls.export_record(ptk.ExportContext(mode=ptk.ExportContext.AUTHORING))
+        ctx = ptk.ExportContext(mode=ptk.ExportContext.AUTHORING)
+        record = cls.export_record(ctx)
+        for note in ctx.notes:  # an authoring publish's report is the log
+            cls.logger.warning(note)
         FbxUtils.publish_authored({ptk.SceneRecords.SHADOWS: record})
         return record.text if record is not None else None
 
@@ -2366,13 +2617,15 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
     @classmethod
     def plane_record(cls, plane):
-        """One plane's ``shadows`` v2 record (the engine contract in
-        ``mayatk/docs/shadow_rig_morphing.md``): the join key, the type, the
-        textures, the source and contact nodes the engine reads at runtime,
-        the projection model's inputs, and the atlas / horizon blocks when
-        the rig carries them. Works off the stamps, so it needs no Python
-        instance and survives a rig built in an earlier session.  One entry
-        of the scene record :meth:`export_record` produces."""
+        """One plane's ``shadows`` v3 record (the engine contract in
+        ``mayatk/docs/shadow_rig_morphing.md``): the join key, the source and
+        contact nodes the engine reads at runtime, the projection model's
+        inputs and the canvas it places, the fade's terms (the source's ramp
+        the preview's: one rig unit), the horizon map, and the silhouette (its
+        image, atlas tile and whether a reader draws it: the rig's type). Works off the stamps, so it needs no Python instance and
+        survives a rig built in an earlier session.  One entry of the scene
+        record :meth:`export_record` produces; a plane not yet baked has no
+        ``horizon``, which :meth:`export_record` bakes first."""
         attr = cls._plane_attr
         tex = cls._plane_texture_path(plane)
         _, source = cls._rig_links(plane)
@@ -2381,10 +2634,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         size = float(attr(plane, "sourceSize", 0.0) or 0.0)
         # The stamps' unit -> the record's (the working one, :meth:`unit_scale`).
         factor = Units.convert(1.0, cls.rig_unit(plane), "working")
+        height = float(attr(plane, "objectHeight", 0.0))
         record = {
             "name": CoreUtils.leaf_name(plane),
-            "type": cls.plane_type(plane),
-            "texture": os.path.basename(tex) if tex else "",
             "intensity": round(float(attr(plane, "shadowIntensity", 1.0)), 4),
             "source": CoreUtils.leaf_name(source) if source else "",
             "source_type": "directional" if directional else "point",
@@ -2394,34 +2646,72 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             "contact": CoreUtils.leaf_name(contact) if contact else "",
             "ground": round(float(attr(plane, "groundHeight", 0.0)) * factor, 6),
             "radius": round(float(attr(plane, "footprintRadius", 0.0)) * factor, 6),
-            "height": round(float(attr(plane, "objectHeight", 0.0)) * factor, 6),
+            "height": round(height * factor, 6),
             "max_stretch": round(
                 float(
                     attr(plane, "maxStretch", ptk.ShadowProjection.DEFAULT_MAX_STRETCH)
                 ),
                 6,
             ),
-            "canvas": [
-                round(float(attr(plane, a, d)), 6)
-                for a, d in zip(cls._CANVAS_ATTRS, (-1.0, 1.0, -0.5, 0.5))
-            ],
+            "falloff_power": round(
+                float(
+                    attr(
+                        plane, "falloffPower", ptk.ShadowProjection.DEFAULT_FALLOFF_POWER
+                    )
+                ),
+                6,
+            ),
+            "fade_height": round(
+                float(attr(plane, "fadeHeight", 2.0 * height)) * factor, 6
+            ),
+            # The preview ramps the source in over one unit of the rig.
+            "source_ramp": round(factor, 6),
         }
-        atlas = attr(plane, cls._ATLAS_TEX_ATTR, "")
-        if atlas:
-            record["atlas"] = {
-                "texture": atlas,
-                "rect": cls._read_rect(plane, cls._ATLAS_RECT_ATTRS),
-            }
+        record["canvas"] = [
+            round(float(attr(plane, a, d)), 6)
+            for a, d in zip(cls._CANVAS_ATTRS, ptk.ShadowConformance.CANVAS)
+        ]
         horizon = cls._horizon_params(plane)
         if horizon:
             record["horizon"] = horizon
+        silhouette = ptk.ShadowRecord.silhouette(
+            tex,
+            cls.plane_type(plane) == "projected",
+            atlas=attr(plane, cls._ATLAS_TEX_ATTR, ""),
+            atlas_rect=cls._read_rect(plane, cls._ATLAS_RECT_ATTRS),
+        )
+        if silhouette:
+            record["silhouette"] = silhouette
         return record
+
+    @classmethod
+    def plane_fade(cls, plane):
+        """The fade *plane* draws at the current frame, as every reader
+        evaluates it (``ptk.ShadowRecord.fade`` over :meth:`plane_record`):
+        its source and contact where they stand now; its intensity when
+        either is gone."""
+        _, source = cls._rig_links(plane)
+        contact = cls._plane_contact(plane)
+        record = cls.plane_record(plane)
+        if not (source and contact and cmds.objExists(source)):
+            return ptk.ShadowRecord.fade(record, cls.unit_scale())
+        light = direction = None
+        if record["source_type"] == "directional":
+            m = cmds.xform(source, q=True, ws=True, matrix=True)
+            direction = (-m[8], -m[9], -m[10])  # a directional light's -Z
+        else:
+            light = cmds.xform(source, q=True, ws=True, t=True)
+        where = cmds.xform(contact, q=True, ws=True, t=True)
+        return ptk.ShadowRecord.fade(
+            record, cls.unit_scale(), where, light, direction=direction
+        )
 
     # ---------------------------------------------------------------- rig type
     @classmethod
     def plane_type(cls, plane):
         """The rig type stamped on *plane* (``projected`` for a rig built
-        before the stamp existed)."""
+        before the stamp existed): an authoring choice, which the record
+        states as its silhouette's ``draw``."""
         value = cls._plane_attr(plane, cls._TYPE_ATTR, "") or cls.RIG_TYPES[0]
         return value if value in cls.RIG_TYPES else cls.RIG_TYPES[0]
 
@@ -2436,6 +2726,10 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 )
                 or []
             ):
+                # A conversion node a deletion in this command left is still
+                # listed (measured: an expression deleted by a bake) -- skip it.
+                if not cmds.objExists(node):
+                    continue
                 if cmds.nodeType(node) == "transform" and CoreUtils.leaf_name(
                     node
                 ).endswith("_contact_loc"):
@@ -2537,10 +2831,11 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         """Bake the target's height-field shadow map
         (``pythontk.ShadowHorizon``) in the contact locator's frame and write
         it beside the silhouette as ``<base>_horizon.png``; stamps the
-        record's ``horizon`` block and turns the rig into the ``horizon``
-        type. The engine marches the map per frame from the source node, so
-        the outline follows a runtime light; the silhouette stays as the
-        fallback and the DCC preview.
+        record's ``horizon`` block. Every rig type carries one (shadows v3):
+        the engine marches the map per frame from the source node, so the
+        outline follows a runtime light; the rig's type only says whether a
+        reader draws the silhouette instead (``projected``) or keeps it as the
+        fallback (``horizon``).
 
         The frame is the contact's, which is what lets a prop rotated (or
         moved) at runtime carry its shadow — the engine reads the same node's
@@ -2597,8 +2892,6 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         self.horizon_path = self.horizon_path.replace("\\", "/")
         os.makedirs(os.path.dirname(self.horizon_path) or ".", exist_ok=True)
         Image.fromarray(hmap.to_rgba(), "RGBA").save(self.horizon_path)
-        self.rig_type = "horizon"
-        self._ensure_string_attr(plane, self._TYPE_ATTR, "horizon")
         self._ensure_string_attr(
             plane, self._HORIZON_TEX_ATTR, os.path.basename(self.horizon_path)
         )
@@ -2623,6 +2916,68 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         return self.horizon_path
 
     @classmethod
+    def bake_horizon_maps(cls, planes=None, *, missing_only=False, ctx=None):
+        """Bake the horizon map of each of *planes* that has none -- and,
+        unless *missing_only*, re-bake one whose targets' geometry changed
+        since (the stamped hash: ``bake_horizon(only_if_changed=True)``),
+        each in its rig's own unit. A packed plane's atlas tile is rewritten
+        in place.
+
+        Every plane carries its map (shadows v3), so :meth:`export_record`
+        runs this first; a bake is ~0.05 s. A plane whose map cannot be
+        re-baked (its targets gone) keeps the map it has, said once a session
+        in *ctx*'s report; one with none is named in a warning outside an
+        export (an export names it as left out).
+
+        Parameters:
+            planes: Shadow plane transform(s); None = every plane.
+            missing_only: Bake only the planes with no map on disk (an
+                authoring-time publish), skipping the geometry hash.
+            ctx (ptk.ExportContext): The export whose report takes the
+                notes; ``None`` warns instead.
+
+        Returns:
+            The planes whose map was (re)written.
+        """
+        baked = []
+        for plane in cls.find_shadow_planes(planes):
+            params = cls._horizon_params(plane)
+            path = cls._plane_horizon_path(plane)
+            has_map = bool(params) and bool(path) and os.path.exists(path)
+            if missing_only and has_map:
+                continue
+            before = cls._plane_attr(plane, cls._HORIZON_HASH_ATTR, "")
+            try:
+                with Units.working_as(linear=cls.rig_unit(plane), angle=None):
+                    rig = cls.from_plane(plane)
+                    if rig is None:
+                        raise ValueError("its target/source stamps predate the rig links")
+                    rig.bake_horizon(
+                        size=params.get("size"),
+                        spans=params.get("spans"),
+                        only_if_changed=has_map,
+                    )
+            except (ValueError, RuntimeError, OSError) as error:
+                leaf = CoreUtils.leaf_name(plane)
+                if has_map:
+                    cls._note_once(
+                        ctx,
+                        "rebake",
+                        plane,
+                        f"{leaf}: its horizon map could not be re-baked ({error}); "
+                        "it ships the map of its last bake, which may not match "
+                        "its targets.",
+                    )
+                elif ctx is None:
+                    cls.logger.warning(f"{leaf}: no horizon map baked: {error}")
+                continue
+            if not has_map or cls._plane_attr(plane, cls._HORIZON_HASH_ATTR, "") != before:
+                if cls._plane_attr(plane, cls._HORIZON_ATLAS_ATTR, ""):
+                    cls._write_atlas_tile(plane, "horizon")
+                baked.append(plane)
+        return baked
+
+    @classmethod
     def _plane_horizon_path(cls, plane):
         """The plane's own horizon PNG (beside its silhouette), or None."""
         name = cls._plane_attr(plane, cls._HORIZON_TEX_ATTR, "")
@@ -2634,10 +2989,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
     @classmethod
     def _horizon_params(cls, plane):
-        """The record's ``horizon`` block from the stamps; ``{}`` for a rig
-        without a map."""
-        if cls.plane_type(plane) != "horizon":
-            return {}
+        """The record's ``horizon`` block from the stamps, whatever the rig's
+        type; ``{}`` for a rig not baked yet."""
         if not cls._plane_attr(plane, cls._HORIZON_TEX_ATTR, ""):
             return {}
         ints = [int(cls._plane_attr(plane, a, 0) or 0) for a in cls._HORIZON_INT_ATTRS]
@@ -2950,10 +3303,11 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         delete the live rig nodes (expression + driver nodes) so the result
         exports cleanly to FBX.
 
-        Keys the transform channels AND the ``opacity`` fade, euler-unrolls
-        the baked ``rotateY``, and mirrors the fade's zero runs to sparse
-        visibility keys (the pairs Unity's opacity importer rebuilds a fade
-        from; the keyed visibility the GLB route needs to carry the ramp).
+        Keys the transform channels and euler-unrolls the baked ``rotateY``.
+        The fade is not keyed: every reader evaluates it from the record
+        (``ptk.ShadowProjection.fade``), so the plane takes no part in the
+        ``render_effects`` record. The baked plane's viewport fade holds at
+        its intensity (the fade's ceiling); Unbake restores the live preview.
 
         Args:
             planes: Shadow plane transform(s); None bakes every shadow plane
@@ -2985,8 +3339,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
         # ONE bakeResults over every live plane's plugs — simulation=True
         # replays the whole timeline, so baking per-plane would cost one
-        # full playback per rig. Rigs built before the fade channel existed
-        # have no opacity attr to key.
+        # full playback per rig.
         plugs = [
             f"{plane}.{ch}"
             for plane, _ in live
@@ -3008,9 +3361,100 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         baked = [plane for plane, _ in live]
         for plane in baked:
             cls._unroll_rotation(plane)
-            cls._mirror_fade_to_visibility(plane)
+            cls._hold_fade(plane)
         cls.refresh_export_metadata()
         return baked
+
+    #: What this session already said of a plane, ``(kind, node uuid)``: an
+    #: authoring publish runs on every dial change, so a lasting condition is
+    #: told once (:meth:`_note_once`).
+    _NOTED = set()
+    #: Planes whose version 2 fade keys an export stage stripped, by uuid, to
+    #: the sentence that says so: told by the record's producer, whose report
+    #: the write keeps (a stage runs before the report starts).
+    _RETIRED = {}
+
+    @classmethod
+    def _note_once(cls, ctx, kind, plane, text):
+        """Say *text* once a session for *plane* and *kind*: in *ctx*'s
+        report, or as a warning outside an export."""
+        key = (kind, (cmds.ls(plane, uuid=True) or [str(plane)])[0])
+        if key in cls._NOTED:
+            return
+        cls._NOTED.add(key)
+        if ctx is not None:
+            ctx.note(text)
+        else:
+            cls.logger.warning(text)
+
+    @classmethod
+    def retire_v2_fade(cls, planes=None, *, ctx=None):
+        """Strip a version 2 bake's fade from baked shadow planes (no
+        expression left): the keyed ``opacity`` and the visibility keys
+        mirrored from it. Under v3 every
+        reader evaluates the fade from the record, so those keys would ship
+        it twice (a ``render_effects`` track beside it); the plane is given
+        its fade node, its ``opacity`` the authored value again, and its
+        viewport fade holds at its intensity, as a v3 bake's does
+        (:meth:`_hold_fade`). Only a plane with no fade node holds such keys
+        (:meth:`_v2_fade_curves`): an ``opacity`` or ``visibility`` keyed on
+        any other is the artist's and stays. One undo step; idempotent, so
+        every export stages it on the planes it ships (:meth:`stage_v2_fade`)
+        before any record is produced, and the record's producer says it
+        once (*ctx*).
+
+        Parameters:
+            planes: Shadow plane transform(s); None = every plane.
+            ctx (ptk.ExportContext): The report the strip is told in;
+                ``None`` keeps it for the next export's.
+
+        Returns:
+            The planes stripped.
+        """
+        retired = []
+        for plane in cls.find_shadow_planes(planes):
+            if cls.plane_is_live(plane) or cmds.referenceQuery(
+                plane, isNodeReferenced=True
+            ):
+                continue  # a bake deletes the expression; a live fade is its own
+            if not cls._v2_fade_curves(plane):
+                continue  # none, or the artist's keys on a plane with a fade node
+            with CoreUtils.undo_chunk("Retire Shadow Fade Keys"):
+                cls._drop_v2_fade(plane)
+                cls._hold_fade(plane)  # on its new fade node: opacity authored again
+            uuid = (cmds.ls(plane, uuid=True) or [str(plane)])[0]
+            cls._RETIRED[uuid] = (
+                f"{CoreUtils.leaf_name(plane)}: its fade keys (a version 2 bake's "
+                "opacity and visibility keys) were removed -- every reader "
+                "evaluates the fade from the shadows record."
+            )
+            retired.append(plane)
+        if ctx is not None:  # what this or an earlier stage stripped, told once
+            for plane in cls.find_shadow_planes(planes):
+                text = cls._RETIRED.pop((cmds.ls(plane, uuid=True) or [""])[0], None)
+                if text:
+                    cls._note_once(ctx, "v2_fade", plane, text)
+        return retired
+
+    @classmethod
+    def _hold_fade(cls, plane):
+        """The viewport fade of a plane no expression drives: its intensity,
+        the fade's ceiling (:meth:`bake_planes`), held where the preview
+        draws it (:meth:`_fade_plug`) -- on the material's fade node, made
+        first for a plane built before it (:meth:`_ensure_fade_node`), so the
+        hold never lands on the plane's ``opacity``, which the exporter
+        reads as authored."""
+        if cls._fade_node(plane) is None:
+            rig = cls.from_plane(plane)
+            if rig is not None and rig.opacity_mult:
+                rig._relink_drivers(rig._ensure_fade_node)
+        plug = cls._fade_plug(plane)
+        if not cmds.objExists(plug) or cmds.listConnections(
+            plug, source=True, destination=False
+        ):
+            return
+        held = float(cls._plane_attr(plane, "shadowIntensity", 1.0))
+        cmds.setAttr(plug, min(1.0, max(0.0, held)))
 
     # ------------------------------------------------------------------ delete
     def delete(self, delete_textures=False):
@@ -3119,11 +3563,10 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         dial (the record's ``intensity``).
 
         A live rig's expression multiplies it into the fade. A plane it no
-        longer drives -- baked to keys, or its links broken on purpose --
-        carries its fade itself, already holding the old intensity, so that
-        fade is rescaled by new / old: its shape kept, the dial meaning the
-        same everywhere (Unity and the viewer take the exported opacity as
-        the intensity already applied).
+        longer drives -- baked, or its links broken on purpose -- holds its
+        viewport fade itself, already holding the old intensity, so that fade
+        is rescaled by new / old (a v2 bake's fade keys keep their shape).
+        Every reader caps the fade it evaluates by the published intensity.
 
         Returns:
             The planes changed.
@@ -3131,7 +3574,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         value = min(1.0, max(0.0, float(value)))
 
         def rescale(plane, old, value, how):
-            plug = f"{plane}.{cls.OPACITY_ATTR}"
+            plug = cls._fade_plug(plane)
             if how == "keys":
                 if old > 1e-6:
                     cmds.scaleKey(plug, valueScale=value / old, valuePivot=0.0)
@@ -3147,7 +3590,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             planes,
             "shadowIntensity",
             value,
-            cls.OPACITY_ATTR,
+            cls._fade_plug,
             rescale,
             "Shadow Intensity",
         )
@@ -3192,7 +3635,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
     def _retune(cls, planes, stamp, value, channel, carry, label, length=False):
         """Set *stamp* to *value* on every shadow plane in *planes*, and hand
         what a live expression would have done with it to ``carry(plane, old,
-        value, how)`` -- *how* is ``"keys"`` (an animCurve drives *channel*),
+        value, how)`` -- *how* is ``"keys"`` (an animCurve drives *channel*, an
+        attribute of the plane or ``channel(plane) -> plug``),
         ``"driven"`` (anything else does: the expression reads the stamp
         itself) or None (it holds a value of its own). One undo step;
         republishes the export record.
@@ -3215,7 +3659,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                     cmds.setAttr(plug, new)
                     drivers = (
                         cmds.listConnections(
-                            f"{plane}.{channel}",
+                            channel(plane) if callable(channel) else f"{plane}.{channel}",
                             source=True,
                             destination=False,
                             skipConversionNodes=True,
@@ -3268,8 +3712,10 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         Per plane --
 
         * the silhouette is written to ``<silhouette><suffix>.png`` beside it
-          with the plane's CURRENT fade (``opacity``) multiplied into its
-          alpha -- the one value the rig's material computed per frame;
+          with the plane's CURRENT fade multiplied into its alpha -- its live
+          one (:meth:`viewport_fade`), the value the rig's material computed
+          per frame, or for a baked plane (its fade held at its intensity) the
+          fade every reader evaluates there (:meth:`plane_fade`);
         * the material becomes a ``surfaceShader`` (Maya's unlit model:
           colour and transparency from that PNG), which the GLB writes
           ``KHR_materials_unlit`` (``MaterialRecords``' unlit family) and the FBX
@@ -3318,7 +3764,11 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                         f"({source or 'no file node'})."
                     )
                     continue
-                fade = float(cls._plane_attr(plane, cls.OPACITY_ATTR, 1.0))
+                fade = (
+                    cls.viewport_fade(plane)
+                    if cls.plane_is_live(plane)
+                    else cls.plane_fade(plane)
+                )
                 stem, _ext = os.path.splitext(source)
                 path = f"{stem}{suffix}.png"
                 with Image.open(source) as image:
@@ -3446,10 +3896,11 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         Args:
             targets: Object(s) to cast shadow from. Can be a single object
                      or a list of objects for a combined shadow.
-            rig_type: ``"projected"`` (default) or ``"horizon"`` — the latter
-                also bakes the target's horizon map (:meth:`bake_horizon`)
-                so the engine can follow a runtime light; the silhouette
-                stays as the fallback and the DCC preview.
+            rig_type: ``"projected"`` (default: a reader draws the
+                silhouette) or ``"horizon"`` (it marches the horizon map,
+                the silhouette its fallback). Either bakes the target's
+                horizon map (:meth:`bake_horizon`), which every plane
+                carries so the engine can follow a runtime light.
             horizon_size, horizon_spans: The horizon map's footprint pixels
                 per side and solid spans per column;
                 ``pythontk.ShadowHorizon``'s measured defaults when None.
@@ -3485,6 +3936,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             ground_height=ground_height,
             source_name=source_name,
         )
+        shadow.rig_type = rig_type
         pre = set(cmds.ls(long=True))
         try:
             shadow.get_or_create_shadow_source(
@@ -3497,8 +3949,20 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             shadow.setup_expression()
             # Follow Source, when it is on: either end of the projection.
             shadow._watch_nodes([shadow.light, *shadow.targets])
-            if rig_type == "horizon":
+            # Every rig carries its horizon map (shadows v3). A Horizon rig
+            # draws it, so its failed bake fails the build; a Projected one
+            # draws its silhouette and is built without it, warned (an export
+            # bakes it, or names the plane it leaves out).
+            try:
                 shadow.bake_horizon(size=horizon_size, spans=horizon_spans)
+            except (ValueError, RuntimeError, OSError) as error:
+                if rig_type == "horizon":
+                    raise
+                shadow.logger.warning(
+                    f"{CoreUtils.leaf_name(shadow.shadow_plane)}: no horizon map "
+                    f"baked ({error}); an export bakes one, or leaves the plane "
+                    "out of the shadows record."
+                )
 
             shadow.group = cmds.group(
                 empty=True, name=f"{shadow._name_base}_shadow_grp"

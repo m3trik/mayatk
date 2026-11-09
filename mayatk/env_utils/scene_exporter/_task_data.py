@@ -39,8 +39,6 @@ class _TaskDataMixin:
     # Markers one task leaves for a later one (or for the post-write API),
     # declared with the value a fresh run has and reset by begin_run -- never
     # as a side effect of assigning ``objects``, which tasks do mid-run.
-    #: The Animation Clips choice, read by ``create_glb`` after the write.
-    _clip_mode: str = "both"
     #: The scene records ``export_data_node`` published this run (``None`` until
     #: a task publishes; ``apply_declared_takes`` publishes when none did).
     _scene_snapshot: Optional[Any] = None  # the ptk.ExportSnapshot this run published
@@ -71,6 +69,9 @@ class _TaskDataMixin:
     #: The span ``apply_declared_takes`` realized (``()`` for none), None
     #: until it ran -- after that the plan reads what was split, not a guess.
     _realized_takes: Optional[tuple] = None
+    #: The window a shotless write's one take was armed to bake over
+    #: (``_arm_whole_take``; ``()`` for none), None until it ran.
+    _realized_whole_take: Optional[tuple] = None
     #: ``convert_textures``' network snapshot, live for the length of its
     #: staged rewire (the texture checks link nodes through it).
     _texture_network_snapshot: Optional[Any] = None
@@ -123,12 +124,10 @@ class _TaskDataMixin:
 
         ``perform_export`` calls this after resolving the output path and
         before seeding the export set, so a run with no task checked still
-        starts clean: left standing, a previous run's Animation Clips choice
-        would convert this run's GLB, and its claimed frame spans would widen
-        this run's bake range.
+        starts clean: left standing, a previous run's claimed frame spans
+        would widen this run's bake range.
         """
         self.run = run
-        self._clip_mode = "both"
         self._scene_snapshot = None
         self._hierarchy_check_ran = False
         self._hierarchy_last_diff = None
@@ -142,6 +141,7 @@ class _TaskDataMixin:
         self._bake_override_layer = None
         self._write_baseline = None
         self._realized_takes = None
+        self._realized_whole_take = None
         self._texture_network_snapshot = None
         self._shear_verdict = None
         self._invalidate_material_caches()

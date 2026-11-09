@@ -322,7 +322,7 @@ class TestPreviewLifecycle(MayaTkTestCase):
     def test_the_record_and_the_accessors_see_through_a_preview(self):
         """THE guard: a plane wearing a preview reports its real material.
 
-        Without it ``plane_record`` published ``"texture": ""`` -- the
+        Without it ``plane_record`` published no silhouette image -- the
         silhouette's file node is found by walking the plane's shading
         groups, which the preview's membership swap replaces -- and the R6
         fallback silently vanished from ``shadows``.
@@ -330,7 +330,7 @@ class TestPreviewLifecycle(MayaTkTestCase):
         before = ShadowRig.plane_record(self.plane)
         node_before = ShadowRig._plane_texture_node(self.plane)
         shading_before = ShadowRig._plane_shading(self.plane)
-        self.assertTrue(before["texture"])
+        self.assertTrue(before["silhouette"]["texture"])
         self.assertIsNotNone(node_before)
 
         fx, sg, snapshot = self._simulate_attach()
@@ -387,8 +387,10 @@ class TestPreviewLifecycle(MayaTkTestCase):
         self.assertEqual(cmds.ls(plane, long=True), cmds.ls(self.plane, long=True))
         self.assertEqual(ShadowPreview._detached_for_export, [])
         (record,) = [p for p in payload["planes"] if p["name"] == "Box_shadow"]
-        self.assertTrue(record["texture"], "the silhouette must be in the record")
-        self.assertEqual(record["type"], "horizon")
+        self.assertTrue(
+            record["silhouette"]["texture"], "the silhouette must be in the record"
+        )
+        self.assertFalse(record["silhouette"]["draw"], "a horizon rig's fallback")
 
     def test_deleting_a_previewed_rig_leaves_no_preview_node_behind(self):
         """The preview's nodes are not in the rig's manifest (display state,

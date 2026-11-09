@@ -7,8 +7,8 @@ Toolbag, renders a bundled template with substituted parameters, and
 either hands off interactively (``send_to``) or runs headless and
 post-processes outputs (``roundtrip``). It takes plain values -- an
 already-exported model path, an optional materials-manifest path, and a
-plain params dict -- so any host can compose it (the Maya bridge in
-mayatk, extapps' standalone Marmoset Workflow panel, a CLI, a test).
+plain params dict -- so any caller can compose it (a host's Marmoset
+Bridge, a standalone panel, a CLI, a test).
 """
 
 from __future__ import annotations
@@ -35,6 +35,10 @@ from ._toolbag_helpers import ToolbagHelpers
 
 _PKG_DIR = Path(__file__).resolve().parent
 _TEMPLATE_DIR = _PKG_DIR / "templates"
+#: A person's own Toolbag scripts (``ptk.ScriptTemplate.user_dir``): one folder
+#: every host and the standalone app read, where a script named like a bundled
+#: one runs in its place.
+_SCRIPTS_APP = "marmoset"
 
 # Declarative Toolbag discovery. ONE AppSpec carries the candidate names, the
 # install-dir fallback (Toolbag's installer doesn't register the exe under ``App
@@ -89,7 +93,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
       it exits, then post-process the outputs (e.g. re-collect baked maps).
       Always headless; the headless flag is ignored.
 
-    As a deliverer it is plugged into :class:`mayatk.mat_utils.MarmosetBridge`
+    As a deliverer it is plugged into a host's ``MarmosetBridge``
     (which produces the FBX + manifests); standalone it composes directly::
 
         MarmosetEngine().send(model_path="C:/scan/welding.obj", template="lookdev")
@@ -154,7 +158,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
     def preflight(self, bridge, request) -> bool:
         """Validate the (template, mode) before the bridge produces its payload."""
-        template_path = _TEMPLATE_DIR / f"{request.template}.py"
+        template_path = MarmosetEngine.template_path(request.template)
         allowed = (
             MarmosetEngine.template_modes(template_path)
             if template_path.is_file()
@@ -267,7 +271,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 :class:`pythontk.CancelScope` was cancelled (Esc held under a
                 panel's Send): Toolbag was ended and nothing is collected.
         """
-        template_path = _TEMPLATE_DIR / f"{template}.py"
+        template_path = MarmosetEngine.template_path(template)
         allowed_modes = (
             MarmosetEngine.template_modes(template_path)
             if template_path.is_file()
@@ -508,7 +512,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         its scene as ``<model stem>.tbscene`` in *save_dir* (created), else
         beside the model.
         """
-        template_path = _TEMPLATE_DIR / f"{template}.py"
+        template_path = MarmosetEngine.template_path(template)
         if not template_path.is_file():
             available = sorted(p.stem for p in MarmosetEngine.list_templates())
             self.logger.error(
@@ -783,9 +787,22 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         return None
 
     @staticmethod
+    def template_dirs() -> Tuple[Path, ...]:
+        """Where a template name resolves, first match winning: the person's own
+        Marmoset scripts, then the bundled ``templates/``."""
+        return ptk.ScriptTemplate.search_dirs(_TEMPLATE_DIR, _SCRIPTS_APP)
+
+    @staticmethod
+    def template_path(template: str) -> Path:
+        """The file *template* runs from (:meth:`template_dirs`); a name found
+        nowhere names the bundled path, which is then not a file."""
+        found = ptk.ScriptTemplate.find(MarmosetEngine.template_dirs(), template, ".py")
+        return found or _TEMPLATE_DIR / f"{template}.py"
+
+    @staticmethod
     def list_templates() -> List[Path]:
-        """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
-        return ptk.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
+        """Return user-visible templates, the person's own first (skips underscore-prefixed)."""
+        return ptk.ScriptTemplate.list_templates(MarmosetEngine.template_dirs(), ".py")
 
     @staticmethod
     def template_modes(template_path: Path) -> Tuple[str, ...]:
@@ -804,7 +821,9 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         one combo entry per (template, mode) pair without baking mode-awareness
         into the combo itself.
         """
-        return ptk.ScriptTemplate.list_template_modes(_TEMPLATE_DIR, ".py", _MODES)
+        return ptk.ScriptTemplate.list_template_modes(
+            MarmosetEngine.template_dirs(), ".py", _MODES
+        )
 
 
 # -----------------------------------------------------------------------------

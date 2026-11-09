@@ -4,21 +4,26 @@
 
 Toolbag doesn't expose an env-var for plugin discovery the way Substance
 Painter does, so we drop the plugin source into the user plugin folder
-at ``%LOCALAPPDATA%\\Marmoset Toolbag <N>\\plugins\\marmoset_rpc`` and
-let Toolbag find it on next launch.
+at ``%LOCALAPPDATA%\\Marmoset Toolbag <N>\\plugins\\marmoset_rpc``. Toolbag
+lists it in its **Plugins** menu (a folder plugin's ``__main__.py``) and runs
+it only when a person picks it there: that is what makes the Toolbag they
+opened serve. A Toolbag a bridge launches runs the package's own copy instead
+(``MarmosetConnection.LAUNCH_ARGS``).
 
 The Toolbag-version-aware destination resolution is the DCC-specific bit
-this module owns. The actual install strategy (symlink-first, copytree
-fallback, ``__pycache__`` filtering, idempotent) lives generically in
-:mod:`pythontk.net_utils.rpc.installer`.
+this module owns (:data:`PLUGIN_SPEC`, what every panel's *Install in
+Toolbag* takes). The install itself (symlink-first, copytree fallback,
+``__pycache__`` filtering, idempotent) is the shared
+:class:`pythontk.PluginInstaller`'s.
 """
 
+import dataclasses
 import os
 import re
 from pathlib import Path
 from typing import Optional
 
-from pythontk.net_utils.rpc.installer import PluginInstaller
+from pythontk.net_utils.rpc.installer import PluginInstaller, RpcPluginSpec
 
 
 # Match ``Toolbag <N>`` in either install-path layout. Mirrors
@@ -73,12 +78,17 @@ class Installer(_InstallerInternal):
         return None
 
     @staticmethod
+    def spec(toolbag_exe: Optional[str] = None) -> "RpcPluginSpec":
+        """:data:`PLUGIN_SPEC` for the Toolbag *toolbag_exe* names (its version's
+        folder); without one, the newest Toolbag's."""
+        if not toolbag_exe:
+            return PLUGIN_SPEC
+        return dataclasses.replace(PLUGIN_SPEC, user_dir=lambda: Installer.user_plugin_dir(toolbag_exe))
+
+    @staticmethod
     def is_installed(toolbag_exe: Optional[str] = None) -> bool:
         """True if the plugin is present at the resolved user plugin dir."""
-        dest_root = Installer.user_plugin_dir(toolbag_exe)
-        if not dest_root:
-            return False
-        return PluginInstaller.is_plugin_installed(dest_root / "marmoset_rpc")
+        return PluginInstaller.status(Installer.spec(toolbag_exe)) in ("current", "stale")
 
     @staticmethod
     def install(
@@ -90,14 +100,9 @@ class Installer(_InstallerInternal):
         could be located). Idempotent: a present install is left alone unless
         *force* is true.
         """
-        dest_root = Installer.user_plugin_dir(toolbag_exe)
-        if not dest_root:
-            return None
-        return PluginInstaller.install_plugin(
-            plugin_src=_InstallerInternal._plugin_source_dir(),
-            dest=dest_root / "marmoset_rpc",
-            force=force,
-        )
+        spec = Installer.spec(toolbag_exe)
+        dest = spec.destination()
+        return None if dest is None else PluginInstaller.install_plugin(spec.source, dest, force=force)
 
     @staticmethod
     def uninstall(toolbag_exe: Optional[str] = None) -> bool:
@@ -105,7 +110,15 @@ class Installer(_InstallerInternal):
 
         Returns True if something was removed.
         """
-        dest_root = Installer.user_plugin_dir(toolbag_exe)
-        if not dest_root:
-            return False
-        return PluginInstaller.uninstall_plugin(dest_root / "marmoset_rpc")
+        return PluginInstaller.uninstall(Installer.spec(toolbag_exe))
+
+
+#: The plugin in Toolbag, as the shared installer (``pythontk.PluginInstaller``)
+#: and every panel's *Install in Toolbag* take it (the newest Toolbag's folder).
+PLUGIN_SPEC = RpcPluginSpec(
+    name="marmoset_rpc",
+    app="Toolbag",
+    source=_InstallerInternal._plugin_source_dir(),
+    user_dir=lambda: Installer.user_plugin_dir(),  # at call time: LOCALAPPDATA as it is then
+    after_install="It is in Toolbag's Plugins menu (restart an open Toolbag to list it): pick it there to serve.",
+)

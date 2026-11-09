@@ -2,71 +2,35 @@
 # coding=utf-8
 """Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 
-Mirrors :mod:`mayatk.mat_utils.marmoset_bridge.parameters` so the bridge
-slots class stays identical in shape.
+Mirrors the Marmoset bridge's ``parameters`` so the bridge slots class
+stays identical in shape.
 
-Each entry maps a placeholder token (e.g. ``__PAINTER_RESOLUTION__``) to
-a widget spec. The slot scans the selected template for these tokens,
-shows only the matching widgets, and substitutes user values into the
-template before shipping it to Painter.
+Each entry maps a ``__KEY__`` token to a widget spec. The panel scans the
+selected script for these tokens and shows only the matching rows; at a send
+every value reaches the script, run in Painter, as ``args["KEY"]`` -- nothing
+is substituted into its text. A script's own settings are its ``Row:`` lines
+(``ptk.ScriptTemplate.declared_rows``), not entries here.
 
-Two rendering contexts -- the bridge picks the right one per call site:
-
-* **CLI** (``LAUNCH_ARGS``) -- raw values, no quoting. ``2048`` ->
-  ``"2048"``; ``"C:/path"`` -> ``"C:/path"``. ``subprocess.Popen`` with
-  ``shell=False`` will pass each entry as one argv slot.
-* **JS** (``RPC_SCRIPT``) -- escaped JS literals for inlining inside
-  Painter's JS RPC body. ``"C:/path"`` -> ``'"C:/path"'``; ``True`` ->
-  ``"true"``.
-
-To expose a new Painter knob:
+To expose a new shared knob:
   1. Add an entry to :data:`PARAMS` below.
-  2. Reference ``__YOUR_KEY__`` in any ``templates/*.py`` LAUNCH_ARGS or
-     RPC_SCRIPT body.
+  2. Reference ``__YOUR_KEY__`` in a script's ``# Rows:`` line and read
+     ``args["YOUR_KEY"]``.
 
-Known limitations
------------------
-
-* **Presence-only CLI flags** (e.g. Painter's ``--shader-balanced``,
-  ``--mesh-map-bake``) don't fit the ``__KEY__`` substitution shape --
-  the flag must either be present or absent, not given a value. Wire
-  those into a template's ``LAUNCH_ARGS`` unconditionally, or add a
-  conditional-flag mechanism if the need arises.
-* **Empty path values** substitute as ``""``. In ``LAUNCH_ARGS`` the
-  engine drops a ``(--flag, "")`` pair whole
-  (``SubstanceEngine._render_launch_args``), so an optional flag left
-  blank yields no argv entry rather than an empty slot Painter rejects.
-
-**Vendored twin -- keep code-identical.** This file is duplicated at
-``mayatk/mat_utils/substance_bridge/parameters.py`` (the SSoT: edit it there)
-and ``blendertk/mat_utils/substance_bridge/parameters.py``; mirror every change
-into both. Drift fails ``extapps/test/test_vendor_sync.py``.
+**Vendored copy -- keep byte-identical.** This file ships in each host
+library's Substance bridge and in the standalone Substance Scripts app; the
+Maya library's copy is the source (edit it there, then mirror it). Drift
+fails the vendor guard (``test_vendor_sync.py``).
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from uitk.bridge import (
     AttributeSpec,
-    Formatters,
     ParamRegistry,
     Parameters as _BridgeParams,
 )
 
 
-# Painter has two substitution contexts:
-#
-# * ``LAUNCH_ARGS`` -- raw argv tokens (``subprocess.Popen(..., shell=False)``
-#   passes each entry as a single token, so no quoting). Use :func:`cli_raw`.
-# * ``RPC_SCRIPT`` -- JavaScript literals embedded in the RPC body. Use
-#   :func:`js_literal` (double-quoted, escapes backslashes + quotes).
-#
-# The boolean ``PAINTER_INCLUDE_TEXTURES`` triggers an out-of-band
-# texture stage: the bridge walks the selection's shading networks via
-# :meth:`mayatk.mat_utils.MatUtils.get_texture_paths` and copies each
-# resolved file into the FBX output folder. Nothing is substituted into
-# argv -- Painter discovers the textures by scanning the folder.
 
 
 # Display order is iteration order over this dict.
@@ -105,14 +69,9 @@ PARAMS: "dict[str, AttributeSpec]" = {
             ("8192 (8K)", 8192),
         ],
         tooltip=(
-            "Document resolution every texture set is created at.\n\n"
-            "Painter dropped the ``--resolution`` CLI flag, so this is\n"
-            "applied through the ``substance_rpc`` plugin instead: on a\n"
-            "project that is already open it takes effect immediately;\n"
-            "on a fresh launch the plugin holds it and applies it the\n"
-            "moment the New Project wizard finishes.\n\n"
-            "'Project default' leaves Painter's own setting alone and\n"
-            "skips the RPC call entirely."
+            "Default resolution every texture set is created at (New\n"
+            "Project\'s Document Resolution).\n\n"
+            "\'Project default\' leaves Painter\'s own setting."
         ),
     ),
     "BAKE_SOURCE_SET": AttributeSpec(
@@ -161,59 +120,9 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="bool",
         default=False,
         tooltip=(
-            "Create one texture set per UDIM tile (Painter's\n"
-            "``--split-by-udim`` presence flag). Only useful if the mesh\n"
-            "has UVs laid out across multiple tiles -- on a single-UV mesh\n"
-            "Painter ignores the flag."
-        ),
-    ),
-    # ------------------------------------------------------------------
-    # Iray render (render.py template -- BLOCKED on Painter plugin)
-    # ------------------------------------------------------------------
-    "PAINTER_RENDER_WIDTH": AttributeSpec(
-        key="PAINTER_RENDER_WIDTH",
-        label="Render Width",
-        kind="int",
-        default=1920,
-        minimum=128,
-        maximum=8192,
-        step=64,
-        tooltip="Iray output image width in pixels.",
-    ),
-    "PAINTER_RENDER_HEIGHT": AttributeSpec(
-        key="PAINTER_RENDER_HEIGHT",
-        label="Render Height",
-        kind="int",
-        default=1080,
-        minimum=128,
-        maximum=8192,
-        step=64,
-        tooltip="Iray output image height in pixels.",
-    ),
-    "PAINTER_RENDER_SAMPLES": AttributeSpec(
-        key="PAINTER_RENDER_SAMPLES",
-        label="Iray Samples",
-        kind="choice",
-        default=128,
-        choices=[
-            ("Draft (32)", 32),
-            ("Preview (128)", 128),
-            ("Final (512)", 512),
-            ("Hero (1024)", 1024),
-        ],
-        tooltip=(
-            "Iray samples per pixel. More = cleaner image, slower render.\n"
-            "Draft for blocking; Hero for marketing-quality stills."
-        ),
-    ),
-    "PAINTER_RENDER_OUTPUT_PATH": AttributeSpec(
-        key="PAINTER_RENDER_OUTPUT_PATH",
-        label="Render Output",
-        kind="path",
-        default="",
-        tooltip=(
-            "Where Painter saves the rendered image (.png / .exr).\n"
-            "Leave empty to default to ``<scene_dir>/painter_render.png``."
+            "One texture set per UV tile (New Project's UDIM workflow,\n"
+            "``TextureSetPerUVTile``). Only useful if the mesh has UVs laid\n"
+            "out across multiple tiles."
         ),
     ),
     "PAINTER_INCLUDE_TEXTURES": AttributeSpec(
@@ -260,6 +169,47 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Disabled when Include Textures is off."
         ),
     ),
+    # ------------------------------------------------------------------
+    # Where a script runs
+    # ------------------------------------------------------------------
+    "PAINTER_PROJECT": AttributeSpec(
+        key="PAINTER_PROJECT",
+        label="Project",
+        kind="file",
+        default="",
+        placeholder="The project open in Painter",
+        tooltip=(
+            "A Painter project (.spp): a script that works on a project runs\n"
+            "in the Painter holding it, else opens it; New Project saves\n"
+            "as it (with Save When Done).\n\n"
+            "Empty: the project open in Painter."
+        ),
+    ),
+    "PAINTER_SAVE": AttributeSpec(
+        key="PAINTER_SAVE",
+        label="Save When Done",
+        kind="bool",
+        default=False,
+        tooltip="Save the project once the script finished (New Project: as Project).",
+    ),
+    "PAINTER": AttributeSpec(
+        key="PAINTER",
+        label="Painter",
+        kind="choice",
+        default="auto",
+        choices=[("Auto", "auto"), ("New Painter", "new")],
+        # A live switch: the Painters running now, never a preset's.
+        preset=False,
+        tooltip=(
+            "The Painter the script runs in.\n\n"
+            "<b>Auto</b>: the one holding the project (by its record), a\n"
+            "Painter with none open for a new project, else a new one.\n"
+            "<b>New Painter</b>: launch one.\n\n"
+            "A Painter you opened serves scripts once you installed the\n"
+            "plugin (Install in Painter) and ticked substance_rpc in its\n"
+            "Python menu; it is listed here then."
+        ),
+    ),
 }
 
 
@@ -269,18 +219,7 @@ class Parameters(ParamRegistry):
     Declared as data: :class:`uitk.bridge.ParamRegistry` supplies
     ``referenced_keys`` / ``defaults`` / ``affix_parts`` over :data:`PARAMS`,
     and a bridge slot hands this class to the shared base as its
-    ``params_module``. The two contexts below are the Painter launch's two
-    target languages.
+    ``params_module``.
     """
 
     PARAMS = PARAMS
-
-    @classmethod
-    def render_cli_context(cls, values: "dict[str, Any]") -> "dict[str, str]":
-        """Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting."""
-        return cls.render_context(values, formatter=Formatters.cli_raw)
-
-    @classmethod
-    def render_js_context(cls, values: "dict[str, Any]") -> "dict[str, str]":
-        """Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping."""
-        return cls.render_context(values, formatter=Formatters.js_literal)

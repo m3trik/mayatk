@@ -1,0 +1,261 @@
+{
+ "animations": {
+  "ShotA": {
+   "channels": {
+    "?|pointer": {
+     "interpolation": "LINEAR",
+     "keys": 20
+    }
+   },
+   "span": [
+    0.0083,
+    0.8
+   ]
+  },
+  "ShotB": {
+   "channels": {
+    "?|pointer": {
+     "interpolation": "LINEAR",
+     "keys": 20
+    }
+   },
+   "span": [
+    0.0083,
+    0.8
+   ]
+  }
+ },
+ "extensions_used": [
+  "KHR_animation_pointer",
+  "KHR_materials_emissive_strength"
+ ],
+ "extras": {
+  "animation": {
+   "fps": 24.0,
+   "shots": [
+    {
+     "clip": "text"
+    },
+    {
+     "clip": "text"
+    }
+   ],
+   "version": 3
+  },
+  "handoff": {
+   "assembly": [
+    {
+     "data": [],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    }
+   ],
+   "extras": {
+    "source": {
+     "application": "text",
+     "version": "text"
+    }
+   },
+   "instructions": "text",
+   "rendering": {
+    "environment": {
+     "fallback": "text",
+     "intensity": 1.0,
+     "prefilter": "text",
+     "prefilterBlur": 0.04
+    },
+    "keyLight": {
+     "color": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "intensity": 0.9,
+     "position": [
+      3,
+      6,
+      4
+     ],
+     "type": "text"
+    },
+    "renderer": {
+     "toneMapping": "text",
+     "toneMappingExposure": 1.0
+    }
+   },
+   "version": 3
+  },
+  "render_effects": {
+   "materials": [
+    {
+     "channels": [
+      "text"
+     ],
+     "emission_color": [
+      0.2,
+      0.6,
+      1.0
+     ],
+     "emission_strength": 2.0,
+     "material": "text"
+    }
+   ],
+   "tracks": [],
+   "version": 2
+  }
+ },
+ "format": "glb",
+ "images": [],
+ "materials": {
+  "panel_mat": {
+   "alpha_mode": "OPAQUE",
+   "base_color": [
+    0.8,
+    0.8,
+    0.8,
+    1.0
+   ],
+   "double_sided": false,
+   "emissive": [
+    0.2,
+    0.6,
+    1.0
+   ],
+   "extensions": [
+    "KHR_materials_emissive_strength"
+   ],
+   "metallic": 0.0,
+   "roughness": 0.2,
+   "textures": []
+  },
+  "panel_mat_signal": {
+   "alpha_mode": "OPAQUE",
+   "base_color": [
+    0.8,
+    0.8,
+    0.8,
+    1.0
+   ],
+   "double_sided": false,
+   "emissive": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "extensions": [
+    "KHR_materials_emissive_strength"
+   ],
+   "metallic": 0.0,
+   "roughness": 0.2,
+   "textures": []
+  }
+ },
+ "meshes": {
+  "panel": [
+   {
+    "attributes": {
+     "NORMAL": 12,
+     "POSITION": 12,
+     "TANGENT": 12,
+     "TEXCOORD_0": 12
+    },
+    "indices": 24,
+    "material": "panel_mat_signal",
+    "mode": 4,
+    "targets": 0
+   },
+   {
+    "attributes": {
+     "NORMAL": 20,
+     "POSITION": 20,
+     "TANGENT": 20,
+     "TEXCOORD_0": 20
+    },
+    "indices": 36,
+    "material": "panel_mat",
+    "mode": 4,
+    "targets": 0
+   }
+  ]
+ },
+ "nodes": {
+  "RootNode": {
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "RootNode/panel": {
+   "mesh": "panel",
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "skins": {}
+}

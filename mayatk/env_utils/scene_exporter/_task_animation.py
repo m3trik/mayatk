@@ -1,12 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
 """Animation-phase export tasks: the smart bake and its restore, key
-optimization / snap / tie, the bake range and clip origin, the data_export
-carrier and the declared takes.
+optimization / snap / tie, the bake range, the data_export carrier and the
+declared takes (one per shot).
 """
 
 import math
-import os
 from typing import Optional, Tuple, Union
 
 try:
@@ -23,7 +22,7 @@ from mayatk.env_utils.scene_exporter._task_data import _TaskDataMixin
 
 class _AnimationTasksMixin(_TaskDataMixin):
     """Animation-phase export tasks: the smart bake and its restore, key
-    optimization / snap / tie, the bake range and clip origin, the data_export carrier and the declared takes."""
+    optimization / snap / tie, the bake range, the data_export carrier and the declared takes."""
 
     def smart_bake(self):
         """Pre-bake constrained and driven channels before export.
@@ -184,9 +183,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
         (``FbxUtils.WritePlan``).
 
         The one owner every predictor reads -- Smart Bake's optimization skip
-        (:meth:`_write_resamples_layers`), the clip origin
-        (:meth:`_write_resamples_curves`, :meth:`_predicted_bake_range`), the
-        range task's skip, the bracket's producers and the write's offset fold
+        (:meth:`_write_resamples_layers`), the range task's skip, the
+        bracket's producers and the write's offset fold
         -- built by :meth:`FbxUtils.write_plan` from the settings as the
         preset left them (:meth:`capture_write_baseline`; read live when
         nothing captured them), the takes the run splits
@@ -212,13 +210,98 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 (min(s[0] for s in spans), max(s[1] for s in spans)) if spans else None
             )
         if takes:
+            # Resampled always: the takes are every deliverable's clips -- the
+            # FBX's, and the GLB's converted from them -- so each must be an
+            # exact slice of the animation (FbxUtils.apply_takes).
+            return FbxUtils.write_plan(takes=takes, span=span, resample_all=True)
+        whole = self._whole_take()
+        if whole:
+            # No shots: the one take is the deliverable's clip, so it bakes
+            # what drives it, over at least the timeline; split into nothing,
+            # it needs no slice, so Resample All stays the settings'.
+            spans = [s for s in (span, whole) if s]
             return FbxUtils.write_plan(
-                takes=takes, span=span, resample_all=not self.run.glb_only
+                bakes=True,
+                reason=self.WHOLE_TAKE_REASON,
+                span=(min(s[0] for s in spans), max(s[1] for s in spans)),
+                resample_all=base.resample_all,
             )
         if not base.bakes:
             return base
         return FbxUtils.write_plan(
             bakes=True, reason=base.reason, span=span, resample_all=base.resample_all
+        )
+
+    #: Why a shotless write bakes (:meth:`_whole_take`), for the log.
+    WHOLE_TAKE_REASON = "its one whole-timeline take bakes what the scene plays"
+
+    def _whole_take(self) -> Optional[Tuple[int, int]]:
+        """The window a shotless write's one take bakes over, or None when it
+        bakes none of its own: the scene's authored range
+        (:meth:`_bake_range_from_scene`, Maya's ``Take 001``), when the run
+        splits takes (every FBX write), the scene declares no shots, the
+        write carries animation (the Animation include group) and the export
+        animates -- a key on the export set, or a channel Smart Bake baked off
+        its drivers.
+
+        What :meth:`apply_declared_takes` armed, once it ran; before that,
+        what it will (Smart Bake's own question, :meth:`_write_resamples_layers`,
+        is asked before it bakes, so keys alone answer it there)."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        if self.run.usd or not self.run.splits_takes:
+            return None
+        if self._realized_whole_take is not None:
+            return self._realized_whole_take or None
+        if self._planned_takes() or not FbxUtils.animation_export_enabled():
+            return None
+        driven = self._bake_session_id or self._bake_override_layer
+        if not (driven or self._has_keyframes):
+            return None
+        return self._bake_range_from_scene()
+
+    def _arm_whole_take(self) -> None:
+        """Bake a shotless write's one take (:meth:`_whole_take`) through the
+        plan a shot's take is written by (``FbxUtils.apply_write_plan``):
+        without it the write followed the preset's bake flag -- off after the
+        default reset -- and every channel a driver moves (a constraint, an
+        IK chain, an expression: an articulated rig's joints) shipped
+        unkeyed, Smart Bake's override layer unflattened. Resample All stays
+        as the settings hold it: a split resamples so each take is an exact
+        slice, and one whole take is no slice -- resampling it would key
+        every plain curve on every frame (a two-key bone shipped 200) and
+        undo Optimize Keys; the bake keys every driven and layered channel
+        either way. The span is CLAIMED, so ``set_bake_animation_range``
+        (which runs after) covers the timeline; the bake flag is put back
+        after the write (the range by the restore :meth:`apply_declared_takes`
+        staged first, which runs after this)."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        span = self._whole_take()
+        self._realized_whole_take = tuple(span) if span else ()
+        if not span:
+            return
+        prior_bakes = FbxUtils.baking_enabled()
+        resample = FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
+
+        def _restore_bake() -> None:
+            FbxUtils.apply_write_plan(
+                FbxUtils.WritePlan(prior_bakes, resample_all=resample)
+            )
+
+        self.stage_deferred_restore("whole_take", _restore_bake)
+        FbxUtils.apply_write_plan(
+            FbxUtils.write_plan(
+                bakes=True,
+                reason=self.WHOLE_TAKE_REASON,
+                span=span,
+                resample_all=resample,
+            )
+        )
+        self._require_range_coverage(*span)
+        self.logger.info(
+            f"No shots declared: the FBX ships its one whole-timeline take, "
+            f"its driven channels baked over {span[0]}-{span[1]}."
         )
 
     def _planned_takes(self) -> Optional[Tuple[int, int]]:
@@ -335,67 +418,6 @@ class _AnimationTasksMixin(_TaskDataMixin):
             return None
         return math.floor(span[0]), math.ceil(span[1])
 
-    def _write_resamples_curves(self) -> bool:
-        """Whether this run's FBX write keys EVERY animated curve on every frame
-        of the bake range -- Resample All (:attr:`FbxUtils.RESAMPLE_ALL`).
-
-        A write that splits the scene's declared takes sets it itself:
-        :meth:`FbxUtils.apply_takes` resamples so each take is an exact slice
-        -- except on a GLB-only run, whose intermediate FBX ships no take
-        anyone reads (the GLB's clips are cut from the whole-timeline take), so
-        its stack stays exactly as authored: ``apply_takes(resample=False)``
-        turns off a Resample All the loaded preset left on. Any other write
-        (Full Sequence clips, or no shots) keeps the preset's flag as set, and
-        the plugin resamples only a write that bakes.
-
-        Asked before the takes exist (the clip origin is published first), so
-        the shots are read off the ShotStore, as the range task reads them, and
-        the flags off the plugin, where the preset left them -- both through
-        :meth:`write_plan`.
-        """
-        if self.run.usd:
-            return False
-        plan = self.write_plan()
-        return plan.bakes and plan.resample_all
-
-    def _clip_origin_span(self) -> Optional[Tuple[int, int]]:
-        """The frames the whole-timeline take will carry -- the span every GLB
-        clip is cut against (the export context's ``clip_span``).
-
-        The keys the export ships, written whole whatever the bake range
-        (:meth:`_bake_range_from_keys`). And, when the write resamples
-        (:meth:`_write_resamples_curves` -- a split's, or the preset's), the
-        bake range too: every curve is then keyed over the range, so a range
-        that opens before the first key opens the take with it -- measured on
-        a curve keyed 10-100 under a 1-100 range, the take's first key moved
-        from 10 to 1, and a GLB converter puts the first key at t=0. The range
-        is set after this publishes (:meth:`set_bake_animation_range` runs
-        last, to cover the takes), so it is predicted
-        (:meth:`_predicted_bake_range`).
-        """
-        keys = self._bake_range_from_keys()
-        if not self._write_resamples_curves():
-            return keys
-        spans = [span for span in (keys, self._predicted_bake_range()) if span]
-        if not spans:
-            return None
-        return (
-            int(math.floor(min(span[0] for span in spans))),
-            int(math.ceil(max(span[1] for span in spans))),
-        )
-
-    def _predicted_bake_range(self) -> Optional[Tuple[float, float]]:
-        """The range this run's write will bake over, before anything sets it.
-
-        What the Bake Range row's mode measures (:meth:`_bake_range_for_mode`,
-        the reading :meth:`set_bake_animation_range` sets last), widened for a
-        split to the declared shots -- the union :meth:`apply_declared_takes`
-        claims, and sets itself when the row is OFF. With the row OFF and
-        nothing split, the range the plugin holds now -- the preset's -- is
-        the one written. :meth:`write_plan`'s range.
-        """
-        return self.write_plan().range
-
     def _bake_range_from_scene(self) -> Tuple[int, int]:
         """The scene's authored animation range.
 
@@ -413,12 +435,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
         The ONE task that owns the bake range.  It used to share it with
         ``apply_declared_takes``, which set a shot union as an undeclared side
-        effect of SPLITTING -- so the only way to clamp an export to its shots
-        was to arm a take split you might not want (a GLB deliverable never
-        does; its clips are rebuilt from the whole stack), and which of the two
-        won was decided by TASK_ORDER rather than by anything the user could
-        see.  This task now runs LAST, and the split task's job is only to
-        split.
+        effect of SPLITTING, and which of the two won was decided by
+        TASK_ORDER rather than by anything the user could see.  This task now
+        runs LAST, and the split task's job is only to split.
 
         Every mode then WIDENS to cover any takes realized this run, so no
         source can write a range that clips a clip the same export declared --
@@ -499,8 +518,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
     def _bake_range_for_mode(self, mode: str) -> Tuple[Optional[Tuple], str]:
         """What Bake Range *mode* (a token) measures, and what it measured --
-        the one reading :meth:`set_bake_animation_range` sets and the clip
-        origin predicts (:meth:`_predicted_bake_range`)."""
+        the one reading :meth:`set_bake_animation_range` sets and
+        :meth:`write_plan` plans."""
         if mode == "auto":
             resolved = self._bake_range_from_shots()
             if resolved is not None:
@@ -581,14 +600,13 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
         The ONE publish of an export: every producer in ``FbxUtils.PRODUCERS``
         runs here, in dependency order, with the run's decisions as INPUT --
-        the Animation Clips mode from the run, the clip origin measured from
-        the keys the export will carry -- and the carrier is committed once.
-        This task sits after every key-editing task, so what it measures is
-        what ships, and nothing later patches a record: the exporter used to
-        publish the clip origin and the clip mode AFTER the producers, and a
-        second producer run before the write overwrote both (measured on the
-        PROPS assembly, three exports cut 81 frames early while logging the
-        right number).  Then the carrier(s) join the export set so the records
+        the export set, whether the write carries animation -- and the
+        carrier is committed once. This task sits after every key-editing
+        task, so what the producers read is what ships, and nothing later
+        patches a record: the exporter once published its own decisions
+        AFTER the producers, and a second producer run before the write
+        overwrote them (measured on the PROPS assembly, three exports cut 81
+        frames early while logging the right number).  Then the carrier(s) join the export set so the records
         ride into the FBX regardless of export mode -- the ``visible`` set is
         geometry-only and ``selected`` ships only what the user picked.
         """
@@ -606,9 +624,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
         self.stage_deferred_restore(
             "export_stagers", lambda: FbxUtils._run_stagers("finish", table)
         )
-        # Carriers that already exist join the export set BEFORE the clip span
-        # is measured: their keyed weights (emissive groups) ship in the stack
-        # too. A carrier the publish creates joins after it.
+        # Carriers that already exist join the export set BEFORE the publish:
+        # their keyed weights (emissive groups) ship in the takes too, and the
+        # producers read the set. A carrier the publish creates joins after it.
         self._include_data_export_node()
         self._scene_snapshot = self._publish_scene_records()
         self._include_data_export_node()
@@ -628,12 +646,6 @@ class _AnimationTasksMixin(_TaskDataMixin):
     def _publish_scene_records(self, only=None):
         """``FbxUtils.publish`` with THIS run's context.
 
-        The clip span is measured from the keys the export will carry
-        (:meth:`_clip_origin_span`), never taken from the bake range: the
-        range bounds what the plugin RE-BAKES, while a plainly keyed curve is
-        written whole (measured on Maya 2025 / FBX 2020.3.6: a curve keyed
-        0-100 exports as 0-100 under a 20-80 bake range) -- unless the write
-        resamples every curve over that range, which a take split does.
         Never raises -- a record that cannot be produced is logged and left
         as stored.
 
@@ -660,8 +672,6 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
         try:
             ctx = FbxUtils.export_context(
-                clip_mode=ptk.ExportRun.clip_mode(self.run.animation_clips_mode),
-                clip_span=self._clip_origin_span(),
                 # The FBX's handoff record publishes the same lighting recipe
                 # the GLB's envelope does, with this run's choices.
                 rendering=self.run.rendering,
@@ -778,147 +788,94 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 f"data_export carrier(s) added to the export set: {len(added)}."
             )
 
-    def apply_declared_takes(self, mode: Union[bool, str, None] = "both"):
-        """Ship the declared shots, the whole sequence, or both.
+    def apply_declared_takes(self, enabled: bool = True):
+        """Split the write into one take per shot.
+
+        One form (the Animation Clips modes retired 2026-11-05): each shot the
+        scene's shot store declares is one FBX take, named after it and
+        spanning its range (``FbxUtils.declared_takes``, the store's
+        ``ShotStore.declared_takes``), and the take the shots do not name --
+        Maya's ``Take 001`` -- is dropped from the written file
+        (:meth:`ship_declared_takes`). Every deliverable takes its clips from
+        these takes: Unity imports one clip per take, and the GLB is converted
+        from this FBX, one animation per take. So the split is resampled
+        always (``FbxUtils.apply_takes``): each take is an exact slice of the
+        animation, every channel keyed across its window. A scene with no
+        shots splits nothing and ships Maya's one whole-timeline take, baked
+        when the export animates (:meth:`_arm_whole_take`).
 
         Producer-agnostic: publishes the scene records once when no task has
         this run (``ensure_scene_records_published`` -- ``export_data_node``
-        normally has), then realizes the takes the shot record declares
-        (``ptk.SceneRecords.declared_takes``: the clips' own ranges) into FBX
-        export state, folding the carrier into
-        the export selection with them.  Runs BEFORE
-        ``set_bake_animation_range``, which widens whatever range it sets to
-        cover the union these takes claim.  A scene that declares no takes is
-        a true no-op: nothing is armed and nothing joins the export set.
-
-        **This is the FBX/Unity leg only.**  The GLB does not take its clips
-        from here: Maya's split is lossy — it restricts each curve to the
-        take's window before baking, so a curve with no key inside a shot
-        contributes no channel to it — and
-        ``ptk.MeshConvert.apply_glb_clips`` therefore REBUILDS the declared
-        clips from the whole-timeline stack the same export retains, which is
-        baked per frame and measured correct on all of it.  The task still
-        earns its place on a GLB export: it is what sets the bake range to the
-        union of the declared shots, so the stack the rebuild slices covers
-        exactly the shots and no more.
-
-        The GLB half of the choice is carried to the conversion rather than
-        acted on here (:meth:`create_glb` passes it as ``clip_mode``): the
-        sequence has to be CUT before it can be dropped, so which clips survive
-        is decided on the deliverable, not in the scene.
+        normally has), folding the carrier into the export selection with the
+        takes. Runs BEFORE ``set_bake_animation_range``, which widens whatever
+        range it sets to cover the union these takes claim.
 
         Parameters:
-            mode: ``"both"`` (shots + the whole-timeline sequence),
-                ``"shots"``, or ``"full"``. A legacy ``True``/``False`` from a
-                preset written when this row was a checkbox maps onto
-                ``"both"``/``"full"`` respectively.
+            enabled: Armed by every FBX run (``ptk.ExportRun.from_tasks``);
+                falsy splits nothing.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        mode = ptk.ExportRun.clip_mode(mode)
-        # Read by create_glb, after the FBX is written. Set even on the paths
-        # that return early: the GLB is converted whether or not a take was
-        # ever realized, and it still has to know which clips to keep.
-        self._clip_mode = mode
-
-        # The carrier task is off: publish here, once, so the takes realized
-        # below are the ones the carrier declares.
-        self.ensure_scene_records_published()
-
-        if mode == "full":
-            # No split: the FBX ships its whole-timeline take, and the
-            # converter is told to keep only that. The declared shots still
-            # ride on the carrier as METADATA -- they describe the scene, and
-            # extras.animation inherits every one, so a player plays each as
-            # its window of the single clip.
-            self.logger.info(
-                "Animation clips: shipping the full sequence only; the "
-                "declared shots are published as metadata, not as clips."
-            )
+        self._realized_takes = ()
+        self._realized_whole_take = None  # _arm_whole_take decides it below
+        if not enabled:
+            self._realized_whole_take = ()
             return
+        # The carrier task is off: publish here, once, so the shots the
+        # carrier declares are the ones split below.
+        self.ensure_scene_records_published()
 
         # The range as it stands, before apply_takes sets the shot union.
         self._stage_bake_range_restore()
-        # Resampled, so each take is an exact slice (FbxUtils.apply_takes) --
-        # unless nothing reads the takes: a GLB-only run's clips are cut from
-        # the whole-timeline take, kept as keyed whatever the preset says
-        # (_write_resamples_curves).
-        count = FbxUtils.apply_takes_from_node(resample=self.write_plan().resample_all)
-        self._realized_takes = ()
+        count = FbxUtils.apply_takes_from_node(resample=True)
         if count:
             # The carrier ships WITH the clips, never instead of them: its
-            # metadata names each shot by take name, so it is folded in only
-            # once takes were realized. Ordering is load-bearing now that this
-            # task is default-on -- included unconditionally, it handed the
-            # carrier back to a user who had deliberately unchecked "Export
+            # record names each shot by take name, so it is folded in only
+            # once takes were realized -- included unconditionally, it handed
+            # the carrier back to a user who had deliberately unchecked "Export
             # Scene Data Node", on a scene with no shots at all.
             self._include_data_export_node()
             # Take splits + bake-complex are sticky global FBX exporter state
             # that must live THROUGH the write, so the cleanup is staged
-            # deferred (post-write) rather than revert-paired.  Without it, a
-            # session with no auto-export hook installed kept the splits and
-            # bake range armed for every later export.  Idempotent alongside
-            # the hook's own kAfterExport reset.
+            # deferred (post-write) rather than revert-paired.  Idempotent
+            # alongside the hook's own kAfterExport reset.
             self.stage_deferred_restore("fbx_takes", FbxUtils.reset_takes)
             # The union apply_takes just wrote, read back as ground truth
             # rather than recomputed, and CLAIMED: set_bake_animation_range runs
             # after this and widens to cover every claim, so no bake range can
-            # clip a clip this export declared.  Read, not derived, so the two
-            # cannot disagree.
+            # clip a take this export declared.
             realized = FbxUtils.bake_range()
             if realized:
                 self._realized_takes = tuple(realized)
                 self._require_range_coverage(*realized)
             self.logger.info(
-                f"Animation takes: {count} clip(s) realized from the declared "
-                "takes; shot metadata embedded on data_export."
+                f"Animation takes: {count} take(s), one per shot; shot "
+                "descriptions and metadata embedded on data_export."
             )
         else:
-            self.logger.debug("No takes declared. Skipping animation takes.")
+            self._arm_whole_take()
+            if not self._realized_whole_take:
+                self.logger.debug(
+                    "No shots declared and nothing animated: the FBX ships its "
+                    "one whole-timeline take as the settings write it."
+                )
 
     def ship_declared_takes(self, fbx_path: str) -> Optional[dict]:
-        """Give the written FBX the clips its Animation Clips mode names.
-
-        Maya writes the whole-timeline take beside the takes it splits
-        whatever the mode, so Shots Only shipped the same file as Shots + Full
-        Sequence and Unity imported a ``Take 001`` clip nobody asked for. In
-        Shots Only the takes the scene does not declare are dropped from the
-        deliverable (``ptk.FbxMedia.drop_takes``), as the GLB drops its stack.
-        Runs after the write and after any GLB conversion -- the GLB's clips
-        are cut FROM that take -- and never raises: the FBX already ships, and
-        a take left in it is the old file, not a broken one.
+        """Give the written FBX exactly its shots' takes
+        (``FbxUtils.drop_undeclared_takes``: Maya's ``Take 001`` leaves a file
+        with shots). Runs right after the write, BEFORE any GLB conversion --
+        the GLB is converted from this file, one animation per take.
 
         Parameters:
-            fbx_path: The FBX deliverable just written.
+            fbx_path: The FBX just written (the deliverable, or a GLB-only
+                run's intermediate).
 
         Returns:
             The ``drop_takes`` report, or ``None`` when nothing was dropped.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        if self._clip_mode != "shots" or not os.path.isfile(fbx_path or ""):
-            return None
-        try:
-            declared = {take["name"] for take in FbxUtils.declared_takes()}
-            present = ptk.FbxFile.load(fbx_path, raw_payloads=False).take_names()
-            drop = [name for name in present if name not in declared]
-            # Only beside a declared take: a file the split never reached keeps
-            # the one take it has.
-            if not drop or len(drop) == len(present):
-                return None
-            report = ptk.FbxMedia.drop_takes(fbx_path, names=drop)
-        except Exception:  # noqa: BLE001 - the deliverable already shipped
-            self.logger.warning(
-                "Shots Only: the whole-timeline take could not be dropped; the "
-                "FBX ships it beside the shots.",
-                exc_info=True,
-            )
-            return None
-        self.logger.info(
-            f"Shots Only: dropped {', '.join(report['takes'])} from the FBX; it "
-            f"ships the {len(present) - len(report['takes'])} shot take(s)."
-        )
-        return report
+        return FbxUtils.drop_undeclared_takes(fbx_path, logger=self.logger)
 
     def _restore_bake_session(self) -> None:
         """Undo :meth:`smart_bake`'s session -- the restore that task stages.

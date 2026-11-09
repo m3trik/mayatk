@@ -10,17 +10,17 @@ The Maya half of the split, mirroring :mod:`mayatk.mat_utils.marmoset_bridge`:
   selection, the material manifest, the textures assigned to the selection, the
   bake-source export and the scene ``fileInfo`` record of the last export.
 * :mod:`_substance_engine` -- ``SubstanceEngine``, the DCC-free Painter half:
-  template parsing, the launch line and RPC ops, Painter launch / attach and the
-  managed-instance registry, the RPC plugin install, texture staging. Vendored
+  script header parsing, finding the Painter a script runs in (by its instance
+  record, or a launch), texture staging. Vendored
   byte-identical into blendertk.
-* :mod:`templates/*.py` -- declarative metadata describing each handoff.
+* :mod:`templates/*.py` -- the built-in scripts, run in Painter.
 * :mod:`parameters` -- UI-tunable knob registry referenced by templates.
 * :mod:`connection` -- live process I/O (stdout / log tail / RPC).
 """
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     from maya import cmds
@@ -48,20 +48,16 @@ from mayatk.mat_utils.substance_bridge.connection import (  # noqa: F401
     APP,
     SubstanceConnection,
 )
-from mayatk.mat_utils.substance_bridge.substance_rpc import (  # noqa: F401
-    DEFAULT_RPC_PORT,
-)
 
 logger = logging.getLogger(__name__)
 
-# The mode / target vocabulary is the engine's. Bound here as assignments (not a
+# The mode / Painter vocabulary is the engine's. Bound here as assignments (not a
 # bare import) because it is this module's public surface too: the subpackage
 # ``__init__`` and the tests import it from here.
 SEND_TO = _engine.SEND_TO
 ROUND_TRIP = _engine.ROUND_TRIP
-TARGET_AUTO = _engine.TARGET_AUTO
-TARGET_NEW = _engine.TARGET_NEW
-TARGET_CURRENT = _engine.TARGET_CURRENT
+PAINTER_AUTO = _engine.PAINTER_AUTO
+PAINTER_NEW = _engine.PAINTER_NEW
 
 
 # USD options tuned for Substance Painter (the USD carrier): the shared interchange
@@ -116,23 +112,20 @@ class SubstanceBridge(SubstanceEngine):
 
     The Maya half of the bridge. :class:`SubstanceEngine` (vendored, DCC-free)
     owns the hand-off itself -- the ``resolve -> preflight -> produce ->
-    deliver`` skeleton, template parsing, the launch line and RPC ops, Painter
-    launch / attach and the managed-instance registry, texture staging. This
+    deliver`` skeleton, script header parsing, finding the Painter a script
+    runs in (by its instance record, or a launch), texture staging. This
     class supplies the scene I/O the engine calls: the FBX / USD writers, the
     selection, the material manifest, the textures assigned to the selection,
     the :class:`BakeSourceSet` export and the scene ``fileInfo`` record of the
     last export.
 
-    Two operating modes per template (declared via ``BRIDGE_MODES``):
-
-    * ``send_to`` -- launch Painter interactively, fire-and-forget.
-    * ``roundtrip`` -- launch Painter with remote scripting, send the
-      template's ``RPC_SCRIPT`` body, and wait for the call to complete.
+    A send queues the script in Painter and returns its job (``send_to``);
+    ``round_trip`` waits for the job's end (:meth:`SubstanceEngine.wait`).
 
     Usage::
 
-        SubstanceBridge().send()                       # default: import template
-        SubstanceBridge().send(template="import", mode="send_to")
+        SubstanceBridge().send()                       # default: New Project
+        SubstanceBridge().send(template="bake_lighting")  # the open project
 
     Backward-compatible with the pre-restructure API: legacy kwargs
     (``headless``, ``enable_remote``) are accepted and ignored if not
@@ -174,10 +167,12 @@ class SubstanceBridge(SubstanceEngine):
         painter_exe: Optional[str] = None,
         fbx_options: Optional[Dict[str, Any]] = None,
         preset_file: Optional[str] = None,
-        template: str = "import",
+        template: str = "new_project",
         mode: str = SEND_TO,
-        target: Union[str, int] = TARGET_AUTO,
+        target: str = PAINTER_AUTO,
         params: Optional[Dict[str, Any]] = None,
+        background: Optional[Callable[..., None]] = None,
+        on_queued: Optional[Callable[[Dict[str, Any]], None]] = None,
         **legacy_kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         """Export *objects*, render *template* in *mode*, hand off to Painter.
@@ -191,34 +186,30 @@ class SubstanceBridge(SubstanceEngine):
             painter_exe: Explicit ``Adobe Substance 3D Painter.exe`` override.
             fbx_options: FBX MEL overrides merged on top of defaults.
             preset_file: Optional FBX export preset path.
-            template: Template stem under ``templates/`` (``"import"`` etc.).
+            template: Script stem (``"new_project"``, ``"bake_lighting"``, a person's own).
             mode: ``"send_to"`` (fire-and-forget) or ``"round_trip"``.
                 Must match one of the template's declared
                 :data:`BRIDGE_MODES`.
-            target: Which Painter to send to. One of:
-                - ``"auto"`` (default) -- reuse a managed live instance if
-                  one exists; otherwise launch new.
-                - ``"new"`` -- always launch a fresh Painter.
-                - ``"current"`` -- require an existing managed instance;
-                  error if none is reachable.
-                - ``int`` -- attach to that explicit RPC port.
-                The template's ``TARGET_INSTANCE`` constant constrains
-                which values are valid; conflicts surface as errors.
+            target: The Painter (the Painter row): ``"auto"`` (default) picks
+                by what the script works on (``SubstanceEngine.pick_painter``),
+                ``"new"`` launches one, an instance record's id is that Painter.
             params: Placeholder overrides, e.g. ``{"PAINTER_RESOLUTION": 4096}``.
+            background: ``(work, then)``: runs *work* off the UI thread, then
+                ``then(work())`` on it (a panel's ``BackgroundTask``). With it, the
+                waits (a launched Painter serving, a project opening) run there and
+                the result says ``pending``; *on_queued* then gets the result.
+            on_queued: Called with the result once the script is queued (or the
+                run stopped) after a wait in *background*.
             **legacy_kwargs: Swallowed (``headless``, ``enable_remote``) for
                 backward compatibility with the pre-restructure API.
 
         Returns:
-            A result dict with ``fbx``, ``mode``, ``connection`` (the
-            :class:`SubstanceConnection`, or *None* on a hint-declaring
-            template's graceful fallback), ``output_dir``, ``high_poly``
-            (only when a companion high-poly file was written), ``delivered``
-            (False when the RPC leg was skipped or failed on a
-            ``send_to`` template), and -- for RPC templates --
-            ``rpc_results`` (one value per op that succeeded), ``rpc_failed``
-            (op names that did not, present only when some did fail; a
-            ``send_to`` run continues past them) and/or ``rpc_result`` (the
-            ``RPC_SCRIPT`` return). *None* on failure.
+            A result dict with ``fbx`` (the mesh), ``mode``, ``connection`` (the
+            :class:`SubstanceConnection`, or *None* when no Painter fits),
+            ``painter`` (its instance record), ``job`` (the queued script's id),
+            ``output_dir``, ``high_poly`` and ``manifest`` (when written),
+            ``delivered`` and, for ``round_trip``, ``status`` (the job's end).
+            *None* when the send stopped before Painter.
         """
         return self._handoff(
             objects,
@@ -232,6 +223,8 @@ class SubstanceBridge(SubstanceEngine):
             painter_exe=painter_exe,
             fbx_options=fbx_options,
             preset_file=preset_file,
+            background=background,
+            on_queued=on_queued,
         )
 
     # -- Scene I/O (the engine's DCC hooks) -------------------------------

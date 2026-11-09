@@ -210,6 +210,11 @@ class SolverExpression(_SolverExpressionInternal):
             end); ``"seeds"``, one plug per model slot (the FK channel);
             ``"outputs"``, a list of plugs per model slot (what takes its
             offset).
+
+    Raises:
+        ValueError: A joint whose anchor is not the identity
+            (``ptk.ArticulationPlan.refuse_anchors``): this solve turns each
+            joint about its own origin.
     """
 
     def __init__(
@@ -220,7 +225,9 @@ class SolverExpression(_SolverExpressionInternal):
         turn: Sequence[float],
         plugs: Mapping[str, Any],
     ):
-        self.model = ptk.ArticulationModel(rig)
+        # The MEL solve turns each joint about its own origin: a Maya rig
+        # nests each joint on its pivot, so its anchors are the identity.
+        self.model = ptk.ArticulationModel(ptk.ArticulationPlan.refuse_anchors(rig))
         if not 0 <= end < len(self.model.joints):
             raise ValueError(f"No joint {end} in rig {self.model.name!r}.")
         self.end = end

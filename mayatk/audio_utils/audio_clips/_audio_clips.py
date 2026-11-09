@@ -77,14 +77,13 @@ class AudioClips(ptk.LoggingMixin):
     """Schema version of the ``audio`` JSON payload (stamped by the
     ``ptk.SceneRecords.AUDIO`` declaration, never spelled here).
 
-    v2: ``{"version": 2, "events": [{"clip", "frame", "name"}, ...], "fps"}``
-    — an event's ``clip`` names the shot take (Unity AnimationClip) it
-    belongs to, with ``frame`` relative to that take's start; an empty
-    ``clip`` means "every clip" (no takes published), its ``frame`` counted
-    from the first frame the file's animation holds; ``fps`` is the rate the
-    frames count at, which travels with them. v1 was the flat unversioned
-    ``"12:footstep 24:jump"`` wire string (unscoped; consumers keep a legacy
-    parser for pre-v2 FBX).
+    v3: ``{"version": 3, "cues": [{"clip", "sound", "time", "offset",
+    "stop"}, ...]}`` -- each track's span cut per clip (the shot's take, or
+    ``""`` for a shotless file's one take), in seconds from the clip's start,
+    with the offset into the sound and its stop; ``sound`` is the delivered
+    file's name. v2 (frames at an ``fps``, one event per start) and v1 (the
+    flat ``"12:footstep 24:jump"`` wire string) are refused by readers:
+    re-export.
     """
 
     # The Audio Clips panel's wording and formats -- one vocabulary with
@@ -844,39 +843,31 @@ class AudioClips(ptk.LoggingMixin):
         (``FbxUtils.PRODUCERS``).  Pure: it reads the keyed tracks and the
         takes and never writes.
 
-        Reads every keyed track via :meth:`AudioUtils.bake_events` and scopes
-        each event to its clip.  The takes are the ones the shot record
-        declares (``ptk.SceneRecords.declared_takes``: produced earlier in the
-        same assembly -- the shots producer runs first, the record declares
-        ``after=("animation",)`` -- else as stored; each clip carries its
-        range), exactly what ``FbxUtils.apply_takes_from_node``
-        realizes into FBX takes, so scoping against them is correct by
-        construction.  A take entry missing its name or range is dropped; when
-        *no* entry carries a usable range the bake falls back to unscoped
-        instead of silently dropping every event.  A ``full`` Animation Clips
-        mode (``ctx.clip_mode``) realizes no take -- the FBX ships one
-        whole-timeline clip -- so its events ship unscoped too: scoped to the
-        shots, they would name clips the file does not have. An unscoped
-        event counts from the first frame the file's animation holds:
-        ``ctx.clip_span`` when the pipeline measured it, else the range the
-        write bakes (``FbxUtils.planned_bake_range``), else the playback start
-        -- blendertk's chain. One before it can never fire, and is dropped
-        with a warning.
+        Each keyed track's spans (:meth:`_timeline_sounds`) are cut into cues
+        per clip by ``ptk.AudioUtils.clip_cues`` -- blendertk's producer cuts
+        by it too -- in seconds from the clip's start. The clips are the
+        scene's shots, one take each (``FbxUtils.declared_takes``: the shot
+        store's), exactly what ``FbxUtils.apply_takes_from_node`` realizes,
+        so the cut is correct by construction. With no shots the file ships
+        one take over the window it declares (``FbxUtils._take_window``):
+        measured off the written file, fitted to what it holds
+        (``ctx.take_window``: ``FbxUtils.drop_undeclared_takes`` runs this
+        again after every write), else what Maya's writer declares by itself,
+        the playback range. A sound no clip plays is dropped with a warning.
 
         Parameters:
             ctx: The export's decisions and the records produced before this
                 one.
 
         Returns:
-            The record (``{"version", "events": [...], "fps"}``: the frames
-            count at the scene's rate, which travels with them; its ``media``
-            is the FBX dependency pass's, from the clips it embeds), or
-            ``None`` when the carrier is missing or no track has keys.
+            The record (``{"version", "cues": [...]}``; its ``media`` is the
+            FBX dependency pass's, from the files it embeds), or ``None`` when
+            the carrier is missing or no clip plays a sound -- except a
+            shotless write's, cut before its take is measured: that one stays,
+            its cues maybe empty, for the post-write cut to replace.
         """
         if cmds is None:
             return None
-
-        from mayatk.node_utils.data_nodes import DataNodes
 
         carrier = _audio_utils.CARRIER_NODE
         if not cmds.objExists(carrier):
@@ -884,41 +875,68 @@ class AudioClips(ptk.LoggingMixin):
                 f"export_record: no carrier {carrier!r} — nothing to export."
             )
             return None
-
-        # Unity (and most game engines) start a clip's clock at 0, on the
-        # first frame the file's animation holds, so an unscoped event counts
-        # from that frame and a consumer computing ``frame / fps`` lands on
-        # its moment: the clip origin the pipeline measured (``ctx.clip_span``),
-        # else the range the write bakes, else the playback start --
-        # blendertk's chain, so either DCC ships one scene's events at the
-        # same frames.
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        stack = ctx.clip_span or FbxUtils.planned_bake_range()
-        if stack:
-            origin = float(stack[0])
-        else:
-            try:
-                origin = float(cmds.playbackOptions(q=True, min=True))
-            except Exception:
-                origin = 0.0
-
-        events = _audio_utils.bake_events(carrier=carrier)
-        takes = (
-            []
-            if ctx.clip_mode == "full"
-            else ptk.SceneRecords.declared_takes(lambda key: ctx.record(key, DataNodes))
-        )
-        scoped = cls._scope_events(events, takes, origin)
-        if not scoped:
+        fps = _audio_utils.get_fps()
+        sounds = cls._timeline_sounds(carrier, fps)
+        if not sounds:
             return None
-        # No ``media``: the FBX dependency pass digests the clips it embeds
+        takes = FbxUtils.declared_takes()
+        window = None if takes else FbxUtils._take_window(ctx)
+        cues, dropped = ptk.AudioUtils.clip_cues(sounds, takes, fps, window=window)
+        # A write's shotless take is measured once the file is written, and the
+        # cues cut again over it (``FbxUtils.drop_undeclared_takes``): until then
+        # a sound the writer's own window leaves out may be in the take, so it
+        # is not yet dropped -- and the record stays, even empty, for that cut
+        # to replace.
+        provisional = (
+            window is not None
+            and ctx.take_window is None
+            and ctx.mode != ptk.ExportContext.AUTHORING
+        )
+        if dropped:
+            where = "in no shot's take" if takes else "outside the file's one take"
+            (cls.logger.debug if provisional else cls.logger.warning)(
+                "Audio: %d sound(s) %s were dropped (no clip plays them): %s",
+                len(dropped),
+                where,
+                ", ".join(dropped),
+            )
+        if not cues and not provisional:
+            return None
+        # No ``media``: the FBX dependency pass digests the files it embeds
         # (``ptk.FbxMedia.embed_dependencies``), so a write without it -- a raw
         # File > Export, the Game Exporter -- never names audio it does not
         # carry. blendertk's producer too.
-        return ptk.SceneRecords.AUDIO.make(
-            {"events": scoped, "fps": _audio_utils.get_fps()}
-        )
+        return ptk.SceneRecords.AUDIO.make({"cues": cues})
+
+    @classmethod
+    def _timeline_sounds(cls, carrier: str, fps: float) -> List[Dict]:
+        """Each keyed track's spans as ``clip_cues`` sounds: ``{"sound",
+        "start", "stop"}`` in timeline frames.
+
+        ``sound`` is the file name the delivery embeds the track under -- the
+        track id with its file's extension (:meth:`AudioUtils.track_files`'
+        name; the bare id for a track with no file). A span with no OFF key
+        stops where its file ends (:meth:`AudioUtils.clip_length_frames`),
+        or, unmeasured, with its clip.
+        """
+        file_map = _audio_utils.load_file_map(carrier)
+        sounds: List[Dict] = []
+        for track_id, spans in _audio_utils.read_all_events(carrier).items():
+            path = file_map.get(track_id)
+            ext = os.path.splitext(path)[1] if isinstance(path, str) else ""
+            length = None
+            for start, stop in spans:
+                if stop is None:
+                    if length is None:
+                        length = _audio_utils.clip_length_frames(track_id, carrier)
+                    stop = start + length if length and length > 0 else None
+                sounds.append(
+                    {"sound": f"{track_id}{ext}", "start": start, "stop": stop}
+                )
+        sounds.sort(key=lambda sound: (sound["start"], sound["sound"]))
+        return sounds
 
     @classmethod
     @CoreUtils.undoable
@@ -932,23 +950,19 @@ class AudioClips(ptk.LoggingMixin):
         :meth:`export_record`, which reads the takes the shots producer built
         in the same assembly.
 
-        Clip scoping: when the Shots system has published its takes, each
-        event is assigned to every take whose range contains it, with the
-        frame rebased to that take's start — the same frames the imported
-        AnimationClip counts from.  Events outside every take are dropped
-        with a warning (they could never fire in any clip).  With no takes,
-        events ship unscoped (``clip: ""``), counted from the first frame the
-        file's animation holds (:meth:`export_record`) -- time 0 of the single
-        imported clip.
+        Clips: each track's spans are cut into cues per clip -- one per shot
+        take, or the shotless file's one take (``clip: ""``) -- in seconds
+        from the clip's start, with the offset into the sound and its stop
+        (:meth:`export_record`). A sound no clip plays is dropped with a
+        warning.
 
         The manifest is a regenerated export artifact — authoring state (the
         keyed ``audio_clip_<id>`` enums and ``audio_file_map``) stays on
         ``data_internal``; only this baked projection ships, as the
         ``ptk.SceneRecords.AUDIO`` record on ``data_export``.  The value rides
         out as a string user-prop on the ``data_export`` GameObject in the
-        imported FBX.  Downstream importers (e.g. unitytk
-        ``AudioEventImporter``) attach a single scene-wide audio-event
-        component from it and inject each event only into its own clip.
+        imported FBX.  Downstream importers (unitytk's Animation Audio)
+        write each cue into its own clip as animation events.
         Scenes written when the manifest was still proxy-mirrored are healed
         in place by the store's write (``DataNodes._drop_retired_proxy``), on
         this path and the export pipeline's alike.
@@ -971,7 +985,7 @@ class AudioClips(ptk.LoggingMixin):
         # mirrored from data_internal.
         record = cls.export_record(ptk.ExportContext(mode=ptk.ExportContext.AUTHORING))
         FbxUtils.publish_authored({ptk.SceneRecords.AUDIO: record})
-        n_entries = len(record.payload["events"]) if record is not None else 0
+        n_entries = len(record.payload["cues"]) if record is not None else 0
         cls.logger.info(
             "prepare_for_export: stamped %s.%s with %d entr%s.",
             DataNodes.EXPORT,
@@ -980,35 +994,6 @@ class AudioClips(ptk.LoggingMixin):
             "y" if n_entries == 1 else "ies",
         )
         return record.text if record is not None else ""
-
-    @classmethod
-    def _scope_events(cls, events: list, takes: list, origin: float) -> list:
-        """Assign baked ``(frame, name)`` events to their shot takes.
-
-        ``ptk.AudioUtils.scope_events`` -- the rule blendertk's producer ships
-        by too: an event lands in every take whose ``[start, end]`` range
-        (inclusive) contains it, its ``frame`` rebased to that take's start; a
-        take missing its name or range scopes nothing; with no usable take
-        events ship unscoped (``clip: ""``), counted from *origin*, the first
-        frame the file's animation holds. An event that can never fire --
-        outside every take, or before *origin* -- is dropped with a warning
-        that says which.
-        """
-        scoped, dropped = ptk.AudioUtils.scope_events(events, takes, origin)
-        if dropped:
-            where = (
-                "outside every shot take"
-                if takes
-                else f"before the clip's first frame ({origin:g})"
-            )
-            cls.logger.warning(
-                "Audio: %d event(s) %s were dropped (they can never fire in a "
-                "clip): %s",
-                len(dropped),
-                where,
-                ", ".join(dropped),
-            )
-        return scoped
 
     #: Explicit user opt-out (``disable_auto_export``) — session-global; wins
     #: over the automatic registration that creating a track performs.

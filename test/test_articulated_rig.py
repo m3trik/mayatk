@@ -758,9 +758,16 @@ class TestSolverExpression(MayaTkTestCase):
     def test_the_mel_solve_matches_every_conformance_case(self):
         doc = ptk.ArticulationConformance.cases()
         tolerance = doc["tolerance"]["solve"]
-        checked = skipped = 0
+        checked = skipped = anchored = 0
         for index, case in enumerate(doc["cases"]):
             rig = doc["rigs"][case["rig"]]
+            if not all(
+                ptk.ArticulationModel.is_identity(j["anchor"]) for j in rig["joints"]
+            ):
+                # A Maya rig nests each joint on its pivot: its solve never
+                # sees an anchor (refused: test_an_anchored_rig_is_refused).
+                anchored += len(case["solve"])
+                continue
             for solve in case["solve"]:
                 joint = solve["joint"]
                 model = ptk.ArticulationModel(rig)
@@ -785,8 +792,19 @@ class TestSolverExpression(MayaTkTestCase):
                     f"case {index} ({case['rig']}), joint {joint}: {got} != {want}",
                 )
                 checked += 1
-        self.assertEqual(checked + skipped, sum(len(c["solve"]) for c in doc["cases"]))
+        self.assertEqual(
+            checked + skipped + anchored, sum(len(c["solve"]) for c in doc["cases"])
+        )
         self.assertGreater(checked, skipped)
+
+    def test_an_anchored_rig_is_refused(self):
+        """The MEL solve turns each joint about its own origin, as a Maya rig
+        nests each joint on its pivot: a rig whose anchor is not the identity
+        (articulation v2's flat model, an engine's own rig) is refused,
+        naming its joints. Added: 2026-11-08"""
+        rig = ptk.ArticulationConformance.rigs()["anchored"]
+        with self.assertRaisesRegex(ValueError, "anchor of base, elbow"):
+            SolverExpression(rig, 3, (0.0, 0.0, 0.0), self.IDENTITY, {})
 
     def test_an_out_of_reach_target_settles_as_the_model_does(self):
         """Past the reach a step is halved until it brings the held point
@@ -1371,9 +1389,113 @@ class TestRecord(ArticulatedRigCase):
         self.assertEqual(sorted(g["node"] for g in entry["grab"]), sorted(PARTS[1:]))
         model = ptk.ArticulationModel(entry)
         self.assertEqual(len(model.channels), 2 + 1 + 1 + 1 + 3)
+        self.assertTrue(
+            all(ptk.ArticulationModel.is_identity(j["anchor"]) for j in entry["joints"])
+        )
         # published at build for any export to carry
         stored = ptk.SceneRecords.ARTICULATION.load(__import__("mayatk").DataNodes)
         self.assertEqual(stored["rigs"][0]["name"], rig.name)
+
+    def test_the_record_is_in_metres_whatever_the_working_unit(self):
+        """Articulation v2 (2026-11-08) is in glTF's frame: the plan's
+        centimetres are written as metres -- each rest translate and slide
+        limit a hundredth of the rig's own record, rotations and angles as
+        they are -- in a centimetre scene, a metre one, and for a writer that
+        states its unit (``ExportContext.unit_scale``: metres per working
+        unit). Added: 2026-11-08"""
+        rig = self.build()
+        plan = rig.record()  # the plan's centimetres, as the solver poses
+        for unit, ctx in (
+            ("cm", None),
+            ("m", None),
+            ("mm", ptk.ExportContext(unit_scale=0.001)),
+        ):
+            with self.subTest(unit=unit):
+                cmds.currentUnit(linear=unit)
+                self.addCleanup(cmds.currentUnit, linear="cm")
+                self.assertAlmostEqual(ArticulatedRig.unit_scale(ctx), 0.01, places=12)
+                entry = ArticulatedRig.export_record(ctx).payload["rigs"][0]
+                slides = 0
+                for a, b in zip(plan["joints"], entry["joints"]):
+                    for x, y in zip(a["t"], b["t"]):
+                        self.assertAlmostEqual(y, x * 0.01, places=9)
+                    self.assertEqual(a["q"], b["q"])
+                    for ca, cb in zip(a["channels"], b["channels"]):
+                        k = 0.01 if ca["channel"].startswith("t") else 1.0
+                        slides += k != 1.0
+                        for key in ("min", "max"):
+                            if ca[key] is not None:
+                                self.assertAlmostEqual(cb[key], ca[key] * k, places=9)
+                self.assertTrue(slides, "the magnifier's slide")
+
+    def test_the_glb_frames_each_joint_as_the_record_states_it(self):
+        """The real hop under every file unit: the Scene Exporter at Units cm,
+        m and mm, and a preset converting the file to metres (the FBX
+        plug-in's own conversion, ``FBXExportConvertUnitString``), through
+        FBX2glTF -- every joint's glTF local is the record's rest translate,
+        the record the GLB carries. Maya writes each local in centimetres
+        whatever the unit (the conversion rides the root's scale and the
+        file's UnitScaleFactor), and FBX2glTF reads it x 0.01 whatever the
+        UnitScaleFactor, so a reader poses the record's numbers on the nodes
+        as they stand (measured 2026-11-08). Added: 2026-11-08"""
+        import maya.mel as mel
+        from unittest.mock import patch
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        if not ptk.MeshConvert.resolve_binary(required=False, auto_install=False):
+            self.skipTest("FBX2glTF is not installed in this environment")
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("FBX plugin not available")
+        rig = self.build()
+        artifacts = ptk.TempArtifacts("articulated_rig_units", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        out = artifacts.dir_path()
+        preset = os.path.join(out, "metres.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def metres_preset(*_args, **_kwargs):
+            FbxUtils.reset_export()
+            mel.eval("FBXExportConvertUnitString m")
+
+        asset = cmds.ls("ASSET", long=True)[0]
+        for name, unit, preset_file in (
+            ("cm", "cm", None),
+            ("m", "m", None),
+            ("mm", "mm", None),
+            ("file_in_metres", "cm", preset),
+        ):
+            with self.subTest(export=name):
+                exporter = SceneExporter(log_level="WARNING")
+                exporter.confirm = lambda question: False
+                with patch.object(
+                    SceneExporter, "load_fbx_export_preset", side_effect=metres_preset
+                ):
+                    self.assertTrue(
+                        exporter.perform_export(
+                            export_dir=out,
+                            objects=[asset],
+                            output_name=name,
+                            preset_file=preset_file,
+                            tasks={
+                                "output_format": "fbx_glb",
+                                "export_data_node": True,
+                                "set_linear_unit": unit,
+                            },
+                        )
+                    )
+                with ptk.MeshConvert.open_glb(os.path.join(out, f"{name}.glb")) as edit:
+                    nodes = {n.get("name"): n for n in edit.gltf["nodes"]}
+                    carried = edit.gltf["extras"][ptk.SceneRecords.ARTICULATION.key]
+                (entry,) = [r for r in carried["rigs"] if r["name"] == rig.name]
+                for joint in entry["joints"]:
+                    local = nodes[joint["name"]].get("translation", [0.0, 0.0, 0.0])
+                    for got, want in zip(local, joint["t"]):
+                        self.assertAlmostEqual(got, want, places=6, msg=joint["name"])
 
     def test_the_grab_names_a_part_renamed_after_the_build(self):
         """A runtime binds a grab by the part's name under its joint: the

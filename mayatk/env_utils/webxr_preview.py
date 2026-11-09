@@ -33,7 +33,7 @@ Example:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     import maya.cmds as cmds
@@ -86,6 +86,27 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
         preview is the one receiver that reads one. Mirror of blendertk's.
         """
         return {**super()._fbx_options(params), "FBXExportCameras": True}
+
+    def _effect_curves(self, objects) -> Dict[str, Any]:
+        """The render-effect curves a push of *objects* ships, in frames
+        (``RenderEffects.effect_curves`` under this send's scope) -- what a
+        push with animation off states for its build
+        (:meth:`pythontk.PreviewBridge._with_scene_effects`). Mirror of
+        blendertk's."""
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        return RenderEffects.effect_curves(self._handoff_context(objects))
+
+    def _declared_takes(self) -> List[Dict[str, Any]]:
+        """The takes an animated push of this scene splits -- the shot
+        store's (``FbxUtils.declared_takes``), named by each shot's clip --
+        or ``[]`` for a bridge that ships one take (:attr:`split_takes`): what
+        a push with animation off states one clip each for
+        (:meth:`pythontk.PreviewBridge._with_scene_effects`). Mirror of
+        blendertk's."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        return FbxUtils.declared_takes() if self.split_takes else []
 
     def _start_node(self, name: str) -> Optional[str]:
         """The transform named *name* -- the root namespace's first, else any

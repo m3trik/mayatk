@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.31.0"
+__version__ = "0.32.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -183,7 +183,7 @@ DEFAULT_INCLUDE = {
     # PreviewServer rather than an app. Counterpart of blendertk's ``WebXrPreview``.
     "env_utils.webxr_preview": "WebXrPreview",
     # The Unity hand-off's Maya half (``btk.UnityBridge`` twin); its panel is extapps'
-    # Unity Workflow app, opened by tentacle with this engine injected.
+    # Unity Scripts app, opened by tentacle with this engine injected.
     "env_utils.unity_bridge._unity_bridge": "UnityBridge",
     # What every bridge panel asks of the host: scope, closure, package install.
     "env_utils.handoff_export": "BridgeHost",
@@ -269,6 +269,21 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
+    # The Substance bridge runs scripts in Painter and finds a Painter by its
+    # instance record (2026-11-05): the Painter row's values, no fixed port, no
+    # code-evaluating op, no render template.
+    "TARGET_AUTO": ("mayatk.mat_utils.substance_bridge.PAINTER_AUTO", "0.31.0"),
+    "TARGET_NEW": ("mayatk.mat_utils.substance_bridge.PAINTER_NEW", "0.31.0"),
+    "TARGET_CURRENT": ("mayatk.mat_utils.substance_bridge.PAINTER_AUTO (a script on a project runs where it is open)", "0.31.0"),
+    "SubstanceEngine.ensure_rpc_plugin": ("mayatk.mat_utils.substance_bridge.SubstanceBridge.refresh_rpc_plugin", "0.31.0"),
+    "SubstanceEngine.find_live_managed": ("mayatk.mat_utils.substance_bridge.SubstanceBridge.pick_painter", "0.31.0"),
+    "Parameters.render_cli_context": ("mayatk.mat_utils.substance_bridge.SubstanceBridge.script_args", "0.31.0"),
+    "Parameters.render_js_context": ("mayatk.mat_utils.substance_bridge.SubstanceBridge.script_args", "0.31.0"),
+    "DEFAULT_RPC_PORT": ("mayatk.mat_utils.substance_bridge.substance_rpc.PainterRpcClient.painters", "0.31.0"),
+    "PainterRpcClient.eval_js": ("mayatk.mat_utils.substance_bridge.substance_rpc.PainterRpcClient.run_script", "0.31.0"),
+    "PainterRpcClient.eval_py": ("mayatk.mat_utils.substance_bridge.substance_rpc.PainterRpcClient.run_script", "0.31.0"),
+    "eval_python": ("mayatk.mat_utils.substance_bridge.substance_rpc.PainterRpcClient.run_script", "0.31.0"),
+    "js_evaluate": ("mayatk.mat_utils.substance_bridge.substance_rpc.PainterRpcClient.run_script", "0.31.0"),
     # Moved beside the one plug-in door (2026-10-03); their window closed. The
     # bare rows answer the flat names the wildcard ``EnvUtils`` exposed.
     "EnvUtils.is_plugin_loaded": ("mayatk.Plugins.is_loaded", "0.31.0"),
@@ -596,17 +611,20 @@ MOVED_NAMES = {
     ),
     # The Unity panel: tentacle's for a while, now the one Unity app, extapps' Unity
     # Workflow, which tentacle opens with ``UnityBridge`` as its engine.
-    "UnityBridgeSlots": ("extapps.UnityWorkflowSlots", "0.30.0"),
-    "UnityPanelMixin": ("extapps.UnityWorkflowSlots", "0.30.0"),
-    # The delivery is the app's, over unitytk's file bridge and its modes.
+    "UnityBridgeSlots": ("extapps.UnityScriptsSlots", "0.30.0"),
+    "UnityPanelMixin": ("extapps.UnityScriptsSlots", "0.30.0"),
+    # The delivery is the app's, over pythontk's file bridge and its modes.
     "UnityBridge.list_template_modes": (
-        "unitytk.FileToUnityBridge.list_template_modes",
+        "pythontk.FileDeliveryBridge.list_template_modes",
         "0.30.0",
     ),
     "UnityBridge.list_delivery_modes": (
-        "unitytk.CopyToAssetsDeliverer.DELIVERY_MODES",
+        "pythontk.FolderDeliverer.DELIVERY_MODES",
         "0.30.0",
     ),
+    # Removed with no caller left: the Unity Scripts app installs nothing into
+    # the host; a Unity project installs its packages with Unity's Package Manager.
+    "UnityBridge.install_package": ("Unity's Package Manager", "0.32.0"),
     "ShotsSlots": (
         "tentacle.slots.tools.shots.ShotsSlots",
         "0.30.0",
@@ -773,6 +791,40 @@ MOVED_NAMES = {
         "mayatk.core_utils.preview.MayaPreviewSession.captured_objects",
         "0.30.0",
     ),
+    # Emissive groups become materials (2026-11-07): the masks, slots and
+    # emissive_groups record retire (pythontk's rows name the model's).
+    "EmissiveGroups.set_default": ("mayatk.EmissiveGroups.set_weight", "0.32.0"),
+    "EmissiveGroups.make_weights_keyable": ("mayatk.EmissiveGroups.key_weight", "0.32.0"),
+    "EmissiveGroups.remove_keyable_weights": ("mayatk.EmissiveGroups.remove_keys", "0.32.0"),
+    "EmissiveGroups.weight_attrs": ("mayatk.EmissiveGroups.list_groups", "0.32.0"),
+    "EmissiveGroups.compact_slots": ("mayatk.EmissiveGroups.convert_legacy", "0.32.0"),
+    "EmissiveGroups.bake_vertex_colors": ("mayatk.EmissiveGroups.convert_legacy", "0.32.0"),
+    "EmissiveGroups.bake_mask": ("mayatk.EmissiveGroups.convert_legacy", "0.32.0"),
+    "EmissiveGroups.export_record": ("mayatk.EmissiveGroups.render_effect_materials", "0.32.0"),
+    "EmissiveGroups.refresh_export_metadata": ("mayatk.EmissiveGroups.render_effect_materials", "0.32.0"),
+    "EmissiveGroups.merge_carrier": ("mayatk.EmissiveGroups.transfer_in", "0.32.0"),
+    "EmissiveGroups.discard_carrier": ("mayatk.EmissiveGroups.transfer_in", "0.32.0"),
+    # The Maya half of the old host seam (pythontk's EmissiveGroupsHost rows).
+    "MayaEmissiveGroups.add_members": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.assign", "0.32.0"),
+    "MayaEmissiveGroups.remove_members": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.delete_material", "0.32.0"),
+    "MayaEmissiveGroups.members": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.material_faces", "0.32.0"),
+    "MayaEmissiveGroups.membership_stores": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.legacy_store_names", "0.32.0"),
+    "MayaEmissiveGroups.carrier_weights": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.copies", "0.32.0"),
+    "MayaEmissiveGroups.weight_exists": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.copies", "0.32.0"),
+    "MayaEmissiveGroups.ensure_weight": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.set_emission", "0.32.0"),
+    "MayaEmissiveGroups.delete_weight": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.clear_emission_keys", "0.32.0"),
+    "MayaEmissiveGroups.sync_weight": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.set_emission", "0.32.0"),
+    "MayaEmissiveGroups.key_weight": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.key_emission", "0.32.0"),
+    "MayaEmissiveGroups.foreign_color_sets": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.remove_legacy", "0.32.0"),
+    "MayaEmissiveGroups.write_colors": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.remove_legacy", "0.32.0"),
+    "MayaEmissiveGroups.uv_triangles": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.remove_legacy", "0.32.0"),
+    "MayaEmissiveGroups.mask_path": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.remove_legacy", "0.32.0"),
+    "MayaEmissiveGroups.object_names": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.faces", "0.32.0"),
+    "MayaEmissiveGroups.face_count": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.material_faces", "0.32.0"),
+    "MayaEmissiveGroups.mesh": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.material", "0.32.0"),
+    "MayaEmissiveGroups.merge_stores": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.copies", "0.32.0"),
+    "MayaEmissiveGroups.discard_stores": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.remove_legacy", "0.32.0"),
+    "MayaEmissiveGroups.publish": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.stage_emission_proxy", "0.32.0"),
 }
 
 bootstrap_package(

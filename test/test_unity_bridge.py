@@ -2,19 +2,20 @@
 # coding=utf-8
 """Test Suite for mayatk.env_utils.unity_bridge.
 
-``UnityBridge`` is the Maya half of the Unity Workflow app (extapps' ``unity_workflow``,
-opened by tentacle with this class as its engine): it resolves the app's Scope, exports the
-FBX with the scene records (the shared MayaExportMixin) and hands the payload to the
-delivery the app attaches (``deliverer=``, unitytk's ``CopyToAssetsDeliverer``). The host
-half names no unitytk; the sends below attach the real deliverer, where unitytk is on the
-path, to drive the production chain into a temp project (a folder with ``Assets/``, no
-Unity), and a hand-back deliverer to pin what the app receives.
+``UnityBridge`` is the Maya half of the Unity Scripts app (extapps' ``unity_scripts``,
+opened by tentacle with this class as its engine): it resolves the app's Scope, exports it
+with the Scene Exporter (``ptk.SceneExportHandoff``) and hands the payload to the
+delivery the app attaches (``deliverer=``: the app's ``ptk.FolderDeliverer``, a copy into
+the project's ``Assets/``). The host half names no unitytk; the sends below attach a
+``ptk.FolderDeliverer`` shaped as the app shapes it (:class:`_AssetsDeliverer`) to drive
+the production chain into a temp project (a folder with ``Assets/``, no Unity), and a
+hand-back deliverer to pin what the app receives.
 
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py unity_bridge``).
 """
 
 import ast
-import importlib.util
+import os
 import shutil
 import tempfile
 import unittest
@@ -28,15 +29,22 @@ from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
 
 from base_test import MayaTkTestCase
 
-#: The delivery the app attaches (unitytk), on the runner's pinned path.
-UNITYTK = importlib.util.find_spec("unitytk") is not None
+class _AssetsDeliverer(ptk.FolderDeliverer):
+    """The app's delivery as the app shapes pythontk's: a copy into the
+    project's ``Assets/`` by the panel's keys, the FBX carrying the files its
+    records name (the Editor launch is the app's own)."""
 
+    DEFAULT_SUBDIR = "Imported"
+    SUBDIR_PARAM = "ASSETS_SUBDIR"
+    NAME_PARAM = "ASSET_NAME"
 
-def _unity_deliverer():
-    """The app's delivery: unitytk's copy into Assets/ (+ optional launch)."""
-    from unitytk import CopyToAssetsDeliverer
+    def __init__(self):
+        super().__init__(embed=ptk.FbxMedia.embed_dependencies)
 
-    return CopyToAssetsDeliverer()
+    def target(self, bridge):
+        project = bridge.project_path
+        assets = os.path.join(project, "Assets") if project else None
+        return assets if assets and os.path.isdir(assets) else None
 
 
 class _HandBack(ptk.Deliverer):
@@ -45,12 +53,15 @@ class _HandBack(ptk.Deliverer):
     def __init__(self, preflight=True):
         self.ok = preflight
         self.payloads = []
+        self.fbx = []
 
     def preflight(self, bridge, request):
         return self.ok
 
     def deliver(self, bridge, payload, request):
+        # Read here: the run's staging folder is gone once the send returns.
         self.payloads.append(payload)
+        self.fbx.append(ptk.FbxFile.is_fbx(payload.primary))
         return {"fbx": payload.primary, "project": bridge.project_path}
 
 
@@ -69,7 +80,7 @@ class TestUnityBridgeUnit(unittest.TestCase):
     """Pure (no Maya geometry) -- composition, and what is the app's."""
 
     def test_the_host_half_imports_no_unitytk(self):
-        """The delivery is the Unity Workflow app's: no module of the host half
+        """The delivery is the Unity Scripts app's: no module of the host half
         imports unitytk, and mayatk declares no ``unity`` extra."""
         import mayatk.env_utils.unity_bridge as package
 
@@ -86,76 +97,62 @@ class TestUnityBridgeUnit(unittest.TestCase):
         bridge = UnityBridge(project_path="C:/proj", deliverer=deliverer)
         self.assertIs(bridge.deliverer, deliverer)
         self.assertEqual(bridge.project_path, "C:/proj")
-        for gone in ("list_delivery_modes", "list_template_modes", "_deliverer_cls"):
+        # The delivery, its modes and what it needs installed are the app's
+        # (a Unity project installs its packages through Unity's Package Manager).
+        for gone in (
+            "list_delivery_modes",
+            "list_template_modes",
+            "_deliverer_cls",
+            "install_package",
+        ):
             self.assertFalse(hasattr(UnityBridge, gone), gone)
 
-    def test_an_optional_package_installs_where_maya_imports(self):
-        """The app, opened inside Maya, installs unitytk through its engine."""
-        from mayatk.env_utils.handoff_export import BridgeHost
+    def test_the_send_is_the_scene_exporters(self):
+        """What Unity gets is what a fresh Scene Exporter panel writes
+        (``ptk.SceneExportHandoff``): the records, the take split, the
+        finishing pass are its defaults, not this bridge's settings; the open
+        scene's workspace stays the person's."""
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
 
-        with mock.patch.object(BridgeHost, "install_package") as install:
-            UnityBridge.install_package("unitytk>=0.1.0")
-        install.assert_called_once_with("unitytk>=0.1.0")
-
-    def test_ships_the_metadata_carrier(self):
-        """This FBX lands in Assets/ as the deliverable, not as an intermediate.
-
-        unitytk's ``LightmapMetadataController`` binds Unity's native lightmap slots
-        by reading ``lightmaps`` off ``data_export``. A selection export does
-        not include that node, so without the opt-in the import is silently unlit --
-        on the platform the bake targets first.
-        """
-        self.assertIs(UnityBridge.include_data_export, True)
-
-    def test_its_takes_are_exact_slices(self):
-        """Unity builds the clips from the takes, so this hand-off resamples
-        its split; a DCC hand-off keeps the authored keys (the mixin default)."""
-        from mayatk.env_utils.handoff_export import MayaExportMixin
-
-        self.assertIs(UnityBridge.resample_takes, True)
-        self.assertIs(MayaExportMixin.resample_takes, False)
-
-    def test_it_animates_unless_a_request_says_otherwise(self):
-        """Unity builds the clips from the takes, and this panel offers no
-        animation knob; a DCC hand-off keeps its own (the mixin default)."""
-        from mayatk.env_utils.handoff_export import MayaExportMixin
-
-        self.assertIs(getattr(UnityBridge, "include_animation", None), True)
-        self.assertIs(getattr(MayaExportMixin, "include_animation", None), False)
+        self.assertTrue(issubclass(UnityBridge, ptk.SceneExportHandoff))
+        self.assertIs(ptk.Operation.resolve_target(UnityBridge.SCENE_EXPORTER), SceneExporter)
+        self.assertEqual(UnityBridge.SCENE_EXPORT_OVERRIDES, {"set_workspace": False})
+        decide = lambda *args: "override"  # noqa: E731
+        self.assertIs(UnityBridge(decide_check_failure=decide).scene_exporter().decide_check_failure, decide)
+        values = SceneExporter().panel_defaults()
+        self.assertTrue(values["export_data_node"], "a fresh panel ships the records")
 
     def test_params_defaults(self):
         """The export rows only: the delivery's rows are the app's."""
         d = UnityBridge().params_defaults()
-        self.assertEqual(
-            set(d), {"SCOPE", "INCLUDE_MATERIALS", "EMBED_TEXTURES", "TRIANGULATE"}
-        )
-        self.assertTrue(d["INCLUDE_MATERIALS"])
+        self.assertEqual(set(d), {"SCOPE"}, "the export itself is the Scene Exporter's")
         self.assertEqual(d["SCOPE"], "selected")
 
     def test_the_app_reads_its_rows_off_the_engine(self):
-        """The Unity Workflow app builds its Current Scene rows from
+        """The Unity Scripts app builds its Current Scene rows from
         ``UnityBridge.params_registry()``; the engine's defaults read the same."""
         from mayatk.env_utils.unity_bridge import parameters as P
 
         self.assertIs(UnityBridge.params_registry(), P.Parameters)
         self.assertEqual(UnityBridge().params_defaults(), P.Parameters.defaults())
-        self.assertEqual({spec.section for spec in P.PARAMS.values()}, {"Export"})
 
 
 class TestUnityBridgeSend(MayaTkTestCase):
-    """End-to-end: real Maya export -> the app's delivery (unitytk) into a temp
-    Unity project's Assets/."""
+    """End-to-end: real Maya export -> the app's delivery (a ``ptk.FolderDeliverer``)
+    into a temp Unity project's Assets/."""
 
     def setUp(self):
         super().setUp()
         self.tmp = Path(tempfile.mkdtemp(prefix="unity_bridge_test_"))
         self.project = self.tmp / "UnityProj"
         (self.project / "Assets").mkdir(parents=True)
-        if not UNITYTK:
-            shutil.rmtree(self.tmp, ignore_errors=True)
-            self.skipTest("unitytk (the app's delivery) is not on the path")
+        # Headless, nobody answers a failed check: these sends carry on past
+        # them (a plain cube fails the default-materials check), as a panel's
+        # Override All would.
         self.bridge = UnityBridge(
-            project_path=str(self.project), deliverer=_unity_deliverer()
+            project_path=str(self.project),
+            deliverer=_AssetsDeliverer(),
+            decide_check_failure=lambda *args: "override_all",
         )
 
     def tearDown(self):
@@ -171,12 +168,11 @@ class TestUnityBridgeSend(MayaTkTestCase):
             params={"ASSETS_SUBDIR": "Models", "ASSET_NAME": ""},
         )
         self.assertIsNotNone(result, "send returned None (delivery failed)")
-        dest = Path(result["asset"])
+        dest = Path(result["file"])
         # Asset named after the selected object, under Assets/Models.
         self.assertEqual(dest, self.project / "Assets" / "Models" / "UnityHero.fbx")
         self.assertTrue(dest.is_file(), f"FBX not copied to {dest}")
         self.assertGreater(dest.stat().st_size, 0, "copied FBX is empty")
-        self.assertFalse(result["launched"])
 
     def test_send_default_subdir_and_explicit_name(self):
         cube = cmds.polyCube(name="UnityCube")[0]
@@ -186,7 +182,7 @@ class TestUnityBridgeSend(MayaTkTestCase):
             mode="send_to",
             params={"ASSET_NAME": "Custom/Name"},
         )
-        dest = Path(result["asset"])
+        dest = Path(result["file"])
         # Default subdir 'Imported'; name sanitized.
         self.assertEqual(dest, self.project / "Assets" / "Imported" / "Custom_Name.fbx")
         self.assertTrue(dest.is_file())
@@ -217,15 +213,16 @@ class TestUnityBridgeSend(MayaTkTestCase):
             [cube, late],
             template="copy_to_assets",
             mode="send_to",
-            params={"INCLUDE_ANIMATION": True, "ASSET_NAME": "anim_takes"},
+            params={"ASSET_NAME": "anim_takes"},
         )
 
         self.assertIsNotNone(result, "send returned None (delivery failed)")
         curves = ptk.FbxFile.load(
-            result["asset"], span_arrays=("KeyTime",), raw_payloads=False
+            result["file"], span_arrays=("KeyTime",), raw_payloads=False
         ).take_curves()
-        self.assertIn("ShotB", curves)
-        whole = set(curves["Take 001"])
+        # One take per shot: Maya's whole-timeline take leaves the file.
+        self.assertEqual(sorted(curves), ["ShotA", "ShotB"])
+        whole = set(curves["ShotA"]) | set(curves["ShotB"])
         self.assertTrue(any(key[0] == "UnityEarly" for key in whole))
         tick = ptk.FbxFile.TICKS_PER_SECOND / 24.0
         for take, (start, end) in (("ShotA", (1, 20)), ("ShotB", (21, 40))):
@@ -260,18 +257,53 @@ class TestUnityBridgeSend(MayaTkTestCase):
             [cube], template="copy_to_assets", mode="send_to", params=panel
         )
         self.assertIsNotNone(result, "send returned None (delivery failed)")
-        takes = ptk.FbxFile.load(result["asset"], raw_payloads=False).take_names()
-        self.assertIn("ShotA", takes)
-        self.assertIn("ShotB", takes)
+        takes = ptk.FbxFile.load(result["file"], raw_payloads=False).take_names()
+        self.assertEqual(takes, ["ShotA", "ShotB"], "one take per shot, no other")
 
-        still = self.bridge.send(
+    def test_a_send_after_an_export_with_animation_off_states_the_rate(self):
+        """The FBX plug-in's Animation include group is sticky session state.
+        An earlier export that left it off (a preset's) still held it when the
+        hand-off's context read it -- before the hand-off reset the plug-in and
+        wrote its animation -- so an animated shotless send shipped its take
+        and no ``animation`` record: a GLB built from it could not state its
+        rate. The context states what THIS write does.
+        Added: 2026-11-05
+        """
+        import json
+
+        import maya.mel as mel
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        cube = cmds.polyCube(name="UnityRate")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=24, value=5)
+        FbxUtils.set_animation_export(False)  # what the previous export left
+        self.addCleanup(FbxUtils.set_animation_export, True)
+
+        result = self.bridge.send(
             [cube],
             template="copy_to_assets",
             mode="send_to",
-            params=dict(panel, ASSET_NAME="panel_still", INCLUDE_ANIMATION=False),
+            params={"ASSETS_SUBDIR": "Bridge", "ASSET_NAME": "rate"},
         )
-        self.assertNotIn(
-            "ShotA", ptk.FbxFile.load(still["asset"], raw_payloads=False).take_names()
+        self.assertIsNotNone(result, "send returned None (delivery failed)")
+        fbx = ptk.FbxFile.load(result["file"], raw_payloads=False)
+        self.assertEqual(len(fbx.take_names()), 1, "the send carries its animation")
+        records = [
+            json.loads(bytes(value).decode("utf-8"))
+            for value in fbx.user_properties(ptk.SceneRecords.SHOTS.key)
+            if isinstance(value, (bytes, bytearray)) and value.strip()
+        ]
+        self.assertEqual(
+            records,
+            [
+                {
+                    "version": ptk.SceneRecords.SHOTS.version,
+                    "shots": [],
+                    "fps": round(float(mel.eval("currentTimeUnitToFPS")), 6),
+                }
+            ],
+            "an animated send states its rate",
         )
 
     def test_a_send_ships_the_audio_its_scene_plays_now(self):
@@ -312,8 +344,10 @@ class TestUnityBridgeSend(MayaTkTestCase):
             mode="send_to",
             params={"ASSETS_SUBDIR": "Second"},
         )
-        fbx = result["asset"]
-        self.assertEqual(sorted(ptk.FbxMedia.audio_events(fbx)), ["footstep", "punch"])
+        fbx = result["file"]
+        self.assertEqual(
+            sorted(ptk.FbxMedia.audio_sounds(fbx)), ["footstep.wav", "punch.wav"]
+        )
         embedded = {row["name"]: row["bytes"] for row in ptk.FbxMedia.embedded(fbx)}
         self.assertEqual(embedded.get("footstep.wav"), Path(step).stat().st_size)
         self.assertEqual(embedded.get("punch.wav"), Path(punch).stat().st_size)
@@ -341,11 +375,17 @@ class TestUnityBridgeHandsTheAppItsFiles(MayaTkTestCase):
     def test_the_app_receives_the_fbx_and_the_asset_name(self):
         cube = cmds.polyCube(name="UnityHandBack")[0]
         deliverer = _HandBack()
-        bridge = UnityBridge(project_path=str(self.tmp), deliverer=deliverer)
+        # A bare cube fails the Scene Exporter's default-material check; the
+        # send asks the app, which here overrides (as the panel's Override All).
+        bridge = UnityBridge(
+            project_path=str(self.tmp),
+            deliverer=deliverer,
+            decide_check_failure=lambda *a: "override_all",
+        )
         result = bridge.send([cube], template="copy_to_assets", mode="")
         self.assertIsNotNone(result)
         (payload,) = deliverer.payloads
-        self.assertTrue(ptk.FbxFile.is_fbx(payload.primary), payload.primary)
+        self.assertEqual(deliverer.fbx, [True], payload.primary)
         self.assertEqual(payload.extras["default_asset_name"], "UnityHandBack")
         self.assertEqual(result["project"], str(self.tmp))
 

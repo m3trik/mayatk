@@ -170,12 +170,29 @@ class TestEnsureExport(MayaTkTestCase):
         DataNodes.write(DELIVERABLE, "probe_channel", "writable")
         self.assertEqual(DataNodes.read(DELIVERABLE, "probe_channel"), "writable")
 
-    def test_adopts_sole_nested_carrier(self):
+    def test_a_nested_carrier_is_its_modules_and_the_scenes_is_made_at_the_root(self):
+        """The scene's carrier is the root-level ``data_export``: one under a
+        group is a grouped module's own, never adopted, written over or
+        deleted (measured 2026-11-08: an export wrote the scene's records onto
+        ``|Module|data_export`` and deleted it after the write)."""
         grp = cmds.group(empty=True, name="imported_grp")
-        cmds.createNode("transform", name=DataNodes.EXPORT, parent=grp)
+        nested = cmds.ls(
+            cmds.createNode("transform", name=DataNodes.EXPORT, parent=grp), long=True
+        )[0]
+        cmds.addAttr(nested, longName="probe", dataType="string")
+        cmds.setAttr(f"{nested}.probe", "module", type="string")
+        self.assertIsNone(DataNodes.get_export_node(create=False))
+        self.assertIsNone(DataNodes.read(DELIVERABLE, "probe"))
         node = DataNodes.ensure_export()
-        self.assertEqual(cmds.ls(node, long=True), ["|imported_grp|data_export"])
-        self.assertEqual(len(cmds.ls(DataNodes.EXPORT, long=True)), 1)
+        self.assertEqual(cmds.ls(node, long=True), ["|data_export"])
+        DataNodes.write(DELIVERABLE, "probe", "scene")
+        self.assertEqual(cmds.getAttr("|data_export.probe"), "scene")
+        self.assertEqual(cmds.getAttr(f"{nested}.probe"), "module")
+        DataNodes.write(DELIVERABLE, "probe", "")
+        self.assertTrue(DataNodes.discard_if_empty(DELIVERABLE))
+        self.assertEqual(cmds.ls(DataNodes.EXPORT, long=True), [nested])
+        self.assertFalse(DataNodes.discard_if_empty(DELIVERABLE))
+        self.assertEqual(cmds.getAttr(f"{nested}.probe"), "module")
 
     def test_hidden_carrier_still_exportable(self):
         DataNodes.write(DELIVERABLE, "probe_channel", "payload")
@@ -419,9 +436,11 @@ class TestRecords(MayaTkTestCase):
         )
         self.assertIsNone(ptk.SceneRecords.LIGHTMAPS.load(DataNodes))
 
-    def test_private_and_deliverable_records_with_one_key_stay_apart(self):
+    def test_a_private_record_stays_on_the_private_carrier(self):
         ptk.SceneRecords.EMISSIVE_REGISTRY.save(DataNodes, {"slots": {"a": 0}})
-        self.assertIsNone(ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes))
+        self.assertIsNone(
+            DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.EMISSIVE_REGISTRY.key)
+        )
         self.assertEqual(
             ptk.SceneRecords.EMISSIVE_REGISTRY.load(DataNodes)["slots"], {"a": 0}
         )
@@ -708,41 +727,54 @@ class TestRecordHandoff(MayaTkTestCase):
     """``transfer_sections`` / ``receive_sections``: the portable records as a
     hand-off sidecar's sections, landed through the same engine."""
 
-    def _group_on_a_cube(self):
+    def _group_on_a_cube(self, group=True):
+        from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.emissive_groups import EmissiveGroups
 
         cube = cmds.polyCube(name="cube")[0]
-        EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])
+        base = cmds.shadingNode("standardSurface", asShader=True, name="glowMat")
+        cmds.setAttr(f"{base}.emission", 1.0)
+        MatUtils.assign_mat([cube], base)
+        if group:
+            EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])
+            EmissiveGroups.key_weight("glow", 0.5, frame=4)
+        else:  # what an FBX brings: the copy as a plain material on its faces
+            copy = cmds.shadingNode("standardSurface", asShader=True, name="glowMat_glow")
+            MatUtils.assign_mat([f"{cube}.f[1]", f"{cube}.f[3]"], copy)
         return cube
 
     def _sections(self):
         leaf = lambda name: str(name).split("|")[-1]  # noqa: E731 - the FBX spelling
         return DataNodes.transfer_sections(spell=leaf)
 
-    def test_an_emissive_group_crosses_with_its_membership(self):
+    def test_an_emissive_group_crosses_as_its_copies(self):
+        """The interchange file carries the copy as a plain material on its
+        faces; the hand-off's record tags it again and keys it."""
         from mayatk.mat_utils.emissive_groups import EmissiveGroups
 
         self._group_on_a_cube()
         sections = json.loads(json.dumps(self._sections()))  # as the sidecar holds it
         cmds.file(new=True, force=True)
-        cube = cmds.polyCube(name="cube")[0]
+        cube = self._group_on_a_cube(group=False)
         ctx = DataNodes.receive_sections(
             sections, resolve={"cube": f"|{cube}"}.get, source="send"
         )
-        self.assertEqual(EmissiveGroups.list_groups()["glow"]["faces"], 2, ctx.notes)
+        groups = EmissiveGroups.list_groups()
+        self.assertEqual(groups["glow"]["faces"], 2, ctx.notes)
+        self.assertTrue(groups["glow"]["keyed"], ctx.notes)
 
-    def test_a_member_whose_face_count_changed_keeps_no_membership(self):
+    def test_a_copy_that_did_not_arrive_is_noted(self):
+        """No material of the copy's name arrived: nothing is tagged, and the
+        report says which."""
         from mayatk.mat_utils.emissive_groups import EmissiveGroups
 
         self._group_on_a_cube()
         sections = self._sections()
         cmds.file(new=True, force=True)
-        cube = cmds.polyCube(name="cube", subdivisionsX=3)[0]  # 14 faces, not 6
+        cube = cmds.polyCube(name="cube")[0]
         ctx = DataNodes.receive_sections(sections, resolve={"cube": f"|{cube}"}.get)
-        groups = EmissiveGroups.list_groups()
-        self.assertIn("glow", groups, "the registry still merges")
-        self.assertTrue(groups["glow"]["missing"], "no set: no faces were claimed")
-        self.assertTrue(any("faces" in n for n in ctx.notes), ctx.notes)
+        self.assertEqual(EmissiveGroups.list_groups(), {})
+        self.assertTrue(any("glowMat_glow" in n for n in ctx.notes), ctx.notes)
 
 
 class TestRecordMigration(MayaTkTestCase):

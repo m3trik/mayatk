@@ -24,8 +24,8 @@ self-contained (mesh UV2 samples it directly, any engine); an atlas
 additionally carries one scaleOffset rect per object -- per INSTANCE -- on the
 marker, applied at sample time (Unity ``lightmapScaleOffset`` / glTF
 ``KHR_texture_transform``). A small manifest rides the FBX on the shared
-``data_export`` carrier (no sidecar file) so Unity's *native* lightmap slots
-can be auto-bound by the optional unitytk editor helper.
+``data_export`` carrier (no sidecar file); in Unity, the unitytk package's
+Lightmaps importer reads it and binds the *native* lightmap slots.
 
 :meth:`LightmapBaker.bake` is the whole workflow, the same one the panel runs:
 the scene checks, the bake, the record, and a verdict on the result.
@@ -716,9 +716,11 @@ class LightmapBaker(ptk.LoggingMixin):
             on_progress: ``(done, total, name) -> bool`` per object; return
                 ``False`` to cancel the rest (and the probe).
             intensity: A multiplier baked into the texels. 1.0 matches the
-                Maya render; ``math.pi`` matches Unity's realtime-light
-                convention (Arnold bakes ``albedo x E / pi``, Unity lights
-                ``NdotL x color``). Recorded in the markers, informationally.
+                Maya render in every reader: a texel is a white card's
+                radiance (Arnold bakes ``E / pi``), and Unity's Lit, the WebXR
+                viewer and Arnold all draw it as stored, ``texel x albedo``
+                (``HandoffRecord``'s probe clause). Recorded in the markers,
+                informationally.
             kwargs: Forwarded to the bake mechanism.
 
         Returns:
@@ -1556,7 +1558,7 @@ class LightmapBaker(ptk.LoggingMixin):
         ``<scene>_Probe.exr`` and recorded (:meth:`LightmapRecords.commit_probe`);
         the lightmap manifest carries it into the GLB
         (``ptk.MeshConvert.apply_glb_lightmaps``) and Unity (unitytk's
-        ``LightmapMetadataApplier``).
+        ``Lightmaps.Apply``).
 
         Parameters:
             maps: ``{object: map path}`` this bake wrote; the probe lands in the

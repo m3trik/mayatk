@@ -13,7 +13,7 @@ blends) against the alternatives and ends with the plan of record and the
 contracts the three sides are built against.
 
 Owners: pythontk (the bake), mayatk / blendertk (`rig_utils/shadow_rig/`,
-the engine and panel), unitytk (`templates/ShadowPlane/ShadowPlaneController.cs`), pythontk's WebXR
+the engine and panel), unitytk (`Features/ShadowPlane/`: `Model/ShadowPlaneModel.cs`, `Runtime/ShadowPlane.cs`), pythontk's WebXR
 viewer (`net_utils/preview/viewer.html`). The projected rig's physics lives in
 `pythontk.ShadowProjection`; everything below reuses it.
 
@@ -48,10 +48,10 @@ unambiguous.
 ## What the routes carry today
 
 - **Texture**: the silhouette PNG is the plane material's base-colour texture, so *Embed Textures* ships it in the FBX and the GLB sidecar's base-colour / alpha-mode sections rebuild the material for the viewer. Unity's import binds an embedded texture to the created material as a **sub-asset**; the template importer looks the record's texture up in the project by name, falls back to that bound sub-asset, and rewires the material to a pipeline-correct unlit-transparent shader (`ConfigureUnlitTransparent`: URP / HDRP / built-in). Import settings can be pinned only on a **loose** PNG, and only on its first import: `OnPreprocessTexture` recognises the `_shadow` stem and sets alpha-is-transparency, sRGB and mipmaps. A sub-asset gets Unity's defaults (sRGB, platform compression) with no hook.
-- **Records**: `shadows` on the `data_export` carrier — v1 was `{name, texture, intensity}` per plane, and v2 (below) adds what an engine needs to place the plane itself; records join to nodes by name, like the lightmap channel, and the reader warns on a newer schema (`WarnIfNewer`).
-- **Animation**: the fade is the plane's keyable `opacity` custom attribute — FBX user property (the `RenderOpacity` importer turns it into a controller) and, on the GLB route, a `KHR_animation_pointer` ramp the viewer shim resolves. The controller itself is import-time only: at runtime nothing reads the source or moves the plane.
+- **Records**: `shadows` on the `data_export` carrier — v1 was `{name, texture, intensity}` per plane, v2 added what an engine needs to place the plane itself, and v3 (below) gives every plane its horizon map and its fade's terms; records join to nodes by name, like the lightmap channel, and a reader refuses a version it does not know (re-export).
+- **Animation**: a baked plane's placement rides as transform keys (a reader with `follow_source` re-places it from the source and contact instead). The fade is no animation: the record states its terms (`intensity`, `falloff_power`, `fade_height`, `source_ramp`) and every reader evaluates it each frame (`ShadowProjection.fade`); the plane's material previews it in the DCC (its `<plane>_fade` node, composed over the plane's own `opacity`, which stays the authored value), so no take keys it and no shadow plane rides `render_effects`.
 - **The source**: a locator or a real light. A real light exports on the FBX route; on the GLB route FBX2glTF keeps its transform as a plain node (this pipeline writes no `KHR_lights_punctual`), and a locator is a plain node on both. Either way the engine has the source's transform at runtime, by name — nothing about the light needs baking.
-- **The carrier precedent**: the lightmap web export already ships a data texture disguised in a real glTF slot (`LightmapWebExport.CARRIERS`: occlusion or emissive) plus a scene-extras manifest (`lightmap_web`: materials, carrier, encoding, uv) that the viewer's `applyLightmaps` reads to rebind the texture, set its colour space from the manifest and clear the slot it arrived in. On the Unity side the lightmap arrives as a loose file and `PinLightmapImportSettings` forces linear (sRGB off) and per-platform formats. That is the pattern a second shadow texture reuses.
+- **The media precedent**: the lightmap web export ships its maps in no glTF slot at all: the `lightmaps` record rides the GLB's root `extras` as it stands and each file it names rides as the bufferView named by that file, its bytes stated by the view (`SceneRecords.GLB_MEDIA`: an HDR map as 8-bit sRGB with its `scale`), which the viewer decodes and binds at load. On the Unity side the lightmap arrives as a file the FBX embeds, imported as a lightmap. A data texture no material samples can ride the same transport.
 - **Multiple objects, atlas, instances**: the selection is always one
   combined plane per source, there is no atlas, and every plane is its
   own mesh — see *Plan of record* below.
@@ -370,7 +370,7 @@ later without touching the phases.
 | Bins | K = 32 (measured: 16 doubles the error at every tile size), doubled to 64 while the tolerant reference error exceeds 5 % | `ShadowHorizon.DEFAULT_BINS`, `bake_adaptive` |
 | Patch mapping | Log-polar, an eighth of the footprint radius → the reach cap; a 256 × 64 tile (64 radial rows score within half a point of 128; 256 bearing columns keep a 5 cm pole's shadow at 3 m at alpha 0.81 where 128 smear it to 0.30) over a 128-pixel footprint (a 5 cm leg stays 5 cm; 32 pixels made it 13 cm) | `ShadowHorizon.range_for`, `DEFAULT_SIZE`, `DEFAULT_FOOTPRINT`, `HorizonMap.uv` |
 | Mobile texture format | RGBA8 uncompressed, pinned per platform the way the lightmap importer pins its formats; block formats only after the reference test measures them | `ShadowPlaneImporter.OnPreprocessTexture`, `_horizon` stem |
-| Carrier | Emission-slot transport; loose PNG plus record binding; a manifest on `shadows` for the viewer | DCC engines, `ShadowPlaneImporter`, viewer shim |
+| Carrier | The `shadows` record by name on the `data_export` carrier, its maps embedded in the FBX; on the GLB route the record verbatim in the root `extras` and each file it names as media (`SceneRecords.GLB_MEDIA`), resolved by name | DCC `export_record`, `ShadowPlaneImporter`, `MeshConvert.apply_glb_shadows`, the viewer's `shadow_rig` |
 | Runtime placement | `followSource` on the plane, default on: the engine places the quad from the source when the record names one and the node exists, else the baked keys play | plane attribute → record `follow_source` |
 | Planes per selection | `Combined` (today's behaviour) or `Per object` | panel `Planes:` combo, `ShadowRig.create_per_object` |
 | Atlas | `Shared` when two or more planes of a type exist, `Off` below that, `Instanced` as an export option | panel `Atlas:` combo, `ShadowRig.pack_atlas` |
@@ -433,10 +433,11 @@ Each phase ships on its own and lands behind the previous one's tests.
 2. **Runtime plumbing — both rigs.** The `shadowRigType` stamp; record v2
    (`type`, `source`, `source_type`, `source_size` / `source_angle`,
    `follow_source`, `contact`, `radius`, `height`, `max_stretch`, `atlas`);
-   the model port — `ShadowPlaneController` gains a runtime `Update` (today
-   it is import-time only) and the shim a per-frame placement — from
+   the model port — `ShadowPlane` gains a runtime `Update` (it was
+   import-time only) and the shim a per-frame placement — from
    `ShadowProjection.model` and `ShadowModel.placement`; the carrier — the
-   importer's `_horizon` pinning and the viewer's manifest rebind. Tests:
+   importer's `_horizon` pinning and the viewer's manifest rebind (since
+   v3: the record read by name, its maps decoded off their media). Tests:
    an FBX carrying a `_horizon`-stem PNG in its emission slot imports with
    the pinned flags and the viewer reads it back off the material as
    `NoColorSpace`, so the carrier is proven before anything depends on it;
@@ -503,55 +504,99 @@ Each phase ships on its own and lands behind the previous one's tests.
 What the code maps showed changes three things above: the transport needs no
 material slot (both routes already bind **loose files by name** — the Unity
 importer searches the project for the record's texture, and the GLB
-conversion has appliers that bind loose textures into the file, the lightmap
-precedent); fades constrain sharing (a GLB fade targets a *material index*
-and the viewer drives one mesh per material, so planes keep **their own
-material** in the file — the DCC keeps per-plane shaders sharing one atlas
-texture, and the engines consolidate and instance from the records); and the
+conversion carries each file the record names into the file as media, the
+lightmap precedent); planes keep **their own material** in the file — the
+DCC keeps per-plane shaders sharing one atlas texture, and the engines
+consolidate and instance from the records (since v3 no fade rides a
+material: every reader evaluates it, so planes sharing a map batch
+whatever their fades); and the
 DCC never instances planes — instancing is an engine-side optimisation
 derived from the records, so R6 stays intact. Everything below is what the
 three work streams (pythontk + DCCs, Unity, viewer) build against.
 
-### `shadows` v2
+### `shadows` v3
+
+*2026-11-07.* One layout, two containers: the GLB carries this record as it
+stands in its root `extras` (the index-bound v2 block retired), every file it
+names riding as the bufferView of that name (`SceneRecords.GLB_MEDIA`). A
+version 2 record is refused: re-export.
 
 ```json
-{"version": 2, "unit_scale": 0.01,
+{"version": 3, "unit_scale": 0.01,
  "planes": [{
-   "name": "Box_shadow", "type": "projected" | "horizon",
-   "texture": "Box_shadow.png", "intensity": 1.0,
+   "name": "Box_shadow", "intensity": 1.0,
    "source": "shadow_source", "source_type": "point" | "directional",
    "source_size": 0.0, "source_angle": 0.0, "follow_source": true,
    "contact": "Box_contact_loc", "ground": 0.0,
    "radius": 1.4142, "height": 2.0, "max_stretch": 6.0,
+   "falloff_power": 1.2, "fade_height": 4.0, "source_ramp": 1.0,
    "canvas": [-1.0, 1.0, -0.5, 0.5],
-   "atlas": {"texture": "shadow_atlas_projected.png", "rect": [sx, sy, ox, oy]},
    "horizon": {"texture": "shadow_atlas_horizon.png", "size": 128, "spans": 2,
                "bounds": [-3.0, 3.0, -1.5, 1.5], "height_scale": 2.5,
-               "frame_a": [1, 0, 0], "frame_b": [0, 0, 1], "rect": [sx, sy, ox, oy]}}]}
+               "frame_a": [1, 0, 0], "frame_b": [0, 0, 1], "rect": [sx, sy, ox, oy]},
+   "silhouette": {"texture": "Box_shadow.png", "draw": true,
+                  "atlas": {"texture": "shadow_atlas_projected.png", "rect": [sx, sy, ox, oy]}}}]}
 ```
 
-- Lengths (`source_size`, `ground`, `radius`, `height`, `horizon.bounds`,
-  `horizon.height_scale`) are DCC units; `unit_scale` is metres per DCC
-  unit (Maya cm → 0.01, Blender 1.0) so an engine that imported in metres
-  multiplies. Node fields are leaf
-  names, joined the way the records already join. `source_angle` is the
-  angular *diameter* in radians (a sun: 0.0093). `canvas` is the stamp the
-  expression reads — `[u0, u1, w0, w1]`: the far edge in top-disk radii from
-  where the head lands, the near edge as a fraction of that far edge (so
-  the anchor, a grounded target's feet, keeps its place in the texture), the
-  sides as fractions of the width (`ShadowModel.rect`). `atlas` and
-  `horizon` are absent (Unity: their `texture` is empty) when not in use.
+- **Every plane carries its horizon map** (`horizon`, required), whatever its
+  rig type: both producers bake it at create, and the record's producer
+  bakes one a plane lacks (and, in an export, re-bakes one whose targets'
+  geometry hash changed); a plane that cannot be baked (its targets gone) is
+  left out with a warning. A reader without the silhouette marches the
+  horizon.
+- **The silhouette is an extension** (`silhouette`, read by the GLB's readers
+  alone, so unitytk's generated types omit it): the plane's own PNG, its
+  atlas tile when packed, and `draw` -- the rig's type, which
+  leaves the record: a **Projected** rig draws its silhouette (`draw: true`),
+  a **Horizon** rig marches its map and keeps the silhouette as the fallback
+  (`draw: false`).
+- Lengths (`source_size`, `ground`, `radius`, `height`, `fade_height`,
+  `source_ramp`, `horizon.bounds`, `horizon.height_scale`) are DCC units; `unit_scale` is
+  metres per DCC unit (Maya cm → 0.01, Blender 1.0) so an engine that
+  imported in metres multiplies. Node fields are leaf names, joined the way
+  the records already join. `source_angle` is the angular *diameter* in
+  radians (a sun: 0.0093). `canvas` is the stamp the expression reads --
+  `[u0, u1, w0, w1]`: the far edge in top-disk radii from where the head
+  lands, the near edge as a fraction of that far edge (so the anchor, a
+  grounded target's feet, keeps its place in the texture), the sides as
+  fractions of the width (`ShadowModel.rect`). It is the plane's, beside
+  `max_stretch`, never the silhouette's: it decides where every reader
+  places a following plane, so a reader without the silhouette (Unity) has
+  it too -- placed by the default `(-1, 1, -0.5, 0.5)`, its quad cut off the
+  penumbra a soft source spreads past it.
 - The **model** an engine evaluates per frame is `ShadowProjection.model`
   with `contact` = the contact node's world position, `light` = the source
   node's world position (or `direction` = the way a directional source
-  shines), `ground`, `radius`, `height`, `max_stretch`, then
-  `ShadowModel.placement(canvas)` → the quad's centre, extent along the
-  bearing, extent across; yaw = `atan2(bearing.x, bearing.z)` as the Maya
-  expression writes it. Applied only while `follow_source` and both nodes
-  resolve; otherwise the imported keys play.
+  shines, written as its far point), `ground`, `radius`, `height`,
+  `max_stretch`, then `ShadowModel.placement(canvas)` → the quad's centre,
+  extent along the bearing, extent across; yaw = `atan2(bearing.x,
+  bearing.z)` as the Maya expression writes it. The placement applies only
+  while `follow_source` and both nodes resolve; otherwise the imported keys
+  play.
+- **The fade** is `ShadowProjection.fade`, which every reader evaluates each
+  frame from the same terms (no producer keys it, so no shadow plane rides
+  `render_effects`), in metres:
+  `fade = clamp(intensity / max(0.001, stretch^falloff_power) * clamp((L.y -
+  C.y) / source_ramp, 0, 1) * clamp(1 - max(0, C.y - ground) / max(0.001,
+  fade_height), 0, 1), 0, 1)` with `stretch = max(1, length / max(1e-4,
+  2 radius))` and `length` the model's. The plane draws at `alpha = shadow *
+  fade`, never past `intensity`; one whose source or contact does not
+  resolve draws at `intensity`. The source-height ramp spans the plane's
+  `source_ramp` -- the ramp its producer's preview has, **one unit of the
+  rig**, in the record's unit: a Maya centimetre rig states 1 written in
+  centimetres and 0.01 written in metres (the Scene Exporter can switch the
+  working unit; the expression keeps its rig's), a Blender rig 1. A record
+  that ramped over its own unit faded a centimetre rig exported in metres a
+  hundred times slower than its preview. The 1e-4 and 0.001 floors are
+  guards, in metres as the model's are; `source_ramp` is over 0. Both producers' live
+  previews (Maya's expression, blendertk's material driver) are written from
+  the same stamps and measured equal to it within 1e-6 at every frame (Maya
+  3.4e-8, Blender 1.3e-7); the conformance cases
+  (`Conformance.cases("shadow_projection")`) carry the fade, so a reader
+  port is held to it.
 - Atlas rects are the lightmap convention: `[scaleX, scaleY, offsetX,
-  offsetY]`, `uv' = uv * scale + offset`, origin bottom-left (Unity); the
-  GLB pass flips them for glTF's top-left origin with `flip_rect_v`.
+  offsetY]`, `uv' = uv * scale + offset`, origin bottom-left, in both
+  containers.
 
 ### The horizon map
 
@@ -745,7 +790,7 @@ at, so its image and its position never disagree. Viewer:
 `shadow_rig.js` (`session.cache`, `session.cacheStats`); Unity:
 `ShadowPlaneCache` with the shader's `SHADOWPLANECACHE` pass, the atlas bound
 globally (`_ShadowCache`) so the shared material stays instanced, per plane
-`_CacheRect` / `_Cached` (`ShadowPlaneController.cacheShadow`). The DCC
+`_CacheRect` / `_Cached` (`ShadowPlane.cacheShadow`). The DCC
 previews march per pixel: a viewport is not the budget. Pinned:
 `test_shadow_web` (the cached pole against the reference: mean 0.026, worst
 0.23 at the pole's needle-sharp foot where the slot caps; a still light and a
@@ -780,7 +825,7 @@ turn the cache off.
   renders in Built-in and URP; HDRP keeps today's `HDRP/Unlit` rewire and
   the silhouette), pins the `_horizon` PNG (sRGB off, alpha-is-transparency
   off, no mipmaps, clamp, RGBA32 per platform) and swaps each plane's mesh
-  for the first plane's so GPU instancing batches them. `ShadowPlaneController`
+  for the first plane's so GPU instancing batches them. `ShadowPlane`
   gains the runtime: it resolves the source and contact by name, evaluates
   the model in `LateUpdate`, places the transform, and writes the per-plane
   block (`_Rect`, `_Mode`, `_Intensity`, `_HorizonRect`, `_HorizonParams`,
@@ -791,19 +836,26 @@ turn the cache off.
   generated mirror that rides the controller through the deployer's
   longest-stem rule.
 - **Viewer**: a Python pass `MeshConvert.apply_glb_shadows(edit,
-  search_dirs)` in `fbx_to_glb` binds each record's textures from the loose
-  files (the horizon PNG as a texture with a clamp / linear / no-mip
-  sampler) and writes root `extras.shadows` = the v2 payload plus, per
-  plane, the glTF `node` index of the plane, source and contact and the
-  `texture` index of each map, and top-left rects. The packaged feature
-  `net_utils/preview/features/shadow_rig/shadow_rig.js` (pythontk; a
-  built-in `PreviewServer` script, its model in `model.js` beside it) reads
-  it on `load`, builds one `ShaderMaterial` per plane (both types in one
-  shader, `uMode`), merges planes that share a type and atlas and carry no
-  fade track into an `InstancedMesh` with per-instance rect, frame and
-  opacity attributes, and on `frame` evaluates the model and sets the
-  placement and the source uniforms. Textures it creates are excluded from
-  `disposeModel` the way `scene.environment` is.
+  search_dirs)` in `fbx_to_glb` carries the v3 `shadows` record as it stands
+  into the GLB's root `extras.shadows` (one layout, two containers) and rides
+  every file it names -- each plane's `horizon.texture`,
+  `silhouette.texture` and `silhouette.atlas.texture` -- as the bufferView
+  named by that file (`SceneRecords.GLB_MEDIA`), its bytes as they are, the
+  FBX's own embedded copies found first. Nothing is bound by index. The
+  packaged feature `net_utils/preview/features/shadow_rig/shadow_rig.js`
+  (pythontk; a built-in `PreviewServer` script, its model in `model.js`
+  beside it) reads it on `load`, resolves each plane, source and contact by
+  name (the `lightmaps` record's rule, `kernel/resolve.js`), decodes each map
+  off its view (the horizon map as data: no mipmaps, clamped), builds one
+  `ShaderMaterial` per plane -- the silhouette where `silhouette.draw` and the
+  file holds it, else the horizon march, else the silhouette as the fallback,
+  in one shader (`uMode`) -- merges silhouette planes that share an atlas into
+  an `InstancedMesh` with per-instance rect and opacity attributes, and on
+  `frame` places each following plane from the model and draws every plane at
+  its shadow times `ShadowProjection.fade`, evaluated from the placement (a
+  plane whose source or contact does not resolve draws at `intensity`).
+  Textures it creates are excluded from `disposeModel` the way
+  `scene.environment` is.
 ### The shared shader body — one text, every consumer
 
 `pythontk/geo_utils/shadow_horizon.glsl` **is** the evaluation above. There
@@ -938,7 +990,7 @@ Four reports from use, fixed in both DCCs (blendertk mirrors every name):
 
 | Report | Cause | Now |
 |:--|:--|:--|
-| *"the projected rig moves away from the bottom of the mesh, where the shadow should always meet"* | the canvas stamp pinned the canvas's **back edge** in footprint radii and the far edge on the projected head, so the drawn feet inside the texture slid forward with the far edge as the source lowered (measured: 2.2 units ahead of a 2 m box's feet at a 20° source drawn from 60°). The first fix of this gap (a length-fraction stamp → base/top radii) had pinned the wrong point. | `ShadowModel.rect` / `fractions` stamp the near edge **as a fraction of the far edge**, so the anchor keeps its place in the texture at every light height; the far edge still lands on the projected head. The Maya expression, the Blender drivers, `ShadowPlaneController.cs` and the viewer's `placement` are one line each, pinned to the model by the DCC parity tests, the Unity batch pass and `test_shadow_web`. Cost: the part behind the feet stretches with the reach — it bridges the moves between two renders, which Follow Source now bounds. |
+| *"the projected rig moves away from the bottom of the mesh, where the shadow should always meet"* | the canvas stamp pinned the canvas's **back edge** in footprint radii and the far edge on the projected head, so the drawn feet inside the texture slid forward with the far edge as the source lowered (measured: 2.2 units ahead of a 2 m box's feet at a 20° source drawn from 60°). The first fix of this gap (a length-fraction stamp → base/top radii) had pinned the wrong point. | `ShadowModel.rect` / `fractions` stamp the near edge **as a fraction of the far edge**, so the anchor keeps its place in the texture at every light height; the far edge still lands on the projected head. The Maya expression, the Blender drivers, `ShadowPlane.cs` and the viewer's `placement` are one line each, pinned to the model by the DCC parity tests, the Unity batch pass and `test_shadow_web`. Cost: the part behind the feet stretches with the reach — it bridges the moves between two renders, which Follow Source now bounds. |
 | *"there is still no way to reset the projection"* | Follow Source watched the **source** only: a prop carried or turned under a fixed light went stale without a re-render (the bearing stamp was a world direction, blind to a turned target), and the only manual re-render sat in the collapsed Utility group | Follow Source watches the **targets** and their ancestors too (Maya: the same attribute-changed callback; Blender: the same matrix compare, skipped while the timeline plays or scrubs — the first update after re-projects the pose it stopped at); the bearing is stamped **in the contact's frame**, so a turned target reads as stale. **Reproject** (the refresh icon on Source Name's option box; `reproject_sources`) re-renders every plane the named source(s) light from where the source and the target are now — the manual form, and the one for a geometry edit Follow Source does not watch. |
 | *"the spinbox should wait until I'm done adjusting"* | `widget.debounce` (uitk) restarted on every signal, but nothing told it the user was still on the value — an arrow held down or a half-typed number fired the slot on every pause | uitk `SlotWrapper` holds a debounced call while the widget reports `adjusting`; the spin boxes (`SpinBoxAdjustingMixin`) report it while a mouse button is held on the box or a typed edit is uncommitted. `debounce` can be declared in the `.ui` as a dynamic property; the Softness box carries `debounce=400` and `keyboardTracking=false` in both twins. |
 | *"Source From Selection belongs in the source field's option box"* | a full-width button | `txt_source` is a uitk `LineEdit` whose option box holds the pick icon (Source From Selection, `source_from_selection`) and the refresh icon (Reproject); `b004` is gone from both twins (parity sweep clean). |
@@ -959,7 +1011,7 @@ idle loop, and the drawn feet sit on the contact afterwards.
 
 | Asked | Was | Now |
 |:---|:---|:---|
-| *"the shadow looks soft in Maya but way too heavy in WebXR"* (production SOL_REPLACE_ASSEMBLY, BODY_shadow, links broken on purpose) | the plane's fade held a static 0.836 that only a fade TRACK carries, and a held value writes none, so the GLB arrived at alpha 1.0: solid black | `MaterialRecords._opacity_factor` reads an opacity's scalar part (a constant, or texture alpha x a scalar through a `multiplyDivide`) into the `materials` record's `baseColorFactor[3]`, which the GLB build applies (`MeshConvert.apply_glb_materials`); a keyed fade still overrides it through its track |
+| *"the shadow looks soft in Maya but way too heavy in WebXR"* (production SOL_REPLACE_ASSEMBLY, BODY_shadow, links broken on purpose) | the plane's fade held a static 0.836 that only a fade TRACK carries, and a held value writes none, so the GLB arrived at alpha 1.0: solid black | `MaterialRecords._opacity_factor` reads an opacity's scalar part (a constant, or texture alpha x a scalar through a `multiplyDivide`) into the `materials` record's `baseColorFactor[3]`, which the GLB build applies (`MeshConvert.apply_glb_materials`). Since shadows v3 a shadow plane's fade is no track: every reader evaluates it from the record's terms, capped by its intensity |
 | *"an overall transparency param"* | `shadowIntensity` worked only through a live expression | **Intensity** (panel; `ShadowRig.set_intensity`): a live rig takes the stamp, a baked or unlinked plane's own fade is rescaled by new / old (its shape kept) |
 | *"a Y offset adjust, since sometimes the floor is not at Y 0"* | `groundHeight` was an attribute edit, live rigs only | **Ground Y** (panel; `ShadowRig.set_ground_height`): live, the stamp; a held height laid on the floor (absolute: the stamp may be stale); keys shifted by the difference |
 

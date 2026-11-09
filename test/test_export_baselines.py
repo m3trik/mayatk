@@ -101,8 +101,33 @@ class TestExportBaselines(MayaTkTestCase):
         store.define_shot("ShotB", 21, 40, objects=[mover])
         self.assertMatchesBaseline(
             self._export(
-                "shots", [mover], export_data_node=True, apply_declared_takes="both"
+                "shots", [mover], export_data_node=True
             )
+        )
+
+    def test_an_emissive_group_keyed_over_shots(self):
+        """An emissive group as materials (2026-11-07): the group's faces wear
+        a copy of their material, its weight keyed across two shots, so the
+        FBX carries the copy, the ``render_effects`` material entry and the
+        ``<copy>__emission`` proxy per take, and the GLB the copy's animated
+        emissiveFactor."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        panel = cmds.polyCube(name="panel", subdivisionsX=2)[0]
+        cmds.sets(panel, edit=True, forceElement=self._material(
+            "panel_mat", "standardSurface", emission=2.0, emissionColor=(0.2, 0.6, 1.0)
+        ))
+        EmissiveGroups.add_group("signal", [f"{panel}.f[0:3]"])
+        for frame, value in ((1, 0.0), (20, 1.0), (21, 1.0), (40, 0.0)):
+            EmissiveGroups.key_weight("signal", value, frame=frame)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("ShotA", 1, 20, objects=[panel])
+        store.define_shot("ShotB", 21, 40, objects=[panel])
+        self.assertMatchesBaseline(
+            self._export("emissive_groups", [panel], export_data_node=True)
         )
 
     def test_a_skinned_joint_chain(self):

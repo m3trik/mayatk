@@ -30,6 +30,10 @@ class SceneExporter(ptk.SceneExporterBase):
     config and the log file, shared with blendertk). It configures the shell
     and adds to it; it overrides none of it."""
 
+    #: How a row's spec reads at rest (``ptk.SceneExporterBase.panel_defaults``):
+    #: uitk's Qt-free reader, imported on use.
+    ROW_DEFAULT = "uitk.managers.widget_spec:WidgetSpec.default"
+
     TASK_MANAGER_CLASS = TaskManager
     #: The scene store the shell reads the saved scene's path from
     #: (``DataNodes.scene_path``: ``EnvUtils.saved_scene_path``).
@@ -373,9 +377,10 @@ class SceneExporter(ptk.SceneExporterBase):
         *tasks* is EXACT: only the entries it names run, and an absent task or
         check is off -- there are no implicit defaults. The panel sends every
         row (tentacle's ``SceneExporterSlots`` reads them), so a headless caller that wants
-        the panel's behaviour passes every row it wants on -- an omitted
-        ``apply_declared_takes``, for one, ships a scene's declared shots as one
-        continuous clip.
+        the panel's behaviour passes every row it wants on. The one exception
+        is the take split (``apply_declared_takes``), which has one form and
+        no row: every FBX run splits the scene's shots into one take each
+        (``ptk.ExportRun.from_tasks`` arms it).
 
         ``tasks["output_format"]`` picks the deliverable: ``fbx`` (default), ``glb``,
         ``fbx_glb``, or ``usd`` -- the same task pipeline and checks, written by
@@ -650,16 +655,14 @@ class SceneExporter(ptk.SceneExporterBase):
             # Opened with no context: the scene records were published ONCE
             # by the ``export_data_node`` task, with this run's decisions as
             # the producers' input, so nothing here republishes them -- the
-            # bracket used to re-run every producer and overwrite the clip
-            # origin and clip mode the pipeline had just published (the
-            # assembly shipped 18 shots cut 81 frames early three times over
-            # before ``check_clip_origin`` named it).
+            # bracket used to re-run every producer and overwrite what the
+            # pipeline had just published.
             from mayatk.env_utils.fbx_utils import FbxUtils as _FbxUtils
 
             # THE plan of this write -- the takes are realized and the range is
-            # set by now -- for the bracket's producers and the write alike.
+            # set by now -- for the write's post-steps.
             write_plan = None if usd else self.task_manager.write_plan()
-            _FbxUtils.begin_export(plan=write_plan)
+            _FbxUtils.begin_export()
             try:
                 # A run with the carrier tasks off still publishes exactly once
                 # (an ``all``-mode export ships the carrier regardless). Inside
@@ -728,6 +731,11 @@ class SceneExporter(ptk.SceneExporterBase):
                             cmds.ls(selection=True, long=True) or [],
                             logger=self.logger,
                         )
+                    # One take per shot: the whole-timeline take Maya writes
+                    # beside them leaves the file before anything reads it --
+                    # the GLB is converted from this file, one animation per
+                    # take, a GLB-only run's intermediate included.
+                    self.task_manager.ship_declared_takes(fbx_write_path)
                 export_succeeded = True
 
                 # GLB conversion. For GLB-only, convert the temp FBX then move the
@@ -801,11 +809,8 @@ class SceneExporter(ptk.SceneExporterBase):
                         fbx_path=fbx_write_path, announce=False
                     )
 
-                # The FBX deliverable's clips, per the Animation Clips mode --
-                # after the GLB, whose clips are cut from the whole-timeline
-                # take Shots Only drops. A GLB-only run's FBX is not shipped.
+                # A GLB-only run's FBX is not shipped.
                 if not glb_only and not usd:
-                    self.task_manager.ship_declared_takes(fbx_write_path)
                     # The FBX made to read as its GLB twin does -- each pivot
                     # set its own mesh, the probe's highlight copies (the
                     # GLB's) in, and every file the scene records name by

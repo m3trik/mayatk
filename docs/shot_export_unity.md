@@ -10,41 +10,58 @@ Exporter, File ▸ Export, Game Exporter, scripts). One record, a plain string
 
 | Channel (attr) | Shape | Consumed by |
 |---|---|---|
-| `animation` | `{ "version": 1, "fps", "clip_mode", "shots": [{ "clip", "start", "end", "description" }, …] }` | engine-side scripts (this doc); each clip's `start`/`end` is the take the FBX exporter realizes (`FbxUtils.apply_takes_from_node`) — one **AnimStack (Unity AnimationClip)** per shot |
+| `animation` | `{ "version": 3, "shots": [{ "clip", "description", "metadata" }, …], "fps" }` | engine-side scripts (this doc); each `clip` names the take the FBX exporter realizes for its shot (`FbxUtils.apply_takes_from_node`) — one **AnimStack (Unity AnimationClip)** per shot |
 
-**Invariant:** each clip's name and range come from a single resolution pass,
-so the take and its metadata cannot disagree — `clip` is the take name and the
-join key from a metadata record back to its imported clip. `description` is
-left out when empty; a shot's members stay in the scene's own store. Every
-reader takes the take list through
-`ptk.SceneRecords.declared_takes`: the clips' own ranges. The record adds
-`fps` — the rate every frame number in it is counted in, which a consumer that
-did not author the scene cannot otherwise know — and `clip_mode`, the Animation
-Clips mode the export declared (`full` realizes no take: the FBX ships one
-whole-timeline clip, and the clip ranges describe windows inside it).
+**One take per shot.** Every export splits the timeline into one take per
+shot, named after it and spanning its range, and ships no other: Maya's
+whole-timeline `Take 001` leaves a file with shots right after the write
+(`FbxUtils.drop_undeclared_takes`), before anything reads it. A scene with no
+shots ships Maya's one whole-timeline take, and its record states the rate
+alone (`{ "version": 3, "shots": [], "fps" }`); an export whose write carries no
+animation -- its Animation include group off, or a scene that animates
+nothing -- ships no record. There is no mode to
+choose: the Scene Exporter's former *Animation Clips* row is gone, and a preset
+or panel state that still carries it loads with the key ignored (the log says
+so once).
+
+**The record holds what a clip cannot.** Each shot's name comes from a single
+resolution pass, so the take and its record entry cannot disagree -- `clip` is
+the take name and the join key from a record entry back to its imported clip.
+`description` and `metadata` are left out when empty. The metadata is the Shot
+Manifest's alone: the keys it writes from what its sheet says
+(`ShotManifest.MANIFEST_METADATA` and the sheet's pass-through columns, handed
+to the store by each Build as `ShotStore.shipped_metadata`; a scene saved before
+a Build said, its manifest fields alone, `ShotStore.MANIFEST_FIELDS`), every value JSON
+(a value JSON cannot hold ships as its string form, warned). The tools' own
+bookkeeping on a shot (Assess's `object_status`, a split's `step_link`, the
+build's records) and its members stay in the scene's own store. The record states no
+frames: the takes are the timing. `fps` (required) is the scene's frame rate
+(`currentTimeUnitToFPS`, the FBX's own time mode), for a reader of a format that
+holds none -- a glTF, whose animations are in seconds; Unity reads the FBX's
+time mode and ignores it, and `ptk.ExportVerifier.check_animation_rate` holds the
+two equal. At export time the take list is
+the shot store's (`ShotStore.declared_takes`, read through
+`FbxUtils.declared_takes`); after the write, the file's own
+(`ptk.FbxFile.take_windows`). A reader refuses an older record (version 1's frame
+ranges and clip mode, version 2's index-bound GLB block) with its cure:
+re-export the file.
 
 **Every take is an exact slice of the animation.** Maya's take split restricts
 each curve to a take's window before writing it, so a plainly keyed curve with
 no key inside a shot used to give that shot no channel (the node played its
 rest pose for the whole shot in Unity) and a take's keys stopped at its last
 in-window key. `FbxUtils.apply_takes` therefore arms Resample All
-(`FbxUtils.RESAMPLE_ALL`) for the write. Every animated curve is keyed on every
-frame of the bake range first, and each take then carries every channel across
-its whole window (measured in Unity 6000.3, before and after:
-`unitytk/test/test_shot_metadata_integration.py`). A GLB-only export does not
-resample: its intermediate FBX's takes are discarded.
+(`FbxUtils.RESAMPLE_ALL`) for the write, a GLB-only export's intermediate
+included (its takes are the GLB's clips). Every animated curve is keyed on
+every frame of the bake range first, and each take then carries every channel
+across its whole window (measured in Unity 6000.3, before and after).
 `ptk.ExportVerifier.check_fbx_take_channels` (the Scene Exporter's *Verify The
-Written File*) fails a file whose takes are not exact slices.
-
-**The Animation Clips mode reaches the FBX.** *Shots + Full Sequence* ships the
-shot takes and Maya's whole-timeline `Take 001`. *Shots Only* drops `Take 001`
-from the written FBX (after any GLB conversion, which cuts its clips from it).
-*Full Sequence Only* splits nothing and ships `Take 001` alone, with the shots
-as windows inside it.
+Written File*) fails a file whose takes are not exact slices, and
+`check_fbx_takes` one carrying a take no shot names.
 
 **The shot name IS the clip name, verbatim.** `ShotStore.NAME_PATTERN`
 (`[A-Za-z0-9_]+`, unique among the scene's shots ignoring case — Unity joins
-clips case-insensitively) is the set every carrier keeps unchanged, so the
+a shot to its take ignoring case) is the set every carrier keeps unchanged, so the
 store refuses anything else (`ShotStore.name_error` gives the reason; every
 name field in the Shots panel, the Sequencer and its dialogs shows it) rather
 than letting the export respell it. Only a name held from before that rule is
@@ -69,34 +86,26 @@ members is never stale -- nothing tells it from a hold.
 
 A GLB is built from the FBX (`ptk.GlbPipeline`), which carries the record as
 a node extra on `data_export` (JSON inside JSON, under
-`extras.fromFBX.userProperties`). The build cuts each shot's clip from the
-whole-timeline animation (`MeshConvert.apply_glb_clips`), as the Animation
-Clips mode says: *Shots + Full Sequence* keeps the whole timeline beside the
-shots as `FULL_SEQUENCE`, *Shots Only* drops it, *Full Sequence Only* cuts no
-shot. It then states the shots in `extras.animation`
+`extras.fromFBX.userProperties`). The converter makes each take one glTF
+animation of the same name -- one per shot, in timeline order -- and the build
+copies the record verbatim into the root `extras.animation`
 (`MeshConvert.apply_glb_animations`, automatic on every conversion) and removes
-the FBX's copy:
+the FBX's copy: one layout, two containers, nothing bound to a glTF index:
 
 ```json
-{ "version": 2, "fps": 30.0, "clip_mode": "both", "default_clip": "SHOT_A",
-  "shots": [{ "clip": "SHOT_A", "start": 1, "end": 10, "description": "…" },
-            { "clip": "SHOT_B", "start": 20, "end": 30 }],
-  "clips": [{ "name": "SHOT_A", "animation": 0, "zero_frame": 1.0 },
-            { "name": "SHOT_B", "animation": 1, "zero_frame": 20.0 },
-            { "name": "FULL_SEQUENCE", "animation": 2, "zero_frame": 1.0 }] }
+{ "version": 3,
+  "shots": [{ "clip": "SHOT_A", "description": "…" },
+            { "clip": "SHOT_B", "metadata": { "section": "B" } }],
+  "fps": 24.0 }
 ```
 
 `shots` is the record's list as it stands, whatever clips the file holds. A
-shot plays the clip its `clip` names; one without a clip of its own (a *Full
-Sequence Only* file, or a take the build could not cut) plays its window
-`start`..`end` of the whole-timeline clip -- the one no shot names, as Unity's
-`TryGetSequenceWindow` does. Every clip is rebased to t=0, and its `zero_frame`
-is the authoring frame t=0 sits on: frame f is `(f - zero_frame) / fps`
-seconds into it. `default_clip` is the one to open on; the glTF's own
-`animations` order is left as written. The bundled WebXR preview reads the
-block for its clip picker and names the shot under the playhead on the
-whole-timeline clip; `MeshConvert.verify_glb` reports the counts to a
-recipient.
+shot plays the glTF animation its `clip` names, and the clips played in turn are
+the whole sequence; `fps` is the rate glTF cannot hold. The keyed visibility and the authored fades and highlights
+ride the takes as curve proxies, so each plays in its clip by construction
+(the conversion reads them off the FBX itself, per take). The bundled WebXR preview reads
+the block for its clip picker; `MeshConvert.verify_glb` reports the counts to
+a recipient.
 
 ## Maya side
 
@@ -106,6 +115,8 @@ ShotStore.active().publish_export_view()      # publish the shot record now
 # …or set ShotStore.active().auto_publish_export = True to republish on every save
 # …or, for true "any export carries shots" with no staleness:
 ShotStore.enable_auto_export()                # before-export hook: republish fresh + apply takes
+# (a File > Export then ships one take per shot: the hook's after-export step
+#  drops Take 001, as the Scene Exporter and the hand-offs do)
 ```
 
 A hand-off -- the Unity bridge, the WebXR preview -- needs none of these: the
@@ -120,41 +131,54 @@ hook (`FbxUtils.enable_export_producer`); the Audio system opts its own in via
 GameObject with distinct attrs — Shots' plain `animation`, Audio's
 JSON `audio` (baked from the keyed `audio_clip_*` authoring state on
 `data_internal`) — so a scene with both
-exports one FBX that Unity imports into both a `ShotMetadataController` and an
-`AudioEventController` on the prefab root. The hook is reference-counted: enable
+exports one FBX that Unity imports into both its shots and the audio cues
+its clips play. The hook is reference-counted: enable
 either or both; each runs once per export, fault-isolated, **in the records'
 declared dependency order (`audio` reads `animation`, so shots
-first)** — the audio producer reads the takes the shots producer just built and
-scopes each event to its take (`clip` + take-relative `frame`), so every audio
-event fires in its own AnimationClip -- and, in a Shots + Full Sequence file, at
-its shot's window in the whole-timeline clip, which unitytk places from the shot
-record (a `full` export realizes no take, so
-its events ship unscoped against the one whole-timeline clip). Verified end-to-end by
-`unitytk/test/test_shots_audio_sidebyside_integration.py`.
+first)** — the audio producer cuts each sound into cues per clip
+(`ptk.AudioUtils.clip_cues`): per shot take, in seconds from the take's start,
+with its offset into the sound and its stop, so a sound across a cut stops at
+the cut and the next clip plays it on from there. A scene with no shots cues
+its one take over the window the written file declares for it. Maya's writer
+declares the playback range whatever the take holds, and Unity cuts its clip
+by that window, so after every FBX write of a shotless scene (the Scene
+Exporter's, `FbxUtils.export`'s, a File > Export the hook sees) the file is
+measured: its take's window is rewritten to the keys it holds
+(`ptk.FbxMedia.fit_take_windows`, an ancestor the plug-in carried along
+included) and its `audio` record is cut again over that window
+(`FbxUtils.drop_undeclared_takes`). The scene's range never moves. A write
+that skips that step (the Game Exporter's `FBXExport`, which fires no scene
+event) ships the playback range as its window, and the cues stamped before it
+count from there too. The cues are the source's; what a Unity user adds in the
+model importer's Events tab is Unity's. Verified by
+`test/test_audio_clips_export.py` (`TestAudioClipsRealExport`: real Scene
+Exporter, `FbxUtils.export` and raw `cmds.file` writes read back with
+`ptk.FbxFile`).
 
-The Scene Exporter's **Animation Clips** row (either shot-bearing mode) does this
-for you and includes `data_export` in the export set. Clips appear automatically in
-Unity (named per take) with **no engine code**. The metadata only needs a small
+Every Scene Exporter run does this for you and includes `data_export` in the
+export set. Clips appear automatically in
+Unity (named per take) with **no engine code**. The record only needs a small
 reader:
 
 ## Unity side
 
-A ready-to-use **`ShotMetadataController.cs`** ships in `unitytk/templates/ShotMetadata/`
-(runtime component + an `AssetPostprocessor` that parses `animation`, attaches
-the controller to the prefab root, and joins records to clips by name). Deploy it
-as part of the full compile-coupled set — `UnitytkSettings.cs` provides the shared
-`ImportGate`/`CarrierImport` (`unitytk.TemplateDeployer.deploy_package(project_root)`
-writes the whole set as the embedded `com.m3trik.unitytk` UPM package).
-Verified end-to-end by `unitytk/test/test_shot_metadata_integration.py`:
-every frame of every shot clip against Maya, in each Animation Clips mode.
+A ready-to-use **`ShotList`** component ships in unitytk's `com.m3trik.unitytk/Features/Shots/Runtime/`
+(`ShotList.cs`, Add Component ▸ unitytk ▸ Shots; its importer, `ShotsImporter` in `Editor/`, is an
+`AssetPostprocessor` that reads `animation`, writes the entries onto the model root at every import, and joins
+each shot to every clip cut from its take). Deploy it with the core it compiles against — the kernel's `Imports.IsDelivery` gates the
+import, and the carrier feature's `CarrierImport` (`Features/Carrier/Editor/`, served
+through the `IRecordSource` contract) reads the record: install the whole set as the
+`com.m3trik.unitytk` package with Unity's Package Manager (one `Packages/manifest.json`
+line; the package's README gives it).
+Verified end-to-end by unitytk's Shots sample tests (`ShotsSampleTests`) on the
+Maya-made sample, and on a Blender-made delivery of the same scene and on one
+exported from a Maya assembly by the workspace's end-to-end suite
+(`m3trik/test/unity_e2e/test_sample_twins.py`): one clip per shot, named after
+it, as long as the shot and in its place, joined to its description.
 
-Each `ShotRecord` carries its `start`/`end` frames, and the controller carries
-the record's `fps` and `clipMode`, plus `sequenceClip` / `sequenceFirstFrame`:
-the clip cut over the whole-timeline take (the one take no shot names), when
-the file has one. `TryGetSequenceWindow(clip, out start, out end)` gives a
-shot's window in seconds inside that clip, which is how a Full Sequence file is
-played shot by shot. The importer warns when a record names a clip the file
-does not carry, as when an FBX is written without its shot takes.
+Each record entry names its clip; the importer resolves it to the clip itself
+(one per take) and warns when a record names a clip the file does not carry.
+There are no frames to read: a clip plays in seconds from its shot's start.
 
 The minimal read, for reference — clips import natively; Maya exports the
 `animation` attr as an FBX *user property* on the `data_export` GameObject:
@@ -163,12 +187,9 @@ The minimal read, for reference — clips import natively; Maya exports the
 using UnityEditor;
 using UnityEngine;
 
-class ShotMetadataPostprocessor : AssetPostprocessor
+class ShotRecordPostprocessor : AssetPostprocessor
 {
-    [System.Serializable] class ShotRec {
-        public string clip, description;
-        public float start, end;
-    }
+    [System.Serializable] class ShotRec { public string clip, description; }
     [System.Serializable] class ShotMeta { public int version; public ShotRec[] shots; }
 
     // Fired per GameObject that carries FBX user properties.
@@ -181,7 +202,7 @@ class ShotMetadataPostprocessor : AssetPostprocessor
             var meta = JsonUtility.FromJson<ShotMeta>((string)values[i]);
             foreach (var s in meta.shots)
                 Debug.Log($"[shot] clip={s.clip}  desc={s.description}");
-            // Join to clips by name: AnimationClip whose name == s.clip.
+            // Join by take: every clip whose takeName == s.clip, ignoring case.
         }
     }
 }

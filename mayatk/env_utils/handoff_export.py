@@ -80,9 +80,9 @@ class MayaExportMixin:
 
     #: Whether an animated write splits the scene's declared shots into one
     #: FBX take each (:meth:`FbxUtils.apply_takes_from_node`). On where the far
-    #: side plays the FBX's takes: Unity builds its clips from them
-    #: (``UnityBridge``), and the WebXR preview's GLB carries one clip per
-    #: take. A DCC hand-off turns it OFF (``BlenderBridge``): every importer
+    #: side plays the FBX's takes: the WebXR preview's GLB carries one clip
+    #: per take (Unity's sends write through the Scene Exporter, which splits
+    #: its own). A DCC hand-off turns it OFF (``BlenderBridge``): every importer
     #: plays ONE take (Maya's the last, Blender's the first stack per object),
     #: the receiver lands the shots from the manifest's ``shots`` section, and
     #: the split only costs -- it bounds the whole take by the shots' union
@@ -93,11 +93,9 @@ class MayaExportMixin:
 
     #: Whether an animated hand-off's take split resamples every curve
     #: (:meth:`FbxUtils.apply_takes`), making each take an exact slice of the
-    #: animation. On only where the FBX's takes ARE what the far side plays --
-    #: Unity builds its clips from them (``UnityBridge``). Off by default: the
-    #: WebXR preview cuts its own clips from the whole-timeline take. Moot
-    #: without :attr:`split_takes`.
-    resample_takes: bool = False
+    #: animation. On: the FBX's takes ARE what every far side plays -- the
+    #: WebXR preview's GLB is converted from them, one animation per take. Moot without :attr:`split_takes`.
+    resample_takes: bool = True
 
     #: Drop the baked rig's apparatus from the FBX payload after the write
     #: (:meth:`FbxUtils.drop_rig_apparatus` -- what the Scene Exporter's
@@ -111,8 +109,7 @@ class MayaExportMixin:
     #: Export the scene's animation (and split its declared takes) when the
     #: request does not say: the ``INCLUDE_ANIMATION`` param wins whenever it
     #: is given. A bridge whose consumer plays the FBX's takes and whose panel
-    #: offers no animation knob opts in -- the Unity bridge, whose importer
-    #: builds one clip per take. Off by default, where every DCC hand-off panel
+    #: offers no animation knob opts in. Off by default, where every DCC hand-off panel
     #: carries the knob. Mirror of blendertk's flag of the same name.
     include_animation: bool = False
 
@@ -125,7 +122,10 @@ class MayaExportMixin:
         return tuple(self.export_stagers)
 
     def _handoff_context(
-        self, transforms: List[str], writer: str = "fbx"
+        self,
+        transforms: List[str],
+        writer: str = "fbx",
+        animated: Optional[bool] = None,
     ) -> ptk.ExportContext:
         """The export context of a send of *transforms*: a HANDOFF context
         (only the DERIVED records refresh) scoped to the roots it sends, as
@@ -133,10 +133,17 @@ class MayaExportMixin:
         ships, not the whole scene, and the bracket puts the scene's own
         copy back after the write (``ptk.ExportSnapshot.restore_scene_wide``).
         An empty send is scoped to nothing it could ship. *writer* is the
-        carrier the send writes, which states the records' unit."""
+        carrier the send writes, which states the records' unit; *animated*
+        whether that write carries animation (``ptk.ExportContext.animated``),
+        as the write's own settings say (:meth:`_export_fbx`); ``None`` lets
+        ``FbxUtils.export_context`` read the writer's settings as they stand."""
         roots = cmds.ls([str(t) for t in transforms], long=True) if transforms else []
+        decisions = {} if animated is None else {"animated": bool(animated)}
         return FbxUtils.export_context(
-            mode=ptk.ExportContext.HANDOFF, writer=writer, scope=tuple(roots or ())
+            mode=ptk.ExportContext.HANDOFF,
+            writer=writer,
+            scope=tuple(roots or ()),
+            **decisions,
         )
 
     def _includes_animation(self, params: Dict[str, Any]) -> bool:
@@ -354,10 +361,10 @@ class MayaExportMixin:
         over the union of the declared shots it splits (:attr:`split_takes`),
         else over the scene's animation range -- and a static one does not.
 
-        Decided before the bracket opens, from the takes the carrier declares
-        (the hand-off's publish refreshes only DERIVED records, never the
-        shots), so the bracket's producers read the range the write will bake
-        (:meth:`FbxUtils.planned_bake_range`).
+        Decided before the bracket opens, from the takes the scene's shots
+        declare (``FbxUtils.declared_takes``: one per shot); the write
+        applies it (:meth:`FbxUtils.apply_write_plan`) and states it
+        (``FbxUtils.export(plan=)``).
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
 
@@ -403,11 +410,82 @@ class MayaExportMixin:
         # (:meth:`_handoff_context`); the stagers finish on exit, AFTER the
         # file exists -- so the deliverable carries the staged scene and the
         # artist gets the viewport back as it was.
+        #
+        # Live Maya doesn't always pre-load fbxmaya -- load before exporting.
+        FbxUtils.load_plugin()
+        # Reset BEFORE anything arms state, so the write starts from the factory
+        # baseline and only :meth:`_fbx_options` moves it. Pinning alone is not
+        # enough: the plugin's export flags are sticky for the life of the
+        # session and the ones this does not name still decide the deliverable's
+        # CONTENT -- ``FBXExportReferencedAssetsContent`` settles whether a
+        # referenced module ships at all. Without this, whoever exported last
+        # decided part of the hand-off, and the same scene pushed twice in one
+        # session could carry different geometry -- the preview-vs-deliverable
+        # divergence this mixin exists to remove. The Scene Exporter has always
+        # done exactly this (``_apply_default_fbx_options``).
+        #
+        # Here rather than in ``FbxUtils.export``: that is the shared writer,
+        # and the Scene Exporter arms its bake range and take split BEFORE
+        # calling it -- a reset down there would wipe both. For the same reason
+        # this sits ABOVE the ``apply_takes_from_node`` call below, and above
+        # the bracket, whose context reads the settings it leaves.
+        #
+        # Best-effort, like the import twin in the Rizom bridge: a baseline that
+        # cannot be established is a worse deliverable, not a failed one, and
+        # refusing to export because the plugin would not answer would turn a
+        # determinism improvement into an outage.
+        try:
+            FbxUtils.reset_export()
+        except Exception:  # noqa: BLE001
+            self.logger.debug("FBX export options not reset.", exc_info=True)
         plan = self._write_plan(params)
+        # The Animation include group, pinned to what the send asks: the
+        # factory state the reset leaves has it ON, and a static plan only
+        # turns the bake off, so a send without animation shipped the scene's
+        # curves unbaked in ``Take 001``. With the group off the file holds no
+        # take and no curve -- what blendertk's twin writes (``bake_anim``).
+        # Best-effort like the reset, but WARNED: a pin that failed ships the
+        # old file, and the context below reads the group as it is, so it
+        # still states what the file carries. Put back as the reset left it
+        # after the write (``finally``), so a static hand-off does not turn
+        # animation off for the user's next File > Export.
+        wants = self._includes_animation(params)
+        baseline = FbxUtils.animation_export_enabled()
+        try:
+            FbxUtils.set_animation_export(wants)
+            pinned = baseline != wants
+        except Exception:  # noqa: BLE001
+            pinned = False
+            self.logger.warning(
+                f"FBX Animation include group not set to {wants}: the file "
+                "carries what the plug-in's current setting includes.",
+                exc_info=True,
+            )
+        try:
+            self._write_fbx(transforms, fbx_path, params, plan)
+        finally:
+            if pinned:
+                FbxUtils.set_animation_export(baseline)
+
+    def _write_fbx(
+        self,
+        transforms: List[str],
+        fbx_path: str,
+        params: Dict[str, Any],
+        plan: "FbxUtils.WritePlan",
+    ) -> None:
+        """The write :meth:`_export_fbx` brackets, once the plug-in's options
+        state what this send carries."""
+        # The context states what THIS write does, read off the settings
+        # :meth:`_export_fbx` established and nothing below changes: the
+        # Animation include group is sticky session state, and read before the
+        # reset it was whatever the last export left -- a preset's "off" made
+        # an animated send ship no ``animation`` record (no rate for its GLB).
+        # Mirror of blendertk's hand-off, which states its writer's options.
+        animated = FbxUtils.animation_export_enabled()
         with FbxUtils.export_prepared(
-            self._handoff_context(transforms),
+            self._handoff_context(transforms, animated=animated),
             stagers=self._export_stagers(),
-            plan=plan,
         ):
             options = self._fbx_options(params)
             carrier = self._data_export_carrier()
@@ -422,32 +500,6 @@ class MayaExportMixin:
             Path(fbx_path).parent.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"Exporting {len(transforms)} object(s) to {fbx_path}")
 
-            # Live Maya doesn't always pre-load fbxmaya -- load before exporting.
-            FbxUtils.load_plugin()
-            # Reset BEFORE anything arms state, so the write starts from the factory
-            # baseline and only :meth:`_fbx_options` moves it. Pinning alone is not
-            # enough: the plugin's export flags are sticky for the life of the
-            # session and the ones this does not name still decide the deliverable's
-            # CONTENT -- ``FBXExportReferencedAssetsContent`` settles whether a
-            # referenced module ships at all. Without this, whoever exported last
-            # decided part of the hand-off, and the same scene pushed twice in one
-            # session could carry different geometry -- the preview-vs-deliverable
-            # divergence this mixin exists to remove. The Scene Exporter has always
-            # done exactly this (``_apply_default_fbx_options``).
-            #
-            # Here rather than in ``FbxUtils.export``: that is the shared writer,
-            # and the Scene Exporter arms its bake range and take split BEFORE
-            # calling it -- a reset down there would wipe both. For the same reason
-            # this sits ABOVE the ``apply_takes_from_node`` call below.
-            #
-            # Best-effort, like the import twin in the Rizom bridge: a baseline that
-            # cannot be established is a worse deliverable, not a failed one, and
-            # refusing to export because the plugin would not answer would turn a
-            # determinism improvement into an outage.
-            try:
-                FbxUtils.reset_export()
-            except Exception:  # noqa: BLE001
-                self.logger.debug("FBX export options not reset.", exc_info=True)
             # Guards the TAKE reset in the ``finally`` (not the option reset above)
             # on having ATTEMPTED the split rather than on having armed one:
             # ``apply_takes`` writes sticky MEL state per take, so a raise partway
@@ -470,11 +522,11 @@ class MayaExportMixin:
                     # measured on a 12-shot production assembly, the exporter's GLB
                     # carried 12 clips and the preview's carried one.
                     #
-                    # Declared, never regenerated: this realizes whatever is already
-                    # on the carrier (the same contract ``enable_auto_takes``
-                    # documents) rather than running the producers, so a preview
-                    # push stays free of scene side effects. Idempotent alongside
-                    # the hook -- ``apply_takes`` clears prior take state first.
+                    # Read, never regenerated: this realizes the takes the scene's
+                    # shot store declares (one per shot, ``FbxUtils.declared_takes``)
+                    # rather than running the producers, so a preview push stays
+                    # free of scene side effects. Idempotent alongside the hook --
+                    # ``apply_takes`` clears prior take state first.
                     #
                     # Only where the far side plays the takes (:attr:`split_takes`):
                     # a DCC hand-off ships one whole take, and ``apply_takes([])``
@@ -567,6 +619,10 @@ class MayaExportMixin:
                         finally:
                             if duplicates:
                                 cmds.delete(duplicates)
+                if wants_animation and takes:
+                    # One take per shot: Maya's whole-timeline take leaves the
+                    # file, as it leaves the Scene Exporter's.
+                    FbxUtils.drop_undeclared_takes(fbx_path, logger=self.logger)
             finally:
                 if wants_animation:
                     # Take splits and the bake-complex range they set are STICKY
@@ -937,7 +993,7 @@ class BridgeHost:
         ``maya.exe`` (blendertk's mirror installs into Blender's user modules).
 
         Parameters:
-            spec: A requirement, e.g. ``unitytk>=0.1.0``.
+            spec: A requirement, e.g. ``somepackage>=1.0``.
         """
         from uitk import OptionalPackageManager
 

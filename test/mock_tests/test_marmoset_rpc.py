@@ -72,9 +72,37 @@ from mayatk.mat_utils.marmoset_bridge.marmoset_rpc import (  # noqa: E402
 )
 
 
+import pythontk as ptk  # noqa: E402
+
+#: The plugin announces itself: its instance records go to a temp folder of the
+#: test's (``PYTHONTK_CACHE_ROOT``), never the person's cache.
+_RECORDS = ptk.TempArtifacts("mrec", policy="scoped")
+_CACHE_ENV = "PYTHONTK_CACHE_ROOT"
+_cache_before = os.environ.get(_CACHE_ENV)
+
+
+def setUpModule():
+    os.environ[_CACHE_ENV] = str(_RECORDS.dir_path())
+
+
+def tearDownModule():
+    if _cache_before is None:
+        os.environ.pop(_CACHE_ENV, None)
+    else:
+        os.environ[_CACHE_ENV] = _cache_before
+    _RECORDS.cleanup()
+
+
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+def _attached():
+    """A client of the plugin serving in this process, by its record (and token)."""
+    conn = MarmosetConnection()
+    assert conn.attach(), "no marmoset_rpc record"
+    return conn
+
+
 def _free_port():
     """Find a port that's almost certainly free (bind+close)."""
     import socket
@@ -204,6 +232,39 @@ class TestAutostartHostGate(unittest.TestCase):
         self.assertFalse(plugin_server.is_running())
 
 
+class TestToolbagPump(unittest.TestCase):
+    """In Toolbag the plugin serves from Toolbag's update callback, no thread
+    (Toolbag ends once a plugin's script returns with a thread alive)."""
+
+    def test_it_serves_from_the_update_callback_and_stops_on_plugin_shutdown(self):
+        import threading
+        import time
+        import types
+
+        earlier = []
+        callbacks = types.SimpleNamespace(onPeriodicUpdate=lambda: earlier.append(1), onShutdownPlugin=None)
+        mset = types.ModuleType("mset")  # a module: shiboken's import hook reads __name__
+        mset.callbacks = callbacks
+        sys.modules["mset"] = mset
+        self.addCleanup(sys.modules.pop, "mset", None)
+        plugin_server.stop_server()
+        plugin_instance.pump = plugin.toolbag_pump
+        self.addCleanup(setattr, plugin_instance, "pump", None)
+        self.addCleanup(plugin_server.stop_server)
+        plugin_server.start_server(port=0)
+        answer = {}
+        caller = threading.Thread(target=lambda: answer.update(v=_attached().invoke("system.ping", timeout=10)))
+        caller.start()
+        deadline = time.monotonic() + 10
+        while caller.is_alive() and time.monotonic() < deadline:
+            callbacks.onPeriodicUpdate()  # Toolbag's loop
+            time.sleep(0.01)
+        self.assertEqual(answer.get("v"), "pong")
+        self.assertTrue(earlier, "an update callback already there still runs")
+        callbacks.onShutdownPlugin()
+        self.assertFalse(plugin_server.is_running())
+
+
 # ======================================================================
 # HTTP server <-> client integration. Real server on a real port, but
 # all-localhost so it doesn't hit the network.
@@ -213,7 +274,7 @@ class TestServerClientIntegration(unittest.TestCase):
     def setUpClass(cls):
         cls.port = _free_port()
         plugin.start_server(port=cls.port)
-        cls.conn = MarmosetConnection(port=cls.port)
+        cls.conn = _attached()
 
     @classmethod
     def tearDownClass(cls):
@@ -300,7 +361,6 @@ class TestRunBatch(unittest.TestCase):
     def test_run_batch_returns_result_per_call(self):
         results = BatchJob.run_batch(
             [Call("system.ping"), Call("system.list_ops")],
-            port=self.port,
         )
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0].op, "system.ping")
@@ -318,7 +378,6 @@ class TestRunBatch(unittest.TestCase):
                 Call("does.not.exist"),  # will fail
                 Call("system.list_ops"),
             ],
-            port=self.port,
         )
         self.assertEqual(len(results), 3)
         self.assertTrue(results[0].ok)
@@ -333,7 +392,6 @@ class TestRunBatch(unittest.TestCase):
                 Call("does.not.exist"),  # will fail
                 Call("system.list_ops"),  # must NOT run
             ],
-            port=self.port,
             stop_on_error=True,
         )
         self.assertEqual(len(results), 2)
@@ -348,8 +406,7 @@ class TestRunBatch(unittest.TestCase):
         try:
             results = BatchJob.run_batch(
                 [Call("test.batch_echo", kwargs={"value": "hello"})],
-                port=self.port,
-            )
+                )
             self.assertTrue(results[0].ok)
             self.assertEqual(results[0].value, "hello")
         finally:
@@ -394,6 +451,21 @@ class TestInstaller(unittest.TestCase):
         d = os.path.join(self._tmp, f"Marmoset Toolbag {version_suffix}")
         os.makedirs(os.path.join(d, "plugins"), exist_ok=True)
         return d
+
+    def test_the_shared_install_takes_the_toolbag_spec_and_its_folder(self):
+        """The spec every panel's *Install in Toolbag* runs: the plugin lands in
+        the newest Toolbag's folder (``LOCALAPPDATA`` read at call time)."""
+        from pythontk.net_utils.rpc.installer import PluginInstaller
+
+        from mayatk.mat_utils.marmoset_bridge.marmoset_rpc.installer import PLUGIN_SPEC
+
+        self.assertEqual((PLUGIN_SPEC.name, PLUGIN_SPEC.app), ("marmoset_rpc", "Toolbag"))
+        self.assertEqual(PluginInstaller.status(PLUGIN_SPEC), "unresolved", "no Toolbag folder yet")
+        d = self._stage_toolbag_dir("5")
+        dest = PluginInstaller.install(PLUGIN_SPEC)
+        self.assertEqual(os.path.normpath(str(dest)), os.path.normpath(os.path.join(d, "plugins", "marmoset_rpc")))
+        self.assertEqual(PluginInstaller.status(PLUGIN_SPEC), "current")
+        self.assertTrue(Installer.is_installed())
 
     def test_user_plugin_dir_resolves_from_install_path(self):
         self._stage_toolbag_dir("5")
@@ -602,7 +674,7 @@ class TestMainThreadMarshalling(unittest.TestCase):
         plugin.start_server(port=port)
         try:
             self.assertEqual(
-                MarmosetConnection(port=port).invoke("system.ping"), "pong"
+                _attached().invoke("system.ping"), "pong"
             )
         finally:
             plugin.stop_server()
@@ -617,7 +689,7 @@ class TestMainThreadMarshalling(unittest.TestCase):
 class TestConnectShutdown(unittest.TestCase):
     """connect() must:
       * Reuse an existing reachable plugin (no launch).
-      * Launch Toolbag if not reachable, then wait for /health.
+      * Launch Toolbag if not reachable, then wait for its record (its PID).
       * Honour force_new=True by launching even if reachable.
       * Time out cleanly if Toolbag dies before the plugin starts.
 
@@ -648,7 +720,7 @@ class TestConnectShutdown(unittest.TestCase):
         port = _free_port()
         plugin.start_server(port=port)
         try:
-            conn = MarmosetConnection(port=port)
+            conn = MarmosetConnection()
             self.assertTrue(conn.connect(timeout=1.0))
             self.mock_launch.assert_not_called()
         finally:
@@ -662,7 +734,7 @@ class TestConnectShutdown(unittest.TestCase):
             self.mock_launch.return_value = unittest.mock.MagicMock(
                 pid=1234, poll=lambda: None
             )
-            conn = MarmosetConnection(port=port)
+            conn = MarmosetConnection()
             # Will return True because ping() succeeds anyway, but
             # the launch must still have been called.
             conn.connect(force_new=True, timeout=1.0)
@@ -682,7 +754,8 @@ class TestConnectShutdown(unittest.TestCase):
         def _on_launch(*_a, **_kw):
             # Simulate Toolbag spinning up: defer the plugin server
             # start by 200ms so the initial ping has time to fail first.
-            proc = unittest.mock.MagicMock()
+            # This process stands in for Toolbag: its plugin's record has its PID.
+            proc = unittest.mock.MagicMock(pid=os.getpid())
             proc.poll.return_value = None
             threading.Timer(0.2, lambda: plugin.start_server(port=port)).start()
             return proc
@@ -690,7 +763,7 @@ class TestConnectShutdown(unittest.TestCase):
         self.mock_launch.side_effect = _on_launch
 
         try:
-            conn = MarmosetConnection(port=port)
+            conn = MarmosetConnection()
             self.assertTrue(conn.connect(timeout=5.0, poll_interval=0.1))
             self.mock_launch.assert_called_once()
         finally:
@@ -711,9 +784,8 @@ class TestConnectShutdown(unittest.TestCase):
     def test_connect_raises_when_no_exe_found(self):
         self.exe_patch.stop()
         with unittest.mock.patch("pythontk.AppLauncher.find_app", return_value=None):
-            # Use a free port -- a real Toolbag on the dev machine could be
-            # listening on 8765 and would make connect() short-circuit on
-            # the ping path, never reaching the find_app branch.
+            # Records live in the test's temp cache: a Toolbag a person has
+            # open is never found, so the find_app branch is reached.
             with self.assertRaises(FileNotFoundError):
                 MarmosetConnection(port=_free_port()).connect(timeout=0.5)
         # Restart the patch so tearDown can stop it cleanly.
@@ -733,7 +805,7 @@ class TestConnectShutdown(unittest.TestCase):
             port = _free_port()
             plugin.start_server(port=port)
             try:
-                conn = MarmosetConnection(port=port)
+                conn = MarmosetConnection()
                 conn.connect(timeout=1.0, auto_cleanup=True)
                 mock_register.assert_called_once()
                 self.assertTrue(getattr(conn, "_atexit_registered", False))
@@ -747,7 +819,7 @@ class TestConnectShutdown(unittest.TestCase):
             port = _free_port()
             plugin.start_server(port=port)
             try:
-                conn = MarmosetConnection(port=port)
+                conn = MarmosetConnection()
                 conn.connect(timeout=1.0, auto_cleanup=True)
                 conn.connect(timeout=1.0, auto_cleanup=True)
                 self.assertEqual(mock_register.call_count, 1)

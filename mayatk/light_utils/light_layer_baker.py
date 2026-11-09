@@ -69,8 +69,9 @@ class LightLayerBaker(ptk.LoggingMixin):
 
     Parameters:
         gain: What every layer light's intensity is multiplied by. The WebXR
-            viewer draws a bake pi darker than an Arnold beauty render of the
-            same rig, so pi makes a weight of 1 mean "as the rig says".
+            viewer draws a bake as stored, as an Arnold beauty render of the
+            same rig does, so at 1 a weight of 1 means "as the rig says"
+            (pi until 2026-11-07, while the viewer drew a bake pi darker).
         resolution: The lightmap atlases' size: a layer only has to be good
             enough to predict with (256 bakes in about a minute).
         samples, gi_samples, gi_depth, denoise: The bake's quality
@@ -90,7 +91,7 @@ class LightLayerBaker(ptk.LoggingMixin):
 
     def __init__(
         self,
-        gain: float = math.pi,
+        gain: float = 1.0,
         resolution: int = 256,
         samples: int = 3,
         gi_samples: int = 2,

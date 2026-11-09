@@ -566,9 +566,11 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertTrue(events, "no progress was reported at all")
         currents = [c for c, _, _ in events]
         self.assertEqual(currents, sorted(currents), f"current went back: {events}")
-        self.assertEqual({t for _, t, _ in events}, {3}, "one task + write + sidecar")
+        # The named task, the take split every FBX run arms (one take per
+        # shot, a no-op here), the write and the sidecar.
+        self.assertEqual({t for _, t, _ in events}, {4}, "two tasks + write + sidecar")
         self.assertEqual(events[0][0], 0)
-        self.assertEqual(events[-1][:2], (3, 3), "the last tick snaps to total")
+        self.assertEqual(events[-1][:2], (4, 4), "the last tick snaps to total")
         messages = [m for _, _, m in events if m]
         self.assertTrue(any("set_linear_unit" in m for m in messages), messages)
         self.assertTrue(any(m.startswith("Writing FBX") for m in messages), messages)
@@ -3628,14 +3630,15 @@ class TestSceneExporter(MayaTkTestCase):
         """
         import maya.mel as mel
         from mayatk.env_utils.fbx_utils import FbxUtils
-        from mayatk.node_utils.data_nodes import DataNodes
+
+        from mayatk.anim_utils.shots._shots import ShotStore
 
         tm = self.exporter.task_manager
         tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes,
-            {"shots": [{"clip": "Shot_1", "start": 1, "end": 10, "objects": []}]},
-        )
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("Shot_1", 1, 10)
         # The bake flag is the loaded preset's: pinned here, and put back.
         baking = "true" if FbxUtils.baking_enabled() else "false"
         self.addCleanup(mel.eval, f"FBXExportBakeComplexAnimation -v {baking}")
@@ -3652,11 +3655,9 @@ class TestSceneExporter(MayaTkTestCase):
 
         run = ptk.ExportRun.from_tasks({"optimize_keys": "extremes"})[0]
         splits = run.with_tasks(
-            {"optimize_keys": "extremes", "apply_declared_takes": "shots"}
+            {"optimize_keys": "extremes", "apply_declared_takes": True}
         )
-        whole = run.with_tasks(
-            {"optimize_keys": "extremes", "apply_declared_takes": "full"}
-        )
+        whole = run.with_tasks({"optimize_keys": "extremes"})
         self.assertFalse(level_reaching_the_baker(splits))
         self.assertEqual(level_reaching_the_baker(whole), "extremes")
         self.assertEqual(
@@ -3664,7 +3665,7 @@ class TestSceneExporter(MayaTkTestCase):
             "extremes",
             "a write-back keeps the layer's keys in the scene",
         )
-        ptk.SceneRecords.SHOTS.clear(DataNodes)
+        ShotStore.set_active(ShotStore())
         self.assertEqual(
             level_reaching_the_baker(splits),
             "extremes",
@@ -4590,28 +4591,23 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertEqual(defs["export_data_node"]["widget_type"], "QCheckBox")
         self.assertTrue(defs["export_data_node"]["setChecked"])
 
-    def test_folding_the_carrier_in_keeps_the_clips_choice(self):
-        """A "shots" choice survives the carrier joining the export set.
-
-        Regression: ``apply_declared_takes`` records the Animation Clips
-        choice, then folds the carrier in -- which assigns ``self.objects``,
-        whose setter resets the choice to "both" as per-run hygiene. With
-        "Export Scene Data Node" off (so nothing had added the carrier yet),
-        "Shots Only" shipped both halves of the animation.
-        Added: 2026-09-13
+    def test_folding_the_carrier_in_claims_the_takes_range(self):
+        """The split folds the carrier in once takes were realized, and claims
+        their union for the bake range (``_require_range_coverage``).
+        Added: 2026-09-13; one form since 2026-11-05.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.node_utils.data_nodes import DataNodes
 
         with (
-            patch.object(FbxUtils, "apply_takes_from_node", return_value=2),
+            patch.object(FbxUtils, "apply_takes_from_node", return_value=2) as split,
             patch.object(FbxUtils, "bake_range", return_value=(1, 50)),
             patch.object(DataNodes, "get_export_nodes", return_value=["|phantom"]),
         ):
-            self.tm.apply_declared_takes("shots")
+            self.tm.apply_declared_takes()
         self.assertIn("|phantom", self.tm.objects, "the carrier joined the set")
-        self.assertEqual(self.tm._clip_mode, "shots")
         self.assertEqual(self.tm._required_range_coverage, (1, 50))
+        split.assert_called_once_with(resample=True)
 
     def test_option_runs_before_takes_in_order(self):
         order = self.tm.TASK_ORDER
@@ -4620,152 +4616,56 @@ class TestExportDataNodeOption(MayaTkTestCase):
             order.index("export_data_node"), order.index("apply_declared_takes")
         )
 
-    def test_takes_are_default_on_beside_the_carrier(self):
-        """The two default TOGETHER, or the deliverable contradicts itself.
-
-        The carrier ships the shot record naming one clip per shot; with the
-        split off, the FBX (and the GLB converted from it) carries that
-        metadata and none of the clips it names. The row is a ComboBox now --
-        the sequence became a CHOICE rather than an always-on extra -- so the
-        default is the entry that ships both, which is what the retired
-        checkbox did when ticked.
+    def test_the_take_split_has_no_row_and_every_fbx_run_arms_it(self):
+        """One form: the Animation Clips row (full / shots / both) retired
+        2026-11-05. The split has no row and every FBX write runs it, the
+        GLB-only intermediate included (its takes are the GLB's clips); a USD
+        layer has no takes. A preset or a headless caller still naming a mode
+        has it ignored, said once.
         """
-        defs = self.tm.task_definitions
-        row = defs["apply_declared_takes"]
-        options = list(self.tm._animation_clips_options.values())
-        self.assertEqual(
-            options[row["setCurrentIndex"]],
-            "both",
-            "shots would export as metadata describing clips the file lacks",
-        )
-        self.assertNotEqual(
-            row.get("object_name"),
-            "apply_declared_takes",
-            "a preset holding the old checkbox's BOOL must not restore onto a "
-            "combo that persists by index",
-        )
-
-    def test_the_legacy_checkbox_values_still_mean_what_they_did(self):
-        """A headless caller (or an old script) still passes True/False.
-
-        The row became a combo, but the TASK key did not change -- so the
-        booleans that row used to carry have to keep naming the same
-        deliverable: ticked kept the sequence beside the shots, unticked split
-        nothing and shipped the sequence alone.
-        """
-        self.assertEqual(ptk.ExportRun.clip_mode(True), "both")
-        self.assertEqual(ptk.ExportRun.clip_mode(False), "full")
-        self.assertEqual(ptk.ExportRun.clip_mode(None), "full")
-        self.assertEqual(ptk.ExportRun.clip_mode("shots"), "shots")
-        with self.assertRaises(ValueError):
-            ptk.ExportRun.clip_mode("everything")
-
-    def test_every_offered_mode_is_one_the_converter_accepts(self):
-        """The row's values and pythontk's vocabulary are one contract.
-
-        The labels are the panel's business; the VALUES are the converter's,
-        and a row offering a mode ``apply_glb_clips`` rejects would raise mid
-        conversion -- after the FBX is already written.
-        """
-
-        self.assertEqual(
-            set(self.tm._animation_clips_options.values()),
-            set(ptk.MeshConvert.ANIMATION_CLIP_MODES),
-        )
-
-    def test_a_second_export_does_not_inherit_the_first_ones_clips(self):
-        """``create_glb`` reads the choice AFTER the write, so it is per-run.
-
-        Left standing, an export whose panel no longer carries the row would
-        convert against the previous run's choice and silently ship half the
-        animation. ``begin_run`` is the reset; assigning ``objects`` is not
-        (tasks do that mid-run -- the carrier fold-in used to flip a "shots"
-        choice back to "both" through the setter).
-        """
-        self.tm.apply_declared_takes("full")
-        self.assertEqual(self.tm._clip_mode, "full")
-
-        self.tm.objects = list(self.tm.objects or [])
-        self.assertEqual(self.tm._clip_mode, "full")
-
-        self.tm.begin_run(self.tm.run)
-        self.assertEqual(self.tm._clip_mode, "both")
-
-    def test_full_sequence_mode_splits_nothing_and_tells_the_conversion(self):
-        """The GLB half is decided on the deliverable, not in the scene.
-
-        The sequence has to be CUT before it can be dropped, so the task
-        records the choice and ``create_glb`` carries it to the converter.
-        """
-        self.tm.apply_declared_takes("full")
-
-        self.assertEqual(self.tm._clip_mode, "full")
-
-    def test_a_full_sequence_export_declares_its_mode_on_the_shot_record(self):
-        """Full Sequence Only ships one sequence while the shot record still
-        declares every shot's take (each clip's range), which the deliverable
-        gate cannot tell from a split that silently failed -- so the export
-        DECLARES its mode on the shot record's envelope and the gate reads
-        it. Measured before: the ``fbx_takes`` gate failed a correct full-mode
-        export "declared but absent".
-        Added: 2026-09-15
-        """
-        import json
-        import shutil
-        import tempfile
-
-        from mayatk.anim_utils.shots._shots import ShotStore
-        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
-
-        try:
-            cmds.loadPlugin("fbxmaya", quiet=True)
-        except RuntimeError:
-            self.skipTest("FBX plugin not available")
-        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
-        store = ShotStore()
-        ShotStore.set_active(store)
-        store.define_shot("ShotA", 1, 20, objects=[self.cube])
-        store.define_shot("ShotB", 21, 40, objects=[self.cube])
-        out = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, out, ignore_errors=True)
-        exporter = SceneExporter(log_level="WARNING")
-        exporter.confirm = lambda question: False
+        self.assertNotIn("apply_declared_takes", self.tm.task_definitions)
+        self.assertFalse(hasattr(self.tm, "_animation_clips_options"))
+        for fmt in ("fbx", "fbx_glb", "glb"):
+            run, tasks, notes = ptk.ExportRun.from_tasks({"output_format": fmt})
+            self.assertIs(tasks.get("apply_declared_takes"), True, fmt)
+            self.assertTrue(run.splits_takes, fmt)
+            self.assertEqual(notes, [], fmt)
+        run, tasks, _notes = ptk.ExportRun.from_tasks({"output_format": "usd"})
+        self.assertNotIn("apply_declared_takes", tasks)
+        self.assertFalse(run.splits_takes)
+        run, tasks, notes = ptk.ExportRun.from_tasks({"apply_declared_takes": "full"})
+        self.assertIs(tasks["apply_declared_takes"], True)
         self.assertTrue(
-            exporter.perform_export(
-                export_dir=out,
-                objects=[self.cube],
-                output_name="full_mode",
-                tasks={"export_data_node": True, "apply_declared_takes": "full"},
-            )
-        )
-        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
-            SceneDataSidecar,
+            any("Animation Clips 'full' ignored" in text for _level, text in notes),
+            notes,
         )
 
-        record = SceneDataSidecar.manifest_path_for(os.path.join(out, "full_mode.fbx"))
-        with open(record, encoding="utf-8") as f:
-            data = json.load(f)["data_export"]
-        meta = data["animation"]
-        self.assertEqual(meta.get(ptk.MeshConvert.SHOT_CLIP_MODE_KEY), "full")
-        # One record: each clip carries its range, and no take list rides
-        # beside it.
-        self.assertEqual(
-            [(s["clip"], s["start"], s["end"]) for s in meta["shots"]],
-            [("ShotA", 1, 20), ("ShotB", 21, 40)],
+    def test_a_saved_animation_clips_value_loads_with_the_key_ignored(self):
+        """A preset or a panel state saved with the retired row still loads:
+        the key is a retired row the panel's saved state drops once said."""
+        checks = self.tm.check_definitions
+        self.assertIn(
+            ptk.ExportProfile.RETIRED_CLIPS_ROW,
+            ptk.ExportProfile.retired_row_keys(self.tm.task_definitions, checks),
         )
-        self.assertNotIn("fbx_takes", data)
-        report = ptk.ExportVerifier(fbx=os.path.join(out, "full_mode.fbx")).run()
-        gate = [row.status for row in report.rows if row.check == "fbx_takes"]
-        self.assertEqual(gate, ["SKIP"], report.summary())
+        notes = ptk.ExportProfile.retired_row_notes(
+            {"animation_clips": "Shots Only"}, self.tm.task_definitions, checks
+        )
+        self.assertTrue(
+            any("Animation Clips" in text and level == "info" for level, text in notes),
+            notes,
+        )
 
-    def test_a_glb_cuts_its_shots_without_any_keyed_visibility(self):
-        """The shots' clip origin rode the visibility record alone, so a scene
-        with nothing keyed on visibility published none: the clip rebuild
-        declined after the converter's split takes were already dropped, and
-        the GLB shipped ``Take 001`` and no shot clip -- with ``clips_vs_takes``
-        failing and the export still reporting success (measured 2026-10-04).
-        Added: 2026-10-04
+    def _export(
+        self, name, tasks=None, shots=True, extra=(), animated=True, preset_file=None
+    ):
+        """Export the cube (+ *extra*) through the real pipeline; the folder.
+
+        With *shots*, ShotA 1-20 ("opening") and ShotB 21-40 (metadata
+        ``{"section": "B"}``, a key its author ships, beside Assess's
+        ``object_status``, which stays in the scene) are declared on a cube
+        keyed 1-40 -- keyed only when *animated*. *preset_file* is handed to
+        the exporter as a user's FBX preset.
         """
         from mayatk.anim_utils.shots._shots import ShotStore
         from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
@@ -4774,59 +4674,25 @@ class TestExportDataNodeOption(MayaTkTestCase):
             cmds.loadPlugin("fbxmaya", quiet=True)
         except RuntimeError:
             self.skipTest("FBX plugin not available")
-        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
+        if animated:
+            cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+            cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
         store = ShotStore()
         ShotStore.set_active(store)
-        store.define_shot("ShotA", 1, 20, objects=[self.cube])
-        store.define_shot("ShotB", 21, 40, objects=[self.cube])
-        artifacts = ptk.TempArtifacts("se_glb_no_visibility", policy="scoped")
-        self.addCleanup(artifacts.cleanup)
-        out = artifacts.dir_path()
-        exporter = SceneExporter(log_level="WARNING")
-        exporter.confirm = lambda question: False
-        self.assertTrue(
-            exporter.perform_export(
-                export_dir=out,
-                objects=[self.cube],
-                output_name="no_vis",
-                tasks={
-                    "export_data_node": True,
-                    "apply_declared_takes": "both",
-                    "output_format": "fbx_glb",
+        if shots:
+            store.define_shot("ShotA", 1, 20, objects=[self.cube], description="opening")
+            b = store.define_shot("ShotB", 21, 40, objects=[self.cube])
+            store.update_shot(
+                b.shot_id,
+                metadata={
+                    **(b.metadata or {}),
+                    "section": "B",
+                    "object_status": {"cube": "valid"},
                 },
             )
-        )
-        glb = os.path.join(out, "no_vis.glb")
-        with ptk.MeshConvert.open_glb(glb) as edit:
-            names = [a.get("name") for a in edit.gltf.get("animations") or []]
-        self.assertIn("ShotA", names)
-        self.assertIn("ShotB", names)
-        report = ptk.ExportVerifier(glb=glb, fbx=os.path.join(out, "no_vis.fbx")).run()
-        rows = {row.check: row.status for row in report.rows}
-        self.assertEqual(rows.get("clips_vs_takes"), "PASS", report.summary())
-        self.assertEqual(rows.get("clip_origin"), "PASS", report.summary())
-
-    def _export_takes(self, mode):
-        """Export the cube + a node keyed only inside ShotA through the real
-        pipeline in Animation Clips *mode*; the written FBX, its takes read."""
-        from mayatk.anim_utils.shots._shots import ShotStore
-        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
-
-        try:
-            cmds.loadPlugin("fbxmaya", quiet=True)
-        except RuntimeError:
-            self.skipTest("FBX plugin not available")
-        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
-        early = cmds.polyCube(name="early_only")[0]
-        cmds.setKeyframe(early, attribute="translateY", time=5, value=0)
-        cmds.setKeyframe(early, attribute="translateY", time=15, value=4)
-        store = ShotStore()
-        ShotStore.set_active(store)
-        store.define_shot("ShotA", 1, 20, objects=[self.cube])
-        store.define_shot("ShotB", 21, 40, objects=[self.cube])
-        artifacts = ptk.TempArtifacts("se_take_modes", policy="scoped")
+            # What a manifest Build hands the store: the keys an export ships.
+            store.set_shipped_metadata(["section"])
+        artifacts = ptk.TempArtifacts(f"se_takes_{name}", policy="scoped")
         self.addCleanup(artifacts.cleanup)
         out = artifacts.dir_path()
         exporter = SceneExporter(log_level="WARNING")
@@ -4834,42 +4700,254 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertTrue(
             exporter.perform_export(
                 export_dir=out,
-                objects=[self.cube, early],
-                output_name=f"{mode}_mode",
-                tasks={"export_data_node": True, "apply_declared_takes": mode},
+                objects=[self.cube, *extra],
+                output_name=name,
+                preset_file=preset_file,
+                tasks={"export_data_node": True, **(tasks or {})},
             )
         )
-        return ptk.FbxFile.load(
-            os.path.join(out, f"{mode}_mode.fbx"),
+        return out
+
+    @staticmethod
+    def _fbx_record(fbx):
+        """The ``animation`` record the written FBX's carrier holds."""
+        import json
+
+        (raw,) = [
+            value
+            for value in fbx.user_properties(ptk.SceneRecords.SHOTS.key)
+            if isinstance(value, (bytes, bytearray)) and value.strip()
+        ]
+        return json.loads(bytes(raw).decode("utf-8"))
+
+    def test_a_scene_with_shots_ships_one_take_per_shot_and_no_other(self):
+        """One take per shot, named after it and spanning its range, and no
+        whole-timeline take (Maya's ``Take 001`` leaves the file after the
+        write); the record states per shot its clip and, when set, its
+        description and metadata -- no frames, no mode -- and the scene's rate,
+        the FBX's own time mode (for a GLB, which holds none).
+        Added: 2026-11-05
+        """
+        out = self._export("per_shot")
+        path = os.path.join(out, "per_shot.fbx")
+        fbx = ptk.FbxFile.load(path, decode_arrays=("KeyTime",), raw_payloads=False)
+        self.assertEqual(fbx.take_names(), ["ShotA", "ShotB"])
+        fps = fbx._fps()
+        windows = {
+            take: (round(start * fps), round(end * fps))
+            for take, (start, end) in fbx.take_windows().items()
+        }
+        self.assertEqual(windows, {"ShotA": (1, 20), "ShotB": (21, 40)})
+        record = self._fbx_record(fbx)
+        self.assertEqual(set(record), {"version", "shots", "fps"})
+        self.assertEqual(record["version"], ptk.SceneRecords.SHOTS.version)
+        self.assertAlmostEqual(record["fps"], fps, places=3)
+        shot_a, shot_b = record["shots"]
+        self.assertEqual(shot_a["clip"], "ShotA")
+        self.assertEqual(shot_a["description"], "opening")
+        self.assertEqual(shot_b["clip"], "ShotB")
+        self.assertNotIn("description", shot_b)
+        self.assertEqual(shot_b["metadata"], {"section": "B"})
+        for shot in record["shots"]:
+            self.assertLessEqual(set(shot), {"clip", "description", "metadata"})
+        report = ptk.ExportVerifier(fbx=path).run(
+            ["check_fbx_takes", "check_fbx_take_channels", "check_animation_rate"]
+        )
+        self.assertTrue(report.ok, report.summary())
+
+    def test_a_scene_with_no_shots_ships_one_whole_timeline_take(self):
+        """No shots: Maya's one whole-timeline take, and a record with no
+        shots stating the scene's rate -- the rate is the animation's, not
+        its shots' -- which is the FBX's own time mode, so its GLB states
+        its rate and a playblast need not ask. The GLB carries the record as
+        the FBX does. Added: 2026-11-05; the rate record: 2026-11-05
+        """
+        out = self._export("no_shots", shots=False, tasks={"output_format": "fbx_glb"})
+        fbx = ptk.FbxFile.load(os.path.join(out, "no_shots.fbx"), raw_payloads=False)
+        self.assertEqual(len(fbx.take_names()), 1, fbx.take_names())
+        record = self._fbx_record(fbx)
+        self.assertEqual(
+            record,
+            {
+                "version": ptk.SceneRecords.SHOTS.version,
+                "shots": [],
+                "fps": self._scene_rate(),
+            },
+        )
+        self.assertAlmostEqual(record["fps"], fbx._fps(), places=3)
+        if ptk.MeshConvert.resolve_binary(required=False, auto_install=False):
+            with ptk.MeshConvert.open_glb(os.path.join(out, "no_shots.glb")) as edit:
+                carried = ptk.SceneRecords.glb_block(edit.gltf, ptk.SceneRecords.SHOTS)
+            self.assertEqual(carried, record, "the GLB carries the record itself")
+
+    def test_an_animated_scene_exported_with_animation_off_ships_no_record(self):
+        """What the write carries decides, not the scene: an animated scene
+        with no shots, exported through a preset whose Animation include
+        group is off (the FBX plug-in then writes no animation at all), ships
+        no ``animation`` record -- no animation exported, no record.
+        Added: 2026-11-05
+        """
+        import maya.mel as mel
+
+        artifacts = ptk.TempArtifacts("se_takes_preset", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        preset = os.path.join(artifacts.dir_path(), "no_animation.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def load(*_args, **_kwargs):
+            from mayatk.env_utils.fbx_utils import FbxUtils
+
+            FbxUtils.reset_export()
+            mel.eval(f"FBXProperty {FbxUtils.ANIMATION_INCLUDE_PROPERTY} -v false")
+
+        self.addCleanup(
+            mel.eval, "FBXProperty Export|IncludeGrp|Animation -v true"
+        )
+        with patch.object(SceneExporter, "load_fbx_export_preset", side_effect=load):
+            out = self._export("anim_off", shots=False, preset_file=preset)
+        fbx = ptk.FbxFile.load(os.path.join(out, "anim_off.fbx"), raw_payloads=False)
+        self.assertEqual(fbx.take_names(), [], "the write carries no animation")
+        self.assertFalse(
+            [v for v in fbx.user_properties(ptk.SceneRecords.SHOTS.key) if v],
+            "a write that carries no animation ships no animation record",
+        )
+
+    def test_a_scene_that_animates_nothing_ships_no_animation_record(self):
+        """No animation exported, no record: there is no rate to state.
+        Added: 2026-11-05
+        """
+        out = self._export("static", shots=False, animated=False)
+        fbx = ptk.FbxFile.load(os.path.join(out, "static.fbx"), raw_payloads=False)
+        self.assertFalse(
+            [v for v in fbx.user_properties(ptk.SceneRecords.SHOTS.key) if v],
+            "a scene that animates nothing ships no animation record",
+        )
+
+    def test_a_scene_with_no_shots_bakes_its_one_take(self):
+        """No shots, and the one whole-timeline take still carries what the
+        scene plays: an articulated rig's joints (driven from their keyed
+        controls through the rig's expression) and an expression-driven node
+        are keyed in the written FBX, across the timeline. The write followed
+        the preset's bake flag -- off after the default reset -- so every
+        channel a driver moved shipped unkeyed; a scene with shots was baked
+        only because its take split forces it. Added: 2026-11-08
+        """
+        from mayatk.rig_utils.articulated_rig import ArticulatedRig
+        from test_articulated_rig import build_arm
+
+        arm = build_arm()
+        plan = ArticulatedRig.analyze(arm)
+        rig = ArticulatedRig.create(plan["links"], plan["joints"])
+        slots = len(rig.model().channels)
+        for frame, value in ((1, 0.0), (40, 10.0)):
+            cmds.currentTime(frame)
+            rig.set_state([value] * slots, key=True)
+        driven = cmds.polyCube(name="driven_by_expression")[0]
+        cmds.expression(s=f"{driven}.rotateZ = {self.cube}.translateX * 9;")
+        cmds.playbackOptions(
+            minTime=1, maxTime=40, animationStartTime=1, animationEndTime=40
+        )
+        asset = cmds.ls(arm.split("|")[1], long=True)[0]
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.reset_export()
+        before = (
+            FbxUtils.baking_enabled(),
+            FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL),
+        )
+        out = self._export("no_shots_baked", shots=False, extra=[asset, driven])
+        self.assertEqual(
+            (FbxUtils.baking_enabled(), FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)),
+            before,
+            "the bake and Resample All are put back after the write",
+        )
+        fbx = ptk.FbxFile.load(
+            os.path.join(out, "no_shots_baked.fbx"),
             decode_arrays=("KeyTime",),
             raw_payloads=False,
         )
+        curves = fbx.take_curves()
+        self.assertEqual(len(curves), 1, sorted(curves))
+        (take,) = curves.values()
+        tick = ptk.FbxFile.TICKS_PER_SECOND / fbx._fps()
+        joints = [j["name"] for j in rig.record()["joints"]]
+        for target in [*joints, driven]:
+            with self.subTest(node=target):
+                keyed = {k: v for k, v in take.items() if k[0] == target}
+                self.assertTrue(keyed, f"{target} ships unkeyed")
+                for key, (first, last, count) in keyed.items():
+                    self.assertEqual(
+                        (round(first / tick), round(last / tick)), (1, 40), key
+                    )
+                    self.assertGreater(count, 2, key)
 
-    def test_shots_only_ships_no_whole_timeline_take(self):
-        """Shots Only reaches the FBX: the whole-timeline take Maya writes
-        beside the split is dropped from the deliverable, as the GLB drops its
-        stack. It used to be ignored -- an FBX written Shots Only was the same
-        file as Shots + Full Sequence, and Unity imported a Take 001 clip
-        nobody asked for.
-        Added: 2026-10-04
+    def test_a_glb_from_the_per_shot_fbx_has_one_animation_per_shot(self):
+        """The GLB's clips are the FBX's takes: one glTF animation per shot,
+        named after it, and no whole-timeline clip -- the FBX+GLB pair and a
+        GLB-only run (whose intermediate FBX drops ``Take 001`` before the
+        conversion reads it) alike. The GLB carries the ``animation`` record
+        itself, the FBX's, its rate the FBX's time mode.
+        Added: 2026-11-05; the record itself: 2026-11-05
         """
-        fbx = self._export_takes("shots")
-        self.assertEqual(sorted(fbx.take_names()), ["ShotA", "ShotB"])
+        if not ptk.MeshConvert.resolve_binary(required=False, auto_install=False):
+            self.skipTest("FBX2glTF is not installed in this environment")
+        for fmt in ("fbx_glb", "glb"):
+            with self.subTest(output_format=fmt):
+                name = f"glb_{fmt}"
+                out = self._export(name, tasks={"output_format": fmt})
+                glb = os.path.join(out, f"{name}.glb")
+                with ptk.MeshConvert.open_glb(glb) as edit:
+                    names = [a.get("name") for a in edit.gltf.get("animations") or []]
+                    block = ptk.SceneRecords.glb_block(edit.gltf, ptk.SceneRecords.SHOTS)
+                self.assertEqual(names, ["ShotA", "ShotB"])
+                self.assertEqual(block["version"], ptk.SceneRecords.SHOTS.version)
+                self.assertEqual(set(block), {"version", "shots", "fps"})
+                self.assertEqual([s["clip"] for s in block["shots"]], ["ShotA", "ShotB"])
+                self.assertAlmostEqual(block["fps"], self._scene_rate(), places=3)
+                if fmt == "fbx_glb":
+                    fbx = os.path.join(out, f"{name}.fbx")
+                    self.assertEqual(block, self._fbx_record(ptk.FbxFile.load(fbx)))
+                    report = ptk.ExportVerifier(glb=glb, fbx=fbx).run(
+                        [
+                            "check_clips_vs_takes",
+                            "check_cross_clips",
+                            "check_glb_shot_clips",
+                            "check_animation_rate",
+                        ]
+                    )
+                    self.assertTrue(report.ok, report.summary())
+
+    @staticmethod
+    def _scene_rate():
+        """The scene's frame rate, as Maya states it."""
+        from maya import mel
+
+        return mel.eval("currentTimeUnitToFPS")
 
     def test_every_take_of_the_deliverable_carries_every_channel(self):
         """Each shot's take is an exact slice: ``early_only`` is keyed only
         inside ShotA, and Maya's split used to leave ShotB with no channel for
-        it -- Unity then played it at its rest pose for the whole shot.
-        Added: 2026-10-04
+        it -- Unity then played it at its rest pose for the whole shot. Every
+        channel is keyed across each take's window.
+        Added: 2026-10-04; one take per shot since 2026-11-05.
         """
-        fbx = self._export_takes("both")
+        early = cmds.polyCube(name="early_only")[0]
+        cmds.setKeyframe(early, attribute="translateY", time=5, value=0)
+        cmds.setKeyframe(early, attribute="translateY", time=15, value=4)
+        out = self._export("slices", extra=[early])
+        fbx = ptk.FbxFile.load(
+            os.path.join(out, "slices.fbx"),
+            decode_arrays=("KeyTime",),
+            raw_payloads=False,
+        )
         curves = fbx.take_curves()
-        self.assertEqual(sorted(curves), ["ShotA", "ShotB", "Take 001"])
-        tick = ptk.FbxFile.TICKS_PER_SECOND / 24.0
-        whole = set(curves["Take 001"])
-        self.assertTrue(any(key[0] == "early_only" for key in whole))
+        self.assertEqual(sorted(curves), ["ShotA", "ShotB"])
+        tick = ptk.FbxFile.TICKS_PER_SECOND / fbx._fps()
+        every = set(curves["ShotA"]) | set(curves["ShotB"])
+        self.assertTrue(any(key[0] == "early_only" for key in every))
         for take, (start, end) in (("ShotA", (1, 20)), ("ShotB", (21, 40))):
-            self.assertEqual(sorted(whole - set(curves[take])), [], take)
+            self.assertEqual(sorted(every - set(curves[take])), [], take)
             for key, (first, last, _count) in curves[take].items():
                 self.assertEqual(
                     (round(first / tick), round(last / tick)), (start, end), key
@@ -5006,7 +5084,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         tm = exporter.task_manager
 
         def _takes_then_fail(tasks):
-            tm.apply_declared_takes("both")
+            tm.apply_declared_takes()
             self.assertTrue(prepared, "precondition: the publish staged the write")
             tm._last_failed_checks = ["check_path_length"]
             return False
@@ -5017,7 +5095,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
                 export_dir=os.path.dirname(self.temp_path("stopped_takes_run")),
                 objects=[self.cube],
                 output_name="stopped_takes_run",
-                tasks={"apply_declared_takes": "both"},
+                tasks={},
             )
         )
         self.assertTrue(finished, "the session stager never finished")
@@ -5579,16 +5657,16 @@ class TestTaskStateHygiene(MayaTkTestCase):
         later runs -- begin_run (the ONE per-run reset) clears the marker.
         Assigning ``objects`` no longer does: tasks assign it mid-run (the
         carrier fold-in, a filter), and a reset there silently dropped a
-        "Shots Only" choice made one task earlier (2026-09-13)."""
+        choice made one task earlier (2026-09-13)."""
         self.tm._hierarchy_check_ran = True
-        self.tm._clip_mode = "shots"
+        self.tm._realized_takes = (1, 50)
         self.tm.objects = [self.cube_long]
         self.assertTrue(self.tm._hierarchy_check_ran)
-        self.assertEqual(self.tm._clip_mode, "shots")
+        self.assertEqual(self.tm._realized_takes, (1, 50))
         run = ptk.ExportRun(export_path="C:/out/asset.fbx", output_format="glb")
         self.tm.begin_run(run)
         self.assertFalse(self.tm._hierarchy_check_ran)
-        self.assertEqual(self.tm._clip_mode, "both")
+        self.assertIsNone(self.tm._realized_takes)
         self.assertIs(self.tm.run, run)
         self.assertEqual(self.tm.export_path, "C:/out/asset.fbx")
         self.assertTrue(self.tm.run.glb_only)
@@ -7504,28 +7582,6 @@ class TestTexturePathPipeline(MayaTkTestCase):
         status, msgs = self.tm.check_hidden_geometry()
         self.assertTrue(status, f"animated-visibility object flagged: {msgs}")
 
-    # -- leftover UV snapshots (retired check) ----------------------------
-
-    def test_retired_check_uv_snapshots_still_reports_and_warns(self):
-        """Auto Unwrap's backup can no longer outlive its unwrap
-        (``UvUtils.uv_snapshot``), so the exporter stopped running this check;
-        a direct call keeps reporting until ``remove_in``, with a notice.
-        Added: 2026-10-08
-        """
-        import warnings
-
-        shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
-        cmds.polyUVSet(shape, create=True, uvSet="_uv_snap_0ef03239")
-        self.tm.objects = [self.cube_long]
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            status, msgs = self.tm.check_uv_snapshots()
-        self.assertFalse(status)
-        self.assertTrue(any("_uv_snap_0ef03239" in m for m in msgs), msgs)
-        self.assertTrue(
-            any(issubclass(w.category, DeprecationWarning) for w in caught), caught
-        )
-
     # -- default materials -----------------------------------------------
 
     def test_check_default_materials_flags_the_unassigned_mesh(self):
@@ -8277,7 +8333,11 @@ class TestOffsetParentMatrixWrite(MayaTkTestCase):
         """No preset, Smart Bake on (the panel default) and off: the keyed
         prop and the static frozen cube both ship exact, the static one with
         no key at all, the two Smart Bake settings ship the same file
-        motion, and the scene is handed back to the bit."""
+        motion, and the scene is handed back to the bit. The keyed prop's
+        shotless write bakes its one take (2026-11-08: a scene with no shots
+        ships one take of the whole timeline, its driven channels baked), so the
+        plug-in folds its offset; the static cube's writes no take and folds
+        it here."""
         for label, build in (("rig", self._rigged_prop), ("frozen", self._frozen)):
             shipped_by = {}
             for smart_bake in (True, False):
@@ -8293,7 +8353,11 @@ class TestOffsetParentMatrixWrite(MayaTkTestCase):
                         root, f"{label}_{int(smart_bake)}", smart_bake=smart_bake
                     )
 
-                    self.assertFalse(bakes, "the default write baked")
+                    self.assertEqual(
+                        bool(bakes),
+                        label == "rig",
+                        "a shotless write bakes its one take when the export animates",
+                    )
                     self.assertEqual(self._state(node), before)
                     worlds, keys = self._shipped(path, node.rsplit("|", 1)[-1])
                     self._assert_exact(expected, worlds, label)
@@ -8349,8 +8413,9 @@ class TestOffsetParentMatrixWrite(MayaTkTestCase):
         self._assert_exact(expected, worlds, "prebaked prop")
 
     def test_the_scene_comes_back_when_the_write_fails(self):
-        """The fold is undone on the way out of a failed write too."""
-        root, prop = self._rigged_prop()
+        """The fold is undone on the way out of a failed write too (a static
+        offset node: a write that bakes folds nothing)."""
+        root, prop = self._frozen()
         cmds.currentTime(7)
         before = self._state(prop)
         real = cmds.file
@@ -9745,6 +9810,11 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
     def _commit(obj, path):
         from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
+        # The set its marker names, at UV index 1: one an object lacks is
+        # refused, never published on faith (lightmaps v3, 2026-11-07).
+        for shape in cmds.listRelatives(obj, shapes=True, fullPath=True) or []:
+            if "lightmap" not in (cmds.polyUVSet(shape, query=True, allUVSets=True) or []):
+                cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
         LightmapRecords.commit({obj: path})
 
     def _touch(self, *parts):
@@ -9911,6 +9981,10 @@ class TestReferencedModuleCarrierScope(MayaTkTestCase):
         a = cmds.polyCube(name="ModA")[0]
         b = cmds.polyCube(name="ModB")[0]
         cmds.move(3, 0, 0, b)
+        # The set each marker names, at UV index 1: one an object lacks is
+        # refused, never published on faith (lightmaps v3, 2026-11-07).
+        for cube in (a, b):
+            cmds.polyUVSet(cube, copy=True, uvSet="map1", newUVSet="lightmap")
         LightmapRecords.commit({a: self._map("ModA_LM.exr")})
         LightmapRecords.commit({b: self._map("ModB_LM.exr")})
         module = os.path.join(self.root, "module.ma")
@@ -9968,6 +10042,45 @@ class TestReferencedModuleCarrierScope(MayaTkTestCase):
         )
         row = self._gate(fbx)
         self.assertEqual(row.status, "PASS", row.detail)
+
+
+class TestDataExportSnapshotScope(MayaTkTestCase):
+    """The sidecar's data snapshot (``TaskManager._data_export_snapshot``) is
+    the scene's own carrier -- the root-level ``data_export`` -- and only when
+    the export set ships it: a grouped module's own ``data_export`` is never
+    the scene's (``ptk.SceneStoreBase.is_scene_carrier``), and an empty export
+    set ships no carrier (``cmds.ls([])`` lists every node). Added: 2026-11-08
+    """
+
+    def _snapshot(self, objects):
+        manager = SceneExporter(log_level="ERROR").task_manager
+        manager.objects = objects
+        return manager._data_export_snapshot()
+
+    def _scene_carrier(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        DataNodes.write(ptk.Scope.DELIVERABLE, "probe", '"scene"')
+        return [p for p in cmds.ls("data_export", long=True) if p.count("|") == 1][0]
+
+    def test_a_grouped_modules_carrier_is_not_the_scenes(self):
+        group = cmds.group(empty=True, name="Module")
+        carrier = cmds.createNode("transform", name="data_export", parent=group)
+        carrier = cmds.ls(carrier, long=True)[0]  # as the export set holds it
+        cmds.addAttr(carrier, longName="probe", dataType="string")
+        cmds.setAttr(f"{carrier}.probe", '"module"', type="string")
+        cube = cmds.polyCube(name="Cube")[0]
+
+        self.assertEqual(self._snapshot([group, carrier, cube]), {})
+        root = self._scene_carrier()
+        self.assertEqual(self._snapshot([cube, carrier]), {})
+        self.assertEqual(self._snapshot([cube, root]).get("probe"), "scene")
+
+    def test_an_empty_export_set_ships_no_carrier(self):
+        self._scene_carrier()
+
+        self.assertEqual(self._snapshot([]), {})
+        self.assertEqual(self._snapshot(None), {})
 
 
 class TestFlattenShearedChains(unittest.TestCase):
@@ -11146,8 +11259,8 @@ class TestBakeRangeModes(MayaTkTestCase):
         timeline must not ship the frames outside them.
 
         Keys span 10-200; the shots span 20-120. The old panel could only get
-        this by arming a take SPLIT -- which a GLB deliverable never wants,
-        since its clips are rebuilt from the whole-timeline stack anyway.
+        this by arming a take SPLIT, which every FBX run now arms anyway: the
+        bake range still bounds what the takes are cut from.
         """
         self._declare_shots((20, 60), (80, 120))
 
@@ -11195,7 +11308,7 @@ class TestBakeRangeModes(MayaTkTestCase):
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         self._declare_shots((20, 60), (80, 120))
-        self.tm.apply_declared_takes("both")
+        self.tm.apply_declared_takes()
         self.tm.set_bake_animation_range("auto")
         FbxUtils.reset_takes()  # the hook's after-export, mid-write
 
@@ -11212,7 +11325,7 @@ class TestBakeRangeModes(MayaTkTestCase):
             cmds.unloadPlugin("fbxmaya", force=True)
         self.addCleanup(cmds.loadPlugin, "fbxmaya", quiet=True)
 
-        self.tm.apply_declared_takes("both")
+        self.tm.apply_declared_takes()
 
         self.assertTrue(cmds.pluginInfo("fbxmaya", query=True, loaded=True))
 
@@ -11222,141 +11335,28 @@ class TestBakeRangeModes(MayaTkTestCase):
         self.tm.set_bake_animation_range(True)
         self.assertEqual(self._range(), (10, 200))
 
-    # -- the published clip origin -----------------------------------------
+    # -- a split resamples ----------------------------------------------------
     #
-    # The origin is a DIFFERENT number from the range, and conflating the two
-    # shipped a production assembly whose every shot played the tail of the
-    # shot before it. The bake range bounds what the plugin RE-BAKES; an
-    # authored curve is written whole (measured on Maya 2025 / FBX 2020.3.6:
-    # a curve keyed 0-100 exports as 0-100 under a 20-80 range, with
-    # FBXExportBakeResampleAnimation off AND on). So the stack carries the
-    # KEY extent, and that is what every GLB clip has to be cut against.
-
-    def _published_origin(self):
-        """The clip span the run's publish hands the producers (the export
-        context's ``clip_span``, the ``*`` origin every GLB clip is cut
-        against), captured instead of published."""
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
-        seen = {}
-
-        def capture(ctx=None, only=None):
-            seen["span"] = ctx.clip_span if ctx is not None else None
-
-        patcher = patch.object(FbxUtils, "publish", staticmethod(capture))
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        return seen
-
-    def test_clip_origin_is_the_key_extent_not_the_bake_range(self):
-        """Auto clamps the RANGE to the shots but the stack still carries 10-200.
-
-        Publishing 20-120 as the origin would slide every clip cut from that
-        stack by 10 frames -- the exact defect measured on the PROPS assembly,
-        where a stack carrying 80-4281 was published as 161-4275 and all 18
-        shots played 81 frames early.
-        """
-        self._declare_shots((20, 60), (80, 120))
-        self.tm.set_bake_animation_range("auto")
-        seen = self._published_origin()
-
-        self.tm._publish_scene_records()
-
-        self.assertEqual(self._range(), (20, 120))  # the range still clamps
-        self.assertEqual(seen.get("span"), (10, 200))  # the origin does not
-
-    def test_the_range_task_does_not_publish_the_origin(self):
-        """The range task owns the RANGE. Nothing else -- and that is the fix.
-
-        It used to publish the origin too, on the reasoning that it runs last
-        in TASK_ORDER. It does; but the export BRACKET re-ran every producer
-        after the last task, and the visibility producer republished the whole
-        channel, so the value never survived to the write. Three PROPS exports
-        shipped 18 shots cut 81 frames early while logging the right number.
-        The origin is now an INPUT: ``export_data_node`` measures it and hands
-        it to the producers as the export context's ``clip_span``.
-        """
-        self._declare_shots((20, 60), (80, 120))
-        seen = self._published_origin()
-
-        self.tm.set_bake_animation_range("auto")
-
-        self.assertEqual(self._range(), (20, 120))
-        self.assertIsNone(
-            seen.get("span"),
-            "the range task must not publish the origin -- export_data_node "
-            "hands it to the producers as the export context's clip_span",
-        )
-
-    # -- the origin of a resampling split ------------------------------------
-    #
-    # A take split resamples EVERY curve over the bake range (FbxUtils.apply_takes,
-    # which is what makes each take an exact slice), so the whole-timeline
-    # take's first key is the range's first frame wherever the scene's first
-    # key comes later -- measured on a curve keyed 10-100 under a 1-100 range:
-    # the take's first key moved from 10 to 1, and a GLB converter puts the
-    # first key at t=0. The range is set after the publish, so the origin is
-    # predicted from the same readings the range task uses.
+    # Every take is a clip every deliverable plays -- the FBX's for Unity, the
+    # GLB's converted from them -- so a split resamples every curve over the
+    # bake range (FbxUtils.apply_takes), the GLB-only intermediate too.
 
     def _splitting(self, **modes):
         self.tm.run = self.tm.run.replace(
             **{"splits_takes": True, "bake_range_mode": "auto", **modes}
         )
 
-    def test_a_resampling_split_starts_the_origin_at_the_first_shot(self):
-        """A shot that opens before the first key opens the stack with it."""
-        self._declare_shots((1, 60), (80, 120))
-        self._splitting()
-        seen = self._published_origin()
-
-        self.tm._publish_scene_records()
-
-        self.assertEqual(seen.get("span"), (1, 200))
-
-    def test_shots_inside_the_keys_leave_the_origin_on_the_keys(self):
-        """The common case is unchanged: the keys already enclose the shots."""
-        self._declare_shots((20, 60), (80, 120))
-        self._splitting()
-        seen = self._published_origin()
-
-        self.tm._publish_scene_records()
-
-        self.assertEqual(seen.get("span"), (10, 200))
-
-    def test_a_scene_range_split_reaches_the_scene_range(self):
-        """The Scene Animation Range row widens the range past keys and shots."""
-        cmds.playbackOptions(animationStartTime=5, animationEndTime=310)
-        self._declare_shots((20, 60))
-        self._splitting(bake_range_mode="scene")
-        seen = self._published_origin()
-
-        self.tm._publish_scene_records()
-
-        self.assertEqual(seen.get("span"), (5, 310))
-
-    def test_a_glb_only_split_keeps_the_origin_on_the_keys(self):
-        """Its intermediate FBX ships no take anyone reads (the GLB's clips
-        are cut from the whole-timeline take), so it is not resampled and its
-        origin stays on the keys -- the GLB route exactly as before."""
-        self._declare_shots((1, 60), (80, 120))
-        self._splitting(output_format="glb")
-        seen = self._published_origin()
-
-        self.tm._publish_scene_records()
-
-        self.assertEqual(seen.get("span"), (10, 200))
-
     def _resampled_after_split(self, preset=False, **modes):
         """Whether the write is armed to resample once the takes are applied,
-        from Resample All as a loaded preset left it (*preset*). Through the
-        real publish: the takes are read off the carrier it commits."""
+        from Resample All as a loaded preset left it (*preset*); the takes are
+        the shot store's."""
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         self._declare_shots((20, 60), (80, 120))
         self._splitting(**modes)
         self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v {'true' if preset else 'false'}")
 
-        self.tm.apply_declared_takes("both")
+        self.tm.apply_declared_takes()
 
         self.assertEqual(
             FbxUtils.declared_takes()[0]["name"], "Shot_0", "no takes were applied"
@@ -11367,142 +11367,20 @@ class TestBakeRangeModes(MayaTkTestCase):
         """An FBX deliverable's takes are exact slices: Resample All is armed."""
         self.assertTrue(self._resampled_after_split())
 
-    def test_a_glb_only_split_does_not_resample(self):
-        self.assertFalse(self._resampled_after_split(output_format="glb"))
+    def test_a_glb_only_split_resamples_too(self):
+        """Its intermediate's takes are the GLB's clips (one animation per
+        take), so they are exact slices as well; the write plan says so."""
+        self.assertTrue(self._resampled_after_split(output_format="glb"))
+        self.assertTrue(self.tm.write_plan().resample_all)
 
-    def test_a_glb_only_split_overrules_a_preset_that_resamples(self):
-        """Its stack stays as authored, as its published origin says, whatever
-        the loaded preset left on: with Resample All left on, the
-        intermediate's whole-timeline take opened on the bake range while the
-        origin stayed on the keys. The preset's value is back after the
-        write."""
+    def test_the_preset_resample_value_is_back_after_the_split(self):
+        """The split arms Resample All over a preset that left it off, and
+        puts the preset's value back with the takes."""
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        self.addCleanup(self.mel.eval, f"{FbxUtils.RESAMPLE_ALL} -v false")
-        self.assertFalse(self._resampled_after_split(preset=True, output_format="glb"))
+        self.assertTrue(self._resampled_after_split(preset=False))
         FbxUtils.reset_takes()
-        self.assertTrue(FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL))
-
-    def test_clip_origin_is_published_when_baking_is_disabled(self):
-        """No bake still means a stack: the curves ship as authored."""
-        self.mel.eval("FBXExportBakeComplexAnimation -v false")
-        seen = self._published_origin()
-
-        self.tm._publish_scene_records()
-
-        self.assertEqual(seen.get("span"), (10, 200))
-
-    # -- the origin of a write the preset resamples -------------------------
-    #
-    # A run that splits no takes (Full Sequence clips, or no shots) keeps the
-    # loaded preset's Resample All as set, and with it on the write keys every
-    # curve over the bake range: the whole-timeline take reaches the range
-    # wherever it runs past the keys. The origin reports what that FBX carries.
-
-    def _origin_and_fbx_span(self, mode):
-        """The clip origin a shotless run publishes under a preset that left
-        Resample All on, and the span its whole-timeline take carries once
-        the FBX is written (``FbxFile.take_spans``, the measurement the GLB
-        conversion places its clips by)."""
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
-        self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v true")
-        self.addCleanup(self.mel.eval, f"{FbxUtils.RESAMPLE_ALL} -v false")
-        cmds.playbackOptions(animationStartTime=5, animationEndTime=310)
-        self.tm.run = self.tm.run.replace(bake_range_mode=mode)
-        seen = self._published_origin()
-
-        self.tm._publish_scene_records()
-        self.tm.set_bake_animation_range(mode)
-        artifacts = ptk.TempArtifacts("se_resampled_origin", policy="scoped")
-        self.addCleanup(artifacts.cleanup)
-        fbx_path = artifacts.path(extension=".fbx")
-        cmds.select(self.group, replace=True)
-        cmds.file(
-            fbx_path,
-            force=True,
-            options="v=0;",
-            type="FBX export",
-            exportSelected=True,
-        )
-        self.tm.run_deferred_restores()
-
-        fbx = ptk.FbxFile.load(fbx_path, raw_payloads=False, span_arrays=("KeyTime",))
-        ((first, last),) = fbx.take_spans().values()
-        fps = self.mel.eval("currentTimeUnitToFPS()")
-        return seen.get("span"), (round(first * fps), round(last * fps))
-
-    def test_a_resampling_preset_publishes_the_scene_range_its_fbx_carries(self):
-        """The Scene Animation Range row: the write keys 5-310 around keys at
-        10-200, and the origin used to say 10-200 -- check_clip_origin WARNed
-        on every such export, and any reader of the carrier was 5 frames off."""
-        published, carried = self._origin_and_fbx_span("scene")
-
-        self.assertEqual(carried, (5, 310))
-        self.assertEqual(published, carried)
-
-    def test_a_resampling_preset_with_the_range_off_publishes_its_fbx_span(self):
-        """Bake Range OFF: the write bakes over the range the preset carries
-        (1-48 here), and the origin follows the keys and that range alike."""
-        published, carried = self._origin_and_fbx_span(None)
-
-        self.assertEqual(published, carried)
-
-    def test_a_resampling_preset_leaves_a_key_extent_origin_alone(self):
-        """Auto over a shotless scene bakes the key extent itself, so the
-        resample moves nothing and the origin stays on the keys."""
-        published, carried = self._origin_and_fbx_span("auto")
-
-        self.assertEqual(published, (10, 200))
-        self.assertEqual(published, carried)
-
-    def test_check_clip_origin_passes_an_export_its_preset_resamples(self):
-        """End to end, the verifier's view: the carrier's published ``*`` and
-        the span the GLB's clips were cut against -- measured from the FBX by
-        the conversion -- agree, so ``check_clip_origin`` passes instead of
-        WARNing that the producer's prediction is off. Keyed visibility,
-        because with no shots that channel is what publishes the origin."""
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
-        cmds.setKeyframe(self.child, attribute="visibility", time=10, value=1)
-        cmds.setKeyframe(self.child, attribute="visibility", time=150, value=0)
-        cmds.playbackOptions(animationStartTime=5, animationEndTime=310)
-        artifacts = ptk.TempArtifacts("se_resampled_verify", policy="scoped")
-        self.addCleanup(artifacts.cleanup)
-        out = artifacts.dir_path()
-        preset = os.path.join(out, "resample_all.fbxexportpreset")
-        with open(preset, "w") as fh:
-            fh.write("; preset\n")
-
-        def _load(*_args, **_kwargs):
-            # What a preset that bakes with Resample All on leaves in the plugin.
-            self.mel.eval("FBXExportBakeComplexAnimation -v true")
-            self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v true")
-
-        # The "preset" and the GLB pins stay in the plugin after the write.
-        self.addCleanup(self.mel.eval, "FBXResetExport")
-        exporter = SceneExporter(log_level="WARNING")
-        exporter.confirm = lambda question: False
-        with patch.object(SceneExporter, "load_fbx_export_preset", side_effect=_load):
-            self.assertTrue(
-                exporter.perform_export(
-                    export_dir=out,
-                    objects=[self.group],
-                    preset_file=preset,
-                    output_name="resampled",
-                    tasks={
-                        "export_data_node": True,
-                        "set_bake_animation_range": "scene",
-                        "output_format": "fbx_glb",
-                    },
-                )
-            )
-        report = ptk.ExportVerifier(
-            glb=os.path.join(out, "resampled.glb"),
-            fbx=os.path.join(out, "resampled.fbx"),
-        ).run()
-        rows = {row.check: row.status for row in report.rows}
-        self.assertEqual(rows.get("clip_origin"), "PASS", report.summary())
+        self.assertFalse(FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL))
 
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):

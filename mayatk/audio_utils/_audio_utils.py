@@ -1009,10 +1009,11 @@ class AudioUtils(ptk.HelpMixin):
         """Return the keyed "on" events as ``[(frame, label), ...]``.
 
         Iterates all start keys across all tracks, time-sorted. Frames are
-        raw Maya frame numbers rounded to int — rebasing (playback min, take
-        start) is caller policy, applied by
-        :meth:`mayatk.audio_utils.audio_clips.AudioClips.export_record` when
-        it builds the ``audio`` record.
+        raw Maya frame numbers rounded to int, on the timeline as keyed: the
+        ``audio`` record counts each cue from its clip's start instead
+        (:meth:`mayatk.audio_utils.audio_clips.AudioClips.export_record` cuts
+        the tracks' spans with ``ptk.AudioUtils.clip_cues``), and reads no
+        events from here.
 
         Parameters:
             carrier: Carrier node to read tracks from.  Defaults to the

@@ -884,18 +884,25 @@ class TestBlenderBridgeShotManifest(MayaTkTestCase):
         self.assertIsNot(merged.get("INCLUDE_SCENE_DATA"), False)
 
     def test_every_portable_record_rides_the_records_section(self):
-        """An emissive group crosses with its registry, its membership (scoped to
-        the send, spelled by the carrier) and each member's face count."""
+        """An emissive group crosses as its copies' tags and emission keys
+        (scoped to the copies a sent face wears): the FBX carries the
+        materials and their faces, never the tags."""
+        from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.emissive_groups import EmissiveGroups
 
         cube, _shot = self._scene_with_a_shot()
+        glow = cmds.shadingNode("standardSurface", asShader=True, name="glowMat")
+        cmds.setAttr(f"{glow}.emission", 1.0)
+        MatUtils.assign_mat([cube, "stayed"], glow)
         EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])
-        EmissiveGroups.add_group("rim", ["stayed.f[0]"])  # not sent
+        EmissiveGroups.add_group("rim", ["stayed.f[0]"])  # its own copy, not sent
+        EmissiveGroups.key_weight("glow", 0.5, frame=4)
         records = self._manifest(objects=[cube])["records"]
         payload = records[ptk.SceneRecords.EMISSIVE_REGISTRY.key]
-        self.assertEqual(sorted(payload["registry"]["groups"]), ["glow", "rim"])
-        self.assertEqual(payload["members"], {"glow": {"ref:sent_cube": [1, 3]}})
-        self.assertEqual(payload["faces"], {"ref:sent_cube": 6})
+        self.assertEqual(
+            payload,
+            {"copies": {"glowMat_glow": {"group": "glow", "base": "glowMat", "strength": 1.0, "keys": [[4.0, 0.5]]}}},
+        )
         # A record bound to Maya's constructs never rides a hand-off.
         self.assertEqual(list(records), [ptk.SceneRecords.EMISSIVE_REGISTRY.key])
 
@@ -1031,22 +1038,20 @@ class TestHandoffShipsOneWholeTake(MayaTkTestCase):
         per-shot takes beside a whole take bounded by the shots' union, so
         keys outside every shot never shipped.
         Fixed: 2026-10-13"""
-        from mayatk.node_utils.data_nodes import DataNodes
 
         cmds.currentUnit(time="film")
         cmds.playbackOptions(animationStartTime=1, animationEndTime=100)
         cube = cmds.ls(cmds.polyCube(name="whole_take_cube")[0], long=True)[0]
         for frame, value in ((1, 0.0), (40, 4.0), (100, 10.0)):
             cmds.setKeyframe(cube, attribute="translateX", t=frame, v=value)
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes,
-            {
-                "shots": [
-                    {"clip": "Shot_A", "start": 10, "end": 30, "objects": []},
-                    {"clip": "Shot_B", "start": 50, "end": 70, "objects": []},
-                ]
-            },
-        )
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        # The scene's shots: the store is where an export reads its takes.
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("Shot_A", 10, 30)
+        store.define_shot("Shot_B", 50, 70)
         self.assertEqual(len(handoff_export.FbxUtils.declared_takes()), 2)
 
         BlenderBridge()._export_fbx(
@@ -1071,6 +1076,89 @@ class TestHandoffShipsOneWholeTake(MayaTkTestCase):
         self.assertIs(BlenderBridge.split_takes, False)
         self.assertIs(UnityBridge.split_takes, True)
         self.assertIs(WebXrPreview.split_takes, True)
+
+
+class TestStaticHandoffShipsNoAnimation(MayaTkTestCase):
+    """A hand-off sent with ``INCLUDE_ANIMATION`` off carries no animation:
+    no take, no curve -- what blendertk's twin writes (``bake_anim`` off).
+
+    Measured (Maya 2025 / FBX 2020.3.6): a write with the plug-in's Animation
+    include group off holds no AnimationStack, AnimationLayer,
+    AnimationCurveNode or AnimationCurve at all.
+    """
+
+    _ANIMATION_OBJECTS = (
+        "AnimationStack",
+        "AnimationLayer",
+        "AnimationCurveNode",
+        "AnimationCurve",
+    )
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        tmp = ptk.TempArtifacts("mtk_handoff_static", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.dir_path()
+        self.addCleanup(FbxUtils.reset_export)
+        self.addCleanup(TestHandoffShipsOneWholeTake._drop_carrier)
+        cmds.currentUnit(time="film")
+        cmds.playbackOptions(min=1, max=24, ast=1, aet=24)
+        self.cube = cmds.ls(cmds.polyCube(name="static_probe")[0], long=True)[0]
+        cmds.setKeyframe(self.cube, attribute="translateX", t=1, v=0.0)
+        cmds.setKeyframe(self.cube, attribute="translateX", t=24, v=5.0)
+
+    def _send(self, bridge, animated):
+        """Write the keyed cube through *bridge*; the file and the context's
+        ``animated``."""
+        path = os.path.join(
+            self.dir, f"{bridge.__name__}_{'anim' if animated else 'static'}.fbx"
+        )
+        seen = {}
+        original = bridge._handoff_context
+
+        def spy(this, transforms, writer="fbx", animated=None):
+            seen["animated"] = animated
+            return original(this, transforms, writer=writer, animated=animated)
+
+        with mock.patch.object(bridge, "_handoff_context", spy):
+            bridge()._export_fbx(
+                [self.cube],
+                path,
+                {"INCLUDE_ANIMATION": animated, "EMBED_TEXTURES": False},
+            )
+        fbx = ptk.FbxFile.load(path, raw_payloads=False, span_arrays=("KeyTime",))
+        return fbx, seen["animated"]
+
+    def test_a_static_send_of_a_keyed_node_ships_no_animation(self):
+        """Bug: the hand-off reset the plug-in to its factory export state,
+        whose Animation include group is on, and a static plan only turned
+        the bake off -- ``Take 001`` shipped the scene's curves unbaked.
+        Fixed: 2026-11-05"""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        for bridge in (BlenderBridge, WebXrPreview):
+            with self.subTest(bridge=bridge.__name__):
+                fbx, animated = self._send(bridge, animated=False)
+
+                self.assertEqual(fbx.take_names(), [])
+                self.assertEqual(fbx.take_curves(), {})
+                for kind in self._ANIMATION_OBJECTS:
+                    self.assertEqual(fbx.object_names(kind), [], kind)
+                self.assertIs(animated, False)
+                # The plug-in is left as the reset left it: a static hand-off
+                # does not turn animation off for the user's next export.
+                self.assertTrue(FbxUtils.animation_export_enabled())
+
+    def test_an_animated_send_still_ships_the_curves(self):
+        fbx, animated = self._send(BlenderBridge, animated=True)
+
+        self.assertEqual(len(fbx.take_names()), 1, fbx.take_names())
+        (curves,) = fbx.take_curves().values()
+        self.assertIn(("static_probe", "Lcl Translation", "d|X"), curves)
+        self.assertIs(animated, True)
 
 
 class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
@@ -1584,7 +1672,8 @@ class TestBridgeScopeParam(unittest.TestCase):
             "mayatk.mat_utils.substance_bridge",
             "_substance_bridge",
             "SubstanceBridge",
-            ("import", "bake_lighting"),
+            # The templates that send a mesh; the rest run on an open project.
+            ("new_project", "update_mesh"),
         ),
     )
 
@@ -2617,13 +2706,14 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         not disagree about whether shots survive.
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
-        from mayatk.node_utils.data_nodes import DataNodes
 
-        # A scene that declares one take: the shot record's clip, with its range.
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes,
-            {"shots": [{"clip": "Shot_1", "start": 1, "end": 10, "objects": []}]},
-        )
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        # A scene that declares one take: one shot in its store.
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("Shot_1", 1, 10)
 
         for animation, expected in ((True, 1), (False, 0)):
             with self.subTest(animation=animation):
@@ -4885,8 +4975,9 @@ class TestHandoffWritePlan(MayaTkTestCase):
                 self.assertFalse(keys, "a static hand-off keyed a static node")
 
     def test_an_animated_unity_handoff_still_bakes(self):
-        """The Unity bridge carries animation: its write bakes, which folds
-        the offset itself -- nothing changes for it."""
+        """An animated hand-off's write bakes, which folds the offset itself --
+        nothing changes for it. (UnityBridge stands in for a hand-off that splits
+        takes; its own send writes through the Scene Exporter.)"""
         from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
 
@@ -4901,7 +4992,9 @@ class TestHandoffWritePlan(MayaTkTestCase):
             return original(cls, objects, plan, logger)
 
         with mock.patch.object(FbxUtils, "offsets_folded", classmethod(spy)):
-            UnityBridge()._export_fbx([cube], path, {"EMBED_TEXTURES": False})
+            UnityBridge()._export_fbx(
+                [cube], path, {"INCLUDE_ANIMATION": True, "EMBED_TEXTURES": False}
+            )
 
         self.assertTrue(seen["plan"].bakes)
         got, _ = self._shipped(path, "handoff_frozen")
@@ -4965,21 +5058,19 @@ class TestHandoffWritePlan(MayaTkTestCase):
         the whole take was resampled over all of it."""
         from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
-        from mayatk.node_utils.data_nodes import DataNodes
 
         cmds.currentUnit(time="film")
         cube = cmds.ls(cmds.polyCube(name="split_cube")[0], long=True)[0]
         for frame, value in ((1, 0.0), (40, 4.0), (100, 10.0)):
             cmds.setKeyframe(cube, attribute="translateX", t=frame, v=value)
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes,
-            {
-                "shots": [
-                    {"clip": "Shot_A", "start": 10, "end": 30, "objects": []},
-                    {"clip": "Shot_B", "start": 50, "end": 70, "objects": []},
-                ]
-            },
-        )
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        # The scene's shots: the store is where an export reads its takes.
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("Shot_A", 10, 30)
+        store.define_shot("Shot_B", 50, 70)
         path = os.path.join(self.dir, "split.fbx")
         seen = {}
         real = cmds.file
@@ -4990,10 +5081,18 @@ class TestHandoffWritePlan(MayaTkTestCase):
             return real(*args, **kwargs)
 
         with mock.patch.object(cmds, "file", side_effect=writing):
-            UnityBridge()._export_fbx([cube], path, {"EMBED_TEXTURES": False})
+            UnityBridge()._export_fbx(
+                [cube], path, {"INCLUDE_ANIMATION": True, "EMBED_TEXTURES": False}
+            )
 
         self.assertEqual(seen["range"], (10.0, 70.0))
         fbx = ptk.FbxFile.load(path, raw_payloads=False, span_arrays=("KeyTime",))
-        curves = fbx.take_curves()["Take 001"]
-        # Resampled over the union (61 frames) beside the keys outside it.
-        self.assertEqual(curves[("split_cube", "Lcl Translation", "d|X")][2], 61 + 2)
+        # One take per shot (Maya's whole-timeline take leaves the file), each
+        # resampled across its own window.
+        self.assertEqual(fbx.take_names(), ["Shot_A", "Shot_B"])
+        tick = ptk.FbxFile.TICKS_PER_SECOND / 24.0
+        for take, window in (("Shot_A", (10, 30)), ("Shot_B", (50, 70))):
+            first, last, _count = fbx.take_curves()[take][
+                ("split_cube", "Lcl Translation", "d|X")
+            ]
+            self.assertEqual((round(first / tick), round(last / tick)), window, take)

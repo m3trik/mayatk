@@ -6,7 +6,7 @@ except ImportError:
     cmds = None
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import pythontk as ptk
 
 
@@ -22,6 +22,7 @@ from mayatk.mat_utils.render_opacity.channels import (
     CHANNELS,
     HIGHLIGHT,
     OPACITY,
+    PRESENCE,
     ChannelSpec,
 )
 
@@ -35,7 +36,7 @@ class RenderEffects(ptk.LoggingMixin):
     (:mod:`~mayatk.mat_utils.render_opacity.channels`), one transport. The
     authored material is never bound or duplicated; lookdev is the WebXR push.
     ``opacity`` is the first channel and the one that drives *presence*
-    (mirrors to ``visibility`` and gates the GLB); ``highlight`` is an
+    (mirrors to ``visibility``; at 0 the object is hidden); ``highlight`` is an
     additive emissive intensity with a per-object colour.
 
     .. note:: Use :meth:`key_fade` to animate an opacity fade with
@@ -443,16 +444,15 @@ class RenderEffects(ptk.LoggingMixin):
     def prepare_for_export(cls) -> List[str]:
         """Stage the curve-proxy transport for an FBX write; write nothing else.
 
-        One transient child per keyed channel carries the per-object curve to
-        engines that flatten custom-property animation
+        One transient child per keyed channel carries the per-object curve --
+        the animated-value transport every reader rebinds
         (:meth:`stage_export_proxies`); :meth:`finish_export` removes them after
-        the write. The scene's animation is not touched: the GLB derives
-        presence from the authored channels itself
-        (``ptk.MeshConvert.apply_glb_visibility``), so an opacity keyed by hand
-        gets no visibility mirror here. The missing-mirror repair this method
-        used to run made what the track walk published depend on which producer
-        ran first, and keyed the artist's scene during an export. The staging
-        covers every keyed channel in the scene.
+        the write. The scene's animation is not touched: an opacity at 0 is
+        presence by the record's own contract (``render_effects`` v2), so an
+        opacity keyed by hand gets no visibility mirror here. The missing-mirror
+        repair this method used to run made what the track walk published
+        depend on which producer ran first, and keyed the artist's scene during
+        an export. The staging covers every keyed channel in the scene.
 
         Returns:
             An empty list (it named the objects whose visibility was
@@ -471,7 +471,25 @@ class RenderEffects(ptk.LoggingMixin):
 
         Idempotent: with nothing staged it changes nothing.
         """
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        EmissiveGroups.remove_export_proxies()
         cls.remove_export_proxies()
+
+    @classmethod
+    def scope_export(cls, ctx) -> List[str]:
+        """Narrow this record's staging to the write's scope once a publish
+        knows it (``FbxUtils.HOOKS["staging_scope"]``): an emissive-group
+        copy's proxy rides the carrier, which every write ships, so a writer
+        that staged before its scoped publish drops the proxies of copies it
+        does not ship. A node's proxy needs nothing: it rides its node.
+
+        Returns:
+            The proxies removed.
+        """
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        return EmissiveGroups.scope_export_proxies(ctx)
 
     # ------------------------------------------------------------------
     # Curve-proxy transport (FBX -> Unity)
@@ -482,12 +500,15 @@ class RenderEffects(ptk.LoggingMixin):
     #: Unity importer rebinds and deletes them.
     PROXY_MARKER = ptk.MeshConvert.CURVE_PROXY_MARKER
     #: ``<node leaf>__<channel>``: the Unity importer parses the parent path
-    #: and the channel name off the leaf.
-    PROXY_SEPARATOR = "__"
+    #: and the channel name off the leaf (``ptk.SceneRecords.TRANSPORT``).
+    PROXY_SEPARATOR = ptk.SceneRecords.TRANSPORT.separator
 
     @classmethod
     def stage_export_proxies(cls) -> List[str]:
-        """Stage one transient child transform per keyed channel, for the FBX write.
+        """Stage one transient child transform per keyed channel, for the FBX write
+        -- the channels :meth:`visibility_tracks` publishes, each on its proxy
+        (``ptk.SceneRecords.TRANSPORT``), so the record and the file's curves
+        name the same set (the ``fbx_render_effects`` gate holds them equal).
 
         Unity imports animated custom properties flattened onto the root
         Animator with EMPTY paths, so several objects' ``opacity`` (or
@@ -502,6 +523,13 @@ class RenderEffects(ptk.LoggingMixin):
         proxy's 0->1 arrived in the FBX exactly). Blender's emissive-groups
         transport is the same idiom.
 
+        ``visibility`` -- a node's keyed visibility, where no opacity channel
+        mirrors onto it -- rides the transport as its fellow channels do, a
+        stepped proxy (measured 2026-11-05: FBX2glTF carries no native
+        ``Visibility`` in any form, and Maya's split takes drop a held value a
+        take does not key), its keys the boolean timeline Maya draws
+        (:meth:`_stepped_track`).
+
         Strictly export-transient: stamped with :attr:`PROXY_MARKER` and
         removed by :meth:`remove_export_proxies`. Stale proxies from an
         interrupted export are pre-cleaned here.
@@ -511,16 +539,16 @@ class RenderEffects(ptk.LoggingMixin):
         """
         cls.remove_export_proxies()  # stale pre-clean (idempotent)
         proxies: List[str] = []
-        for node, plug, spec in cls._channel_curves():
+        for node, plug, channel in cls._staged_channels():
             leaf = node.split("|")[-1].split(":")[-1]
-            name = f"{leaf}{cls.PROXY_SEPARATOR}{spec.name}"
+            name = ptk.SceneRecords.TRANSPORT.proxy_name(leaf, channel)
             if cmds.objExists(name):
                 cls.logger.warning(
                     "Curve-proxy name %r is taken by an existing object -- %s's "
                     "%s animation will not ship this export.",
                     name,
                     leaf,
-                    spec.name,
+                    channel,
                 )
                 continue
             proxy = cmds.createNode(
@@ -529,10 +557,22 @@ class RenderEffects(ptk.LoggingMixin):
             proxy = (cmds.ls(proxy, long=True) or [proxy])[0]
             cmds.addAttr(proxy, longName=cls.PROXY_MARKER, attributeType="bool")
             cmds.setAttr(f"{proxy}.{cls.PROXY_MARKER}", True)
-            # Copy the curve, tangents included, onto scaleX. copyKey/pasteKey
-            # keeps the authored shape; a baked curve would be per-frame.
-            cmds.copyKey(plug)
-            cmds.pasteKey(f"{proxy}.scaleX", option="replaceCompletely")
+            if channel == "visibility":
+                # The boolean Maya draws, stated as steps: a curve on a bool
+                # is evaluated, never read off its tangents.
+                for frame, value in cls._stepped_track(plug):
+                    cmds.setKeyframe(
+                        f"{proxy}.scaleX",
+                        time=frame,
+                        value=value,
+                        inTangentType="stepnext",
+                        outTangentType="step",
+                    )
+            else:
+                # Copy the curve, tangents included, onto scaleX. copyKey/
+                # pasteKey keeps the authored shape; a baked one is per-frame.
+                cmds.copyKey(plug)
+                cmds.pasteKey(f"{proxy}.scaleX", option="replaceCompletely")
             proxies.append(proxy)
         if proxies:
             cls.logger.info(
@@ -541,7 +581,140 @@ class RenderEffects(ptk.LoggingMixin):
                 "y" if len(proxies) == 1 else "ies",
                 ", ".join(p.split("|")[-1] for p in proxies),
             )
-        return proxies
+        # The emissive-group copies' weights ride the same transport (material
+        # targets under the carrier): this record's stager stages all of it.
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        return proxies + EmissiveGroups.stage_export_proxies(FbxUtils.write_context())
+
+    @classmethod
+    def _staged_channels(cls) -> List[Tuple[str, str, str]]:
+        """``(long node, plug, channel)`` for every channel a curve proxy
+        carries (:meth:`stage_export_proxies`, :meth:`effect_curves`): each
+        keyed render-effect channel, and each keyed ``visibility`` no
+        presence channel mirrors onto."""
+        staged = [(node, plug, spec.name) for node, plug, spec in cls._channel_curves()]
+        staged += [
+            (node, plug, "visibility")
+            for node, plug in cls._visibility_curves().items()
+            if not cls._mirrored(node)
+        ]
+        return staged
+
+    @classmethod
+    def effect_curves(cls, ctx: Optional[ptk.ExportContext] = None) -> Dict[str, Any]:
+        """The scene's render-effect curves as a write's curve proxies carry
+        them, in the scene's frames -- for a write that carries no take to
+        hold them: the WebXR push with animation off states them for its build
+        (``ptk.MeshConvert.effect_preview_curves``). Mirror of blendertk's.
+
+        Each curve is one :meth:`stage_export_proxies` would stage, each key
+        ``[frame, value, interpolation]`` -- its segment's: ``"step"`` (a
+        ``step`` or ``stepnext`` out-tangent, the latter's jump stated at the
+        key) or ``"linear"``, and a curved segment as the curve's own values
+        at each frame inside it, linear between. ``visibility`` is the boolean
+        Maya draws (:meth:`_stepped_track`), stepped. Each animated
+        emissive-group copy's weight rides as its material's ``emission``
+        (``EmissiveGroups.weight_curves``).
+
+        ``start`` is the frame an animated write of the same nodes puts at its
+        clip's t=0: the first key of every curve it ships (the converter opens
+        a take on its first key over all its curves), so a push places an
+        effect where it would with animation on.
+
+        Parameters:
+            ctx: The write's decisions (``nodes``): only the curves of the
+                nodes it ships, and their keys for the origin.
+
+        Returns:
+            ``{"curves": [{"target", "channel", "keys"}], "start": frame,
+            "fps": rate}``, or ``{}`` when no effect is keyed.
+        """
+        curves = []
+        for node, plug, channel in cls._staged_channels():
+            leaf = node.split("|")[-1].split(":")[-1]
+            if ctx is not None and not ctx.ships(leaf):
+                continue
+            if channel == "visibility":
+                keys = [[f, v, "step"] for f, v in cls._stepped_track(plug)]
+            else:
+                keys = cls._segment_keys(plug)
+            if keys:
+                curves.append({"target": leaf, "channel": channel, "keys": keys})
+        # Each animated emissive-group copy's weight, as its
+        # ``<material>__emission`` proxy carries it (that tool's stager).
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        emission_channel = EmissiveGroups.HOST.emission_channel
+        curves += EmissiveGroups.weight_curves(
+            lambda copy: cls._segment_keys(emission_channel(copy)), ctx
+        )
+        if not curves:
+            return {}
+        span = cls._first_key(ctx)
+        start = span if span is not None else min(c["keys"][0][0] for c in curves)
+        return {"curves": curves, "start": float(start), "fps": cls._scene_fps() or 24.0}
+
+    @classmethod
+    def _segment_keys(cls, plug: str) -> List[List[Any]]:
+        """*plug*'s keys as ``[frame, value, interpolation]``, each segment's
+        interpolation stated (:meth:`effect_curves`)."""
+        keys = cls._curve_keys(plug)
+        try:
+            outs = cmds.keyTangent(plug, query=True, outTangentType=True) or []
+            ins = cmds.keyTangent(plug, query=True, inTangentType=True) or []
+        except Exception:
+            outs, ins = [], []
+        out: List[List[Any]] = []
+        for index, (time, value) in enumerate(keys):
+            if index + 1 >= len(keys):
+                out.append([time, value, "linear"])
+                break
+            following, next_value = keys[index + 1]
+            kind = outs[index] if index < len(outs) else "linear"
+            if kind in ("step", "stepnext"):
+                out.append([time, value, "step"])
+                if kind == "stepnext":
+                    out.append([time, next_value, "step"])
+                continue
+            out.append([time, value, "linear"])
+            if kind == "linear" and (index + 1 >= len(ins) or ins[index + 1] == "linear"):
+                continue
+            frames = [
+                float(f)
+                for f in range(int(math.floor(time)) + 1, int(math.ceil(following)))
+                if time < f < following
+            ]
+            values = cls._evaluate_curve(plug, frames) if frames else []
+            out.extend([f, float(v), "linear"] for f, v in zip(frames, values or ()))
+        return out
+
+    @classmethod
+    def _first_key(cls, ctx: Optional[ptk.ExportContext] = None) -> Optional[float]:
+        """The first key of every scene curve a write under *ctx* ships, or
+        ``None``. A curve driving a DAG node the write leaves out is no
+        channel of it; one driving a node outside the DAG (a blend shape's
+        weight, a shader's input) still counts -- what it animates may ride a
+        shipped mesh. Each curve's first key is read by its index, so no key
+        is walked; a curve keyed on a driver (its inputs are driver values,
+        not frames) is no time."""
+        pairs = cls._curve_outputs()
+        if ctx is not None and ctx.nodes is not None:
+            driven = {plug.partition(".")[0] for _curve, plug in pairs}
+            dag = set(cmds.ls(list(driven), type="dagNode") or []) if driven else set()
+            pairs = [
+                (curve, plug)
+                for curve, plug in pairs
+                if plug.partition(".")[0] not in dag or ctx.ships(plug.partition(".")[0])
+            ]
+        timed = cmds.ls(
+            list({curve for curve, _plug in pairs}),
+            type=("animCurveTL", "animCurveTA", "animCurveTT", "animCurveTU"),
+        ) if pairs else []
+        if not timed:
+            return None
+        firsts = cmds.keyframe(timed, query=True, index=(0, 0), timeChange=True) or []
+        return float(min(firsts)) if firsts else None
 
     @classmethod
     def remove_export_proxies(cls) -> List[str]:
@@ -978,8 +1151,8 @@ class RenderEffects(ptk.LoggingMixin):
     # In-band export metadata — the glTF route
     # ------------------------------------------------------------------
 
-    #: ``data_export`` channel read by ``ptk.MeshConvert.apply_glb_visibility``
-    #: -- the key of the ``ptk.SceneRecords.VISIBILITY`` record.
+    #: ``data_export`` channel of the ``ptk.SceneRecords.VISIBILITY`` record
+    #: (``render_effects``), which every reader of the file reads.
     DATA_CHANNEL = ptk.SceneRecords.VISIBILITY.key
     #: Schema this producer writes (stamped by the declaration); the reader
     #: refuses anything newer.
@@ -987,14 +1160,19 @@ class RenderEffects(ptk.LoggingMixin):
 
     @classmethod
     def visibility_tracks(cls) -> List[Dict]:
-        """Every keyed-visibility transform in the scene, as stepped on/off tracks.
+        """Every node carrying a keyed render effect, as ``render_effects`` v2
+        tracks: ``{"node", "channels", "highlight_color"?, "highlight_color_dim"?}``.
 
-        Emits what a DCC-agnostic consumer can use without knowing Maya: the
-        boolean timeline, already evaluated under Maya's own rules, plus the
-        authored ``opacity`` ramp when there is one.  Doing the evaluation here
-        is the point of the split — visibility is a *boolean* attribute driven
-        by a float curve, so what a non-step curve means is a Maya question,
-        and the answer must not be re-guessed downstream.
+        A track names the channels its node carries -- ``visibility``,
+        ``opacity``, ``highlight`` -- and the curves ride the transport
+        (:meth:`stage_export_proxies`), never the record. A node with an
+        ``opacity`` channel publishes no ``visibility``: its visibility keys are
+        that channel's mirror (``key_fade`` writes it, and ``create`` refuses a
+        node whose visibility is already keyed), and opacity at 0 is presence
+        by the record's contract -- a mirror beside it would hide the node for
+        the fade-in it should be fading over. The highlight's colour stops are
+        the node's own, read once: a node missing a stop states nothing for it,
+        so a reader falls back to THAT stop's default.
         """
         tracks: List[Dict] = []
         visibility = cls._visibility_curves()
@@ -1002,25 +1180,18 @@ class RenderEffects(ptk.LoggingMixin):
         for node, _plug, spec in cls._channel_curves():
             channels.setdefault(node, {})[spec.name] = spec
         for node in sorted(set(visibility) | set(channels)):
-            track: Dict = {"node": node.split("|")[-1].split(":")[-1]}
-            if node in visibility:
-                keys = cls._stepped_track(visibility[node])
-                if keys:
-                    track["visibility"] = keys
-            for name, spec in sorted(channels.get(node, {}).items()):
-                # Linearized, not raw: the ramp's consumers interpolate it
-                # linearly and Maya's own curve often does not (see
-                # :meth:`_linear_ramp`).
-                ramp = cls._linear_ramp(f"{node}.{name}")
-                if not ramp:
-                    continue
-                track[name] = ramp
+            named = channels.get(node, {})
+            track: Dict = {
+                "node": node.split("|")[-1].split(":")[-1],
+                "channels": [],
+            }
+            if node in visibility and not cls._mirrored(node):
+                track["channels"].append("visibility")
+            for name, spec in sorted(named.items()):
+                track["channels"].append(name)
                 track_keys = spec.track_color_stops
                 if track_keys is None:
                     continue
-                # One published key per stop the node actually carries. A node
-                # missing a stop states nothing for it, so the reader falls
-                # back to THAT stop's default rather than to the other end.
                 for attr, key in zip(spec.color_stops.keys, track_keys.keys):
                     plug = f"{node}.{attr}"
                     if not cmds.objExists(plug):
@@ -1030,109 +1201,49 @@ class RenderEffects(ptk.LoggingMixin):
                         track[key] = [float(c) for c in rgb[:3]]
                     except (RuntimeError, TypeError, IndexError):
                         pass
-            if len(track) > 1:
+            if track["channels"]:
                 tracks.append(track)
         return tracks
+
+    @staticmethod
+    def _mirrored(node: str) -> bool:
+        """Whether *node*'s visibility is its presence channel's mirror: that
+        channel (``opacity``) is keyed, and its 0 is presence itself. A static
+        opacity mirrors nothing, so a visibility keyed beside it is its own."""
+        plug = f"{node}.{PRESENCE.name}"
+        return bool(
+            cmds.objExists(plug) and cmds.keyframe(plug, query=True, keyframeCount=True)
+        )
 
     @classmethod
     def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
         """The ``render_effects`` record for this scene, or ``None`` when it
-        has no keyed visibility -- the ``ptk.SceneRecords.VISIBILITY`` producer
-        (``FbxUtils.PRODUCERS``).  Pure: it reads the curves and the shot
-        record and never writes.
+        keys no effect -- the ``ptk.SceneRecords.VISIBILITY`` producer
+        (``FbxUtils.PRODUCERS``).  Pure: it reads the curves and never writes.
 
-        Exists because keyed visibility is the one animated channel that does
-        NOT survive to glTF: the format animates translation, rotation, scale
-        and morph weights, and nothing else, so an FBX's ``Visibility`` curves
-        are dropped in the conversion without a word.
-        ``MeshConvert.apply_glb_visibility`` rebuilds them from this channel
-        as stepped scale, which every viewer plays.
-
-        Also publishes ``clip_span`` — per take, the first and last authored
-        frame inside its window.  That is the take's own zero: the converter
-        rebases a clip onto its first authored key rather than onto the take's
-        declared start, and it counts the visibility keys when deciding which
-        key is first even though it emits no channel for them.  Only this side
-        can see the curves, so only this side can say.  The whole-timeline
-        entry is the exporter's ``ctx.clip_span`` when the pipeline measured
-        one (the first and last frame the stack CARRIES), else the FBX bake
-        range as a seed.
+        Version 2: which nodes carry which channels (:meth:`visibility_tracks`)
+        and their colours. The curves are the file's own, each on its proxy in
+        each take the write makes (:meth:`stage_export_proxies`), so no frame
+        and no rate is published: a curve scopes to its clip by construction.
 
         Parameters:
-            ctx: The export's decisions (``clip_span``, ``nodes``) and the
-                records produced before this one -- the shot record's ``fps``
-                and the takes its clips declare
-                (``ptk.SceneRecords.declared_takes``); the stored records are
-                read when this assembly did not produce them (an authoring-time
-                republish). A scoped write keeps the tracks of the nodes it
-                ships, and its take spans count their curves alone (the record
-                is ``export_scoped``): another node's keys are no channel of
-                this file, and a track for it warned "not in this GLB".
-
-        A scene that declares takes publishes the whole-timeline entry even
-        with no keyed visibility, as the record's only content: it is what
-        ``MeshConvert.apply_glb_clips`` cuts every shot against, and without
-        it the GLB shipped the whole-timeline stack and no shot clip. Only a
-        MEASURED origin (``ctx.clip_span``) is published alone: a hand-off
-        publishes before it arms its bake range, so the seed would be the
-        last export's range, and a guessed origin slides every shot -- with
-        none, the converter keeps its own shot takes instead.
+            ctx: The export's decisions (``nodes``). A scoped write keeps the
+                tracks of the nodes it ships (the record is
+                ``export_scoped``): another node's keys are no channel of this
+                file, and a track for it warned "not in this GLB".
 
         Returns:
-            The record, or ``None`` when there is no keyed visibility and no
-            measured origin of declared takes (the publisher then clears the
-            channel).
+            The record, or ``None`` when no effect is keyed (the publisher then
+            clears the channel).
         """
         tracks = [track for track in cls.visibility_tracks() if ctx.ships(track["node"])]
-        if not tracks and ctx.clip_span is None:
-            return None
+        # Each animated emissive-group copy is a material entry: its weight
+        # rides its ``<material>__emission`` proxy (staged with this record's).
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
 
-        # The shot record the shots producer has just built (it runs first:
-        # the record declares ``after=("animation",)``), else the stored
-        # one -- it keeps the frame rate defined in ONE place for the export.
-        metadata = ctx.record(ptk.SceneRecords.SHOTS, DataNodes)
-        if not isinstance(metadata, dict):
-            metadata = {}
-        # The scene's own rate when the shots producer published none (a
-        # shot-less scene CLEARS the shot record): without a rate the GLB
-        # appliers cannot place the frames in time and drop every track and
-        # ramp -- measured 2026-09-02, "carry no frame rate ... not applied".
-        fps = metadata.get("fps") or cls._scene_fps()
-        takes = ptk.SceneRecords.declared_takes(lambda key: ctx.record(key, DataNodes))
-        if not tracks and not takes:
-            return None  # an origin with no clip to cut against it
-        # The stack's origin.  Measured by the pipeline (``ctx.clip_span``)
-        # once it has seen the final curves; until then the bake range is a
-        # SEED, not the answer, and a producer cannot do better: it has no
-        # export set and no view of the final curves, so it reads the range the
-        # bracketed write plans to bake (a hand-off's), else whatever the FBX
-        # preset happens to hold. The bake range bounds only what the
-        # plugin RE-BAKES, while an authored curve is written whole (a curve
-        # keyed 0-100 exports as 0-100 under a 20-80 range), so as a
-        # description of the stack it is simply wrong. The seed survives only
-        # where no export pipeline runs (a hand-driven FBX write), or on a
-        # scene with no exported keys, where there is no stack to misplace.
-        stack_range = ctx.clip_span or FbxUtils.planned_bake_range()
-        payload = ptk.MeshConvert.build_visibility_tracks(
-            tracks,
-            fps=fps,
-            # With no tracks there is no gate to place, so no take needs its
-            # own span: the whole-timeline origin alone, without the walk over
-            # every anim curve in the scene that the spans take.
-            clip_spans=ptk.MeshConvert.clip_spans(
-                (),
-                takes if tracks else (),
-                key_spans=(
-                    (lambda windows: cls._scene_key_spans(windows, ctx))
-                    if tracks
-                    else None
-                ),
-                stack_range=stack_range,
-            ),
-        )
-        if payload is None:
-            return None
-        return ptk.SceneRecords.VISIBILITY.make(payload)
+        materials = EmissiveGroups.render_effect_materials(ctx)
+        payload = ptk.MeshConvert.build_visibility_tracks(tracks, materials)
+        return ptk.SceneRecords.VISIBILITY.make(payload) if payload is not None else None
 
     @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
@@ -1141,7 +1252,7 @@ class RenderEffects(ptk.LoggingMixin):
         The authoring-time publish of :meth:`export_record`, committed through
         ``FbxUtils.publish_authored`` (an export pipeline runs the producer
         itself: ``FbxUtils.PRODUCERS``).  Clears the channel when the scene
-        has no keyed visibility, leaving no empty carrier behind.
+        keys no effect, leaving no empty carrier behind.
 
         Returns:
             The published JSON string, or ``None`` when cleared.
@@ -1152,8 +1263,8 @@ class RenderEffects(ptk.LoggingMixin):
         if record is None:
             return None
         cls.logger.info(
-            "Visibility: published %d keyed-visibility track(s) for the GLB "
-            "route (glTF drops the FBX's own visibility curves).",
+            "Render effects: published %d track(s); their curves ride each "
+            "export's curve proxies.",
             len(record.payload.get("tracks") or []),
         )
         return record.text
@@ -1162,7 +1273,7 @@ class RenderEffects(ptk.LoggingMixin):
     def _publish_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
         """:meth:`export_record` under *ctx*, committed at authoring time
         (``FbxUtils.publish_authored``) -- the channel CLEARED when the scene
-        has no keyed visibility, so a stale one never outlives its curves.
+        keys no effect, so a stale one never outlives its curves.
         The one publish path of this record outside an export pipeline."""
         record = cls.export_record(ctx)
         FbxUtils.publish_authored({ptk.SceneRecords.VISIBILITY: record})
@@ -1197,14 +1308,29 @@ class RenderEffects(ptk.LoggingMixin):
         this pipeline (:meth:`key_fade`, the shot behaviors,
         :meth:`sync_visibility_from_opacity`) keys the plug directly, and the
         alternative is a per-transform query on every export.
+
+        A SHAPE's keyed visibility belongs to its transform -- ``setKeyframe``
+        on a transform keys its shape's visibility too (its ``shape`` flag is
+        on by default), and a track names a transform, whose curve proxy hangs
+        under it -- so a shape's curve stands for its transform only where the
+        transform keys none of its own (measured 2026-11-05: a ``blinkerShape``
+        track beside ``blinker``'s, its proxy unparentable under a shape).
         """
         found: Dict[str, str] = {}
+        shapes: Dict[str, str] = {}
         for _curve, plug in RenderEffects._curve_outputs():
             node, _, attr = plug.partition(".")
             if attr != "visibility" or not cmds.objExists(node):
                 continue
             long_name = (cmds.ls(node, long=True) or [node])[0]
-            found[long_name] = f"{long_name}.visibility"
+            if cmds.objectType(long_name, isAType="transform"):
+                found[long_name] = f"{long_name}.visibility"
+                continue
+            parent = (cmds.listRelatives(long_name, parent=True, fullPath=True) or [None])[0]
+            if parent:
+                shapes.setdefault(parent, f"{long_name}.visibility")
+        for parent, plug in shapes.items():
+            found.setdefault(parent, plug)
         return found
 
     @staticmethod
@@ -1212,7 +1338,7 @@ class RenderEffects(ptk.LoggingMixin):
         """``(curve, driven plug)`` for every scene animation curve's
         ``output`` connection -- ONE call.
 
-        The curve walks (visibility, channels, the take spans) asked
+        The curve walks (visibility, channels) asked
         ``listConnections`` once per curve; a scene mid-export carries
         thousands (the bake's layer curves and the flatten's fitted ones on
         top of the authored set), and each call is a full command round-trip.
@@ -1267,54 +1393,6 @@ class RenderEffects(ptk.LoggingMixin):
         except Exception:
             return []
         return [[float(t), float(v)] for t, v in zip(times, values)]
-
-    #: How much of a frame a STEP's jump is given when it is linearized. Small
-    #: enough to be invisible at any playback rate, large enough to survive the
-    #: float32 sampler buffers the ramp ends up in.
-    _STEP_JUMP = 0.01
-
-    @classmethod
-    def _linear_ramp(cls, plug: str) -> List[List[float]]:
-        """*plug*'s curve as keys a LINEAR consumer reproduces exactly.
-
-        The ramp is published as ``[frame, alpha]`` pairs and every consumer
-        interpolates them linearly -- which is only faithful while the Maya
-        curve does too. Mixed tangents are the norm rather than the exception:
-        measured on a production assembly, ``REPAIRED_CMPT_LOC.opacity`` reads
-        ``linear, step, step, linear``, so Maya HOLDS it at 1.0 from frame 23
-        to 1983 and cuts, while a linear reading of the same four keys invents
-        a fifteen-frame fade-out that the scene does not have.
-
-        So a stepped segment is made explicit: the hold is stated as its own
-        key and the jump is given :attr:`_STEP_JUMP` of a frame. ``stepnext``
-        is the mirror image -- it takes the FOLLOWING key's value immediately,
-        so the jump goes at the front instead.
-
-        Only tangents matter here, not tangent WEIGHTS: a weighted linear
-        segment is still a straight line between its keys, and the curved
-        tangent types (auto/spline/clamped) are not something this pipeline's
-        writers produce on an alpha ramp.
-        """
-        keys = cls._curve_keys(plug)
-        if len(keys) < 2:
-            return keys
-        try:
-            tangents = cmds.keyTangent(plug, query=True, outTangentType=True) or []
-        except Exception:
-            return keys
-        out: List[List[float]] = []
-        for index, (time, value) in enumerate(keys):
-            out.append([time, value])
-            if index + 1 >= len(keys) or index >= len(tangents):
-                continue
-            next_time, next_value = keys[index + 1]
-            if next_time - time <= cls._STEP_JUMP:
-                continue  # no room to state a hold in
-            if tangents[index] == "step":
-                out.append([next_time - cls._STEP_JUMP, value])
-            elif tangents[index] == "stepnext":
-                out.append([time + cls._STEP_JUMP, next_value])
-        return out
 
     @classmethod
     def _stepped_track(cls, plug: str) -> List[List[float]]:
@@ -1394,44 +1472,6 @@ class RenderEffects(ptk.LoggingMixin):
             ]
         except Exception:
             return None
-
-    @classmethod
-    def _scene_key_spans(
-        cls,
-        windows: List[Tuple[Optional[float], Optional[float]]],
-        ctx: Optional[ptk.ExportContext] = None,
-    ) -> List[Optional[Tuple[float, float]]]:
-        """Per window, the scene's first and last authored key inside it.
-
-        The scene-reaching half of ``ptk.MeshConvert.clip_spans`` (its
-        ``key_spans``), which owns the rest.  EVERY animated channel counts —
-        transforms, visibility and the custom ``opacity`` alike — because the
-        converter sizes a take from all of them while emitting a channel for
-        only some; a curve that drives nothing (an export snapshot's stash, a
-        leftover) is no channel and does not.  Read off the curves' own key
-        indices (``AnimUtils.curve_key_spans``): listing every key time cost
-        10 s a pass on a post-bake production assembly, and the export bracket
-        and ``export_data_node`` each run one (2026-09-14).
-
-        A scoped *ctx* counts the curves of the write alone: one driving a
-        DAG node it leaves out is no channel of the file (``ctx.ships``). A
-        curve driving a node outside the DAG (a blend shape's weight, a
-        shader's input) still counts -- what it animates may ride a shipped
-        mesh.
-        """
-        from mayatk.anim_utils._anim_utils import AnimUtils
-
-        pairs = cls._curve_outputs()
-        if ctx is not None and ctx.nodes is not None:
-            driven = {plug.partition(".")[0] for _curve, plug in pairs}
-            dag = set(cmds.ls(list(driven), type="dagNode") or []) if driven else set()
-            pairs = [
-                (curve, plug)
-                for curve, plug in pairs
-                if plug.partition(".")[0] not in dag or ctx.ships(plug.partition(".")[0])
-            ]
-        curves = [curve for curve, _plug in pairs]
-        return AnimUtils.curve_key_spans(curves, windows)
 
     @classmethod
     def remove(

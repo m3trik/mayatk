@@ -247,6 +247,27 @@ class TestMayaConnectionMocked(unittest.TestCase):
         self.assertIsNone(conn.execute("1", wait_for_response=True, timeout=1))
 
     @patch("socket.socket")
+    def test_a_refusing_port_is_reported_once_per_streak(self, mock_socket_cls):
+        """A busy Maya refuses its port while its main thread runs (a suite
+        dispatched over it): a caller polling it is told once, and again only
+        after Maya has answered in between -- not on every poll (the tentacle
+        ``--in-maya`` leg printed ~110 "actively refused it" lines a run)."""
+        import io
+        from contextlib import redirect_stdout
+
+        refused = ConnectionRefusedError("actively refused it")
+        sock = mock_socket_cls.return_value
+        sock.connect.side_effect = [refused, refused, refused, None, refused]
+        sock.recv.side_effect = [b"True\n\x00"]
+        conn = MayaConnection()
+        conn.mode, conn.is_connected, conn.port = "port", True, 12345
+        out = io.StringIO()
+        with redirect_stdout(out):
+            replies = [conn.execute("1", wait_for_response=True) for _ in range(5)]
+        self.assertEqual(replies, [None, None, None, "True", None])
+        self.assertEqual(out.getvalue().count("refused"), 2, out.getvalue())
+
+    @patch("socket.socket")
     def test_connect_port_failure(self, mock_socket_cls):
         """Test failed port connection."""
         # Setup mock socket to raise exception
@@ -277,6 +298,22 @@ class TestMayaConnectionMocked(unittest.TestCase):
             mock_execute.assert_called_with(
                 "print('hello')", 30, wait_for_response=False
             )
+
+    def test_execute_in_process_runs_statements_outside_the_eval_probe(self):
+        """In process (standalone / interactive), as over the port: the
+        statements run after the expression probe's ``SyntaxError`` is spent,
+        so nothing they raise is chained to it."""
+        from mayatk.env_utils import maya_connection as module
+
+        conn = MayaConnection()
+        conn.mode, conn.is_connected = "standalone", True
+        self.addCleanup(module.__dict__.pop, "_mtk_inproc_exc", None)
+        conn.execute(
+            "import sys\n_mtk_inproc_exc = sys.exc_info()[0]\n",
+            wait_for_response=True,
+        )
+        self.assertIsNone(module.__dict__.get("_mtk_inproc_exc", "unset"))
+        self.assertEqual(conn.execute("1 + 1", wait_for_response=True), 2)
 
     def test_execute_not_connected(self):
         """Test execute raises error when not connected."""
@@ -1267,7 +1304,14 @@ class TestPortPayloadRunsOnce(unittest.TestCase):
     real handler, not a model of it.
     """
 
-    _SCRATCH = ("_mtk_port_hits", "_mtk_port_value", "_mtk_port_set", "LIMIT", "limit")
+    _SCRATCH = (
+        "_mtk_port_hits",
+        "_mtk_port_value",
+        "_mtk_port_set",
+        "_mtk_port_exc",
+        "LIMIT",
+        "limit",
+    )
 
     def setUp(self):
         import __main__
@@ -1321,6 +1365,18 @@ class TestPortPayloadRunsOnce(unittest.TestCase):
             wait_for_response=True,
         )
         self.assertEqual(getattr(self.main, "_mtk_port_value", None), (3, True))
+
+    def test_a_script_runs_outside_the_runners_eval_probe(self):
+        """A statement is compiled as an expression first; the ``SyntaxError``
+        that says it is not one is spent before the script runs, so nothing
+        the script raises is chained to it (a test suite dispatched over the
+        port reported "SyntaxError: invalid syntax ... During handling of the
+        above exception, another exception occurred" on every failure)."""
+        self.conn.execute(
+            "import sys\n_mtk_port_exc = sys.exc_info()[0]\n",
+            wait_for_response=True,
+        )
+        self.assertIsNone(getattr(self.main, "_mtk_port_exc", "unset"))
 
     def test_replies_keep_the_ports_formats(self):
         def reply(code):

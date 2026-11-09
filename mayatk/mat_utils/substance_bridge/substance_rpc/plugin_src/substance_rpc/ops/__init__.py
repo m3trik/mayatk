@@ -11,3 +11,5 @@ at module top level.
 from . import system_ops  # noqa: F401
 from . import project_ops  # noqa: F401
 from . import setup_ops  # noqa: F401
+from . import bake_ops  # noqa: F401
+from . import script_ops  # noqa: F401

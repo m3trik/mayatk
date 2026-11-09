@@ -1,113 +1,52 @@
-# Substance Painter "import + bake lighting to diffuse" template.
-#
-# Builds a new Painter project from the Maya selection (FBX + embedded
-# textures, same as import.py), then queues a Painter-side workflow:
-#
-#   1. Switch the viewport renderer to Iray.
-#   2. Render the loaded scene to a PNG on disk.
-#   3. Import the rendered PNG as a fill-layer texture in the texture
-#      set's Base Color (diffuse) channel.
-#
-# Net effect: the lit appearance the artist saw in Maya is baked into
-# the diffuse channel of every texture set, so Painter's viewport (any
-# renderer) starts off looking already-lit. The user can then add
-# further work on top.
-#
-# ============================================================================
-# STATUS: transport OK (substance_rpc plugin); JS body unverified
-# ============================================================================
-# The bridge's Painter-side ``substance_rpc`` plugin (auto-installed on
-# send) routes this RPC_SCRIPT through
-# :func:`substance_painter.js.evaluate` via its ``js.evaluate`` op, so
-# the script reaches Painter's JS engine.
-#
-# The JS API symbol names below (``alg.shaders.setCurrent``,
-# ``alg.imageExporter.exportRenderImage``, ``alg.resources.importResource``,
-# ``alg.layers.insertLayerInstance``) are best-effort guesses against
-# Painter's published legacy-JS surface and need verification against a
-# live Painter (the RPC response carries Painter's exception text on a
-# bad symbol). The Maya side is right; only the JS body needs
-# verification.
-#
-# Plugin-shim responsibilities not expressed in the JS below:
-#
-#   * **Async coordination** -- ``exportRenderImage`` is likely async;
-#     the ``importResource`` call must wait for the PNG to actually
-#     land on disk. The shim should await/poll before proceeding.
-#   * **Multi texture set iteration** -- the JS targets the project's
-#     default texture set; meshes with multiple materials / UDIMs need
-#     the shim to loop ``alg.project.textureSets()`` (or equivalent)
-#     and insert one fill layer per set.
-# ============================================================================
-#
-# DRY note for maintainers:
-#   LAUNCH_ARGS / FBX_OPTIONS duplicate ``import.py`` verbatim. This is
-#   structural -- :func:`parse_template` uses ``ast.literal_eval`` so a
-#   syntax error in one template can't crash others, which means
-#   templates can't share constants via ``from . import _common``.
-#   When changing the import line, update both files together.
+"""Bake Lighting to Diffuse: bake Iray AO (and curvature) per texture set and add a lighting layer over Base Color (not yet driven by the AO map: see its report)."""
 
-"""Import the FBX as a new project, then bake Iray lighting into diffuse."""
+# Runs inside Painter (the substance_rpc plugin's ``script.start``) on the
+# project named in Project, else the one open in Painter. Its settings are its
+# own rows (the Row: lines below), saved with its presets.
+WORKS_ON = "project"
 
-BRIDGE_MODES = ("send_to",)
+# Rows: __PAINTER_PROJECT__ __PAINTER_SAVE__ __PAINTER__
+# Row: __BAKE_RESOLUTION__ choice 1024 "Bake Resolution" choices=512|1024|2048|4096 tooltip="Bake output size, square."
+# Row: __AO_RAYS__ int 64 "AO Rays" min=1 max=256 tooltip="Secondary rays per sample: more is cleaner and slower."
+# Row: __AO_MAX_DISTANCE__ float 1.0 "AO Max Distance" min=0 max=1 decimals=3 tooltip="Farthest occluder, a fraction of the mesh's bounding box."
+# Row: __AO_MIN_DISTANCE__ float 0.0 "AO Min Distance" min=0 max=1 decimals=4 tooltip="Nearest occluder: a bias against self-shadow noise."
+# Row: __AO_SPREAD__ float 162 "AO Spread" min=0 max=180 decimals=1 tooltip="Spread angle of the occlusion rays, in degrees."
+# Row: __AO_SUBSAMPLE__ choice 1 "Antialiasing" choices=1|2|4|8 tooltip="Supersampling: 1 is none."
+# Row: __AO_INTENSITY__ float 1.0 "AO Intensity" min=0 max=1 decimals=2 tooltip="The lighting layer's opacity."
+# Row: __INCLUDE_CURVATURE__ bool off "Curvature" tooltip="Also bake curvature, laid over as an overlay layer."
+# Row: __SKIP_EXISTING__ bool off "Skip Existing Bakes" tooltip="Bake only texture sets missing the maps; the rest still composite."
 
-# Host-side export scope (read by the bridge slots before launch; echoed here so the panel
-# exposes the Scope combo): scope=__SCOPE__ carrier=__CARRIER__
-#
-# Project-setup knobs, claimed so the panel surfaces them; the bridge
-# dispatches them as extra RPC ops and the plugin applies them once the
-# New Project wizard finishes: __PAINTER_RESOLUTION__ and the bake source
-# the panel's __BAKE_SOURCE_SET__ row defines (its contents are the switch).
+from substance_rpc.ops import bake_ops  # noqa: E402
 
-# Same launch line as import.py -- the project is created from the FBX.
-# Resolution / normal-map format / project template etc. are no longer
-# CLI-tunable in current Painter; the user sets them in the New Project
-# dialog. See import.py for the full reasoning behind the trimmed list.
-LAUNCH_ARGS = [
-    "--mesh",
-    "__FBX_PATH__",
-]
+result = bake_ops.lighting_to_diffuse(
+    bake_resolution=int(args.get("BAKE_RESOLUTION", 1024)),
+    ao_intensity=float(args.get("AO_INTENSITY", 1.0)),
+    ao_secondary_rays=int(args.get("AO_RAYS", 64)),
+    ao_max_distance=float(args.get("AO_MAX_DISTANCE", 1.0)),
+    ao_min_distance=float(args.get("AO_MIN_DISTANCE", 0.0)),
+    ao_spread_angle=float(args.get("AO_SPREAD", 162.0)),
+    ao_subsample=int(args.get("AO_SUBSAMPLE", 1)),
+    include_curvature=bool(args.get("INCLUDE_CURVATURE", False)),
+    skip_existing_bakes=bool(args.get("SKIP_EXISTING", False)),
+    save_project=False,  # once Painter is idle, below
+    cancelled=args.cancelled,  # a cancel stops the bake under way
+)
+for entry in result["baked_maps"]:
+    args.report(f"Baked: {entry}")
+for entry in result["layers_created"]:
+    args.report(f"Lighting layer: {entry}")
+for warning in result["warnings"]:
+    args.report(f"Note: {warning}.")
+if result["errors"]:
+    raise RuntimeError("; ".join(result["errors"]))
 
-# Multi-step JS body delivered to Painter after the project is open and
-# RPC is reachable. Quoting follows the convention:
-#  * User PARAMS arrive JS-quoted via :func:`uitk.bridge.js_literal`.
-#  * Internal tokens (``__TEXTURES_DIR__``) substitute raw, so the template
-#    body wraps them in manual double quotes.
-RPC_SCRIPT = """
-// 1. Pick Iray as the viewport renderer so the next render call uses it.
-alg.shaders.setCurrent("iray");
 
-// 2. Render the loaded scene to disk. The ``||`` fallback uses the
-//    texture folder (the named Output Dir, else the scene project's
-//    sourceimages) when PAINTER_RENDER_OUTPUT_PATH is empty.
-var bakePath = __PAINTER_RENDER_OUTPUT_PATH__ || ("__TEXTURES_DIR__" + "/baked_lighting.png");
-alg.imageExporter.exportRenderImage({
-    path: bakePath,
-    width: __PAINTER_RENDER_WIDTH__,
-    height: __PAINTER_RENDER_HEIGHT__,
-    samples: __PAINTER_RENDER_SAMPLES__
-});
+def _save():
+    import substance_painter.project as project
 
-// 3. Pull the rendered PNG back in as a project resource and create a
-//    fill-layer instance against the base-color (diffuse) channel.
-//    The plugin shim must wait for step 2 to actually write the file,
-//    and iterate texture sets if the mesh has more than one.
-var bakeRes = alg.resources.importResource(bakePath, "texture");
-alg.layers.insertLayerInstance({
-    name: "Baked Iray Lighting",
-    channel: "baseColor",
-    resource: bakeRes
-});
-"""
+    project.save()
+    args.report("Project saved.")
 
-BUILD_MANIFEST = True
 
-# Embed every Maya-referenced texture so the new project starts already
-# textured -- the Iray render then captures lighting *on top of* the
-# user's look-dev.
-FBX_OPTIONS = {
-    "FBXExportEmbeddedTextures": True,
-}
-
-# Fresh launch (we're creating a new project, not updating one).
-TARGET_INSTANCE = "new"
+if args.get("PAINTER_SAVE"):
+    args.when_idle(_save)  # a save while Painter computes the layers is refused

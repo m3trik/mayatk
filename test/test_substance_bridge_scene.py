@@ -31,7 +31,7 @@ import pythontk as ptk
 from base_test import MayaTkTestCase
 from mayatk.mat_utils.substance_bridge._substance_bridge import (
     SEND_TO,
-    TARGET_AUTO,
+    PAINTER_AUTO,
     BakeSourceSet,
     SubstanceBridge,
 )
@@ -128,7 +128,7 @@ class TestHighPolyExport(MayaTkTestCase):
 
     def _produce(self, name, high_poly=True, ascii_fbx=True):
         request = ptk.HandoffRequest(
-            template="import",
+            template="new_project",
             mode=SEND_TO,
             params={"PAINTER_HIGH_POLY": high_poly},
             extras={
@@ -137,7 +137,7 @@ class TestHighPolyExport(MayaTkTestCase):
                 "painter_exe": None,
                 "fbx_options": {"FBXExportInAscii": True} if ascii_fbx else None,
                 "preset_file": None,
-                "target": TARGET_AUTO,
+                "target": PAINTER_AUTO,
             },
         )
         self.assertTrue(self.bridge._preflight([self.low], request))
@@ -257,11 +257,11 @@ class TestHandoffLocations(MayaTkTestCase):
         super().tearDown()
 
     def _produce(self, output_name="shot"):
-        extras = {"painter_exe": None, "target": TARGET_AUTO}
+        extras = {"painter_exe": None, "target": PAINTER_AUTO}
         if output_name:
             extras["output_name"] = output_name
         request = ptk.HandoffRequest(
-            template="import", mode=SEND_TO, params={}, extras=extras
+            template="new_project", mode=SEND_TO, params={}, extras=extras
         )
         self.assertTrue(self.bridge._preflight([self.mesh], request))
         payload = self.bridge._produce([self.mesh], request)

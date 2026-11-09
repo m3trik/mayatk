@@ -3863,7 +3863,8 @@ class UvUtils(ptk.HelpMixin):
 
         Native (``polyAutoProjection``) -- no RizomUV dependency. For each mesh:
         a *valid* existing lightmap (non-overlapping, within 0-1) is reused
-        unless ``force``; otherwise a new set is auto-projected and packed into
+        unless ``force``, moved to UV channel index 1 when it sits elsewhere
+        (its UVs kept); otherwise a new set is auto-projected and packed into
         the unit square with gutter padding (:meth:`calculate_uv_padding`),
         placed at UV channel index 1 (the lightmap channel engines bind), and
         tagged on the shape (``UvDiagnostics.LIGHTMAP_UV_TAG``) so downstream
@@ -3930,13 +3931,26 @@ class UvUtils(ptk.HelpMixin):
                     cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None]
                 )[0]
 
-                # Reuse an existing, valid lightmap unless forced.
+                # Reuse an existing, valid lightmap unless forced -- at index 1,
+                # where every lightmaps record reads it: one reused where it
+                # sat was refused at publish, by a fix naming this call. A
+                # reorder keeps the UVs, so a bake on them stays valid.
                 existing_lm = UvDiagnostics.find_lightmap_uv_set(shape)
                 if (
                     existing_lm
                     and not force
                     and UvDiagnostics.is_bakeable_lightmap(shape, existing_lm)
                 ):
+                    sets_now = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+                    order = cls._lightmap_channel_order(sets_now, existing_lm)
+                    if order and list(dict.fromkeys(sets_now)) != order:
+                        try:
+                            cls.reorder_uv_sets(shape, order)
+                        except Exception as e:  # noqa: BLE001 - usable where it is
+                            print(
+                                f"[lightmap-uv] {shape}: could not move "
+                                f"{existing_lm!r} to index 1 ({e})."
+                            )
                     if prev_current:
                         cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev_current)
                     results[shape] = {

@@ -115,7 +115,8 @@ class TestRecordUnits(MayaTkTestCase):
     """Every record ships its lengths in the file's unit -- the export's
     target, which the Scene Exporter makes the working unit before it runs the
     producers (``set_linear_unit``) -- with ``unit_scale`` beside them, whatever
-    unit the scene's tools ran in.
+    unit the scene's tools ran in; a record in glTF's frame (articulation v2)
+    ships metres.
 
     A value read in one unit and labelled with another shipped a metre
     export's lights 100x too far (2026-10-17). Each measured producer's
@@ -130,10 +131,9 @@ class TestRecordUnits(MayaTkTestCase):
     #: The producers whose records carry no length or angle, and what they
     #: carry instead. A new producer belongs here or in :meth:`_fixtures`.
     UNITLESS = {
-        ptk.SceneRecords.SHOTS.key: "frames, with their fps",
+        ptk.SceneRecords.SHOTS.key: "clip names, descriptions and metadata",
         ptk.SceneRecords.VISIBILITY.key: "frames with their fps, and colours",
-        ptk.SceneRecords.AUDIO.key: "frames, with their fps",
-        ptk.SceneRecords.EMISSIVE_GROUPS.key: "weights",
+        ptk.SceneRecords.AUDIO.key: "seconds and file names",
         ptk.SceneRecords.MATERIALS.key: "factors and file names",
     }
     UNITS = (("cm", "deg"), ("m", "rad"))
@@ -217,7 +217,14 @@ class TestRecordUnits(MayaTkTestCase):
         RenderEffects.create(objects=[cube], mode="attribute")
         cmds.setKeyframe(cube, attribute="opacity", time=8, value=0.0)
         cmds.setKeyframe(cube, attribute="opacity", time=15, value=1.0)
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        glow = cmds.shadingNode("standardSurface", asShader=True, name="EvGlow")
+        cmds.setAttr(f"{glow}.emission", 1.0)
+        MatUtils.assign_mat([cube], glow)
         EmissiveGroups.add_group("glow", [f"{cube}.f[0]"])
+        EmissiveGroups.key_weight("glow", 0.0, frame=1)
+        EmissiveGroups.key_weight("glow", 1.0, frame=10)
         AudioUtils.write_key("tone", frame=5, value=1)
         AudioUtils.write_key("tone", frame=9, value=0)
 
@@ -287,7 +294,9 @@ class TestRecordUnits(MayaTkTestCase):
                 payload = json.loads(record.text)
                 unit = ptk.MathUtils.metres_per_unit(produced[0])
                 self._assert_unit_scale(payload, unit, f"{key} {authored + produced}")
-                payloads[authored + produced] = self._in_metres(key, payload, unit)
+                payloads[authored + produced] = self._in_metres(
+                    key, payload, unit, ptk.MathUtils.metres_per_unit(authored[0])
+                )
         reference = payloads[("cm", "deg", "cm", "deg")]
         for units, metres in payloads.items():
             self._assert_same(reference, metres, f"{key} {units}")
@@ -305,10 +314,12 @@ class TestRecordUnits(MayaTkTestCase):
                 self._assert_unit_scale(v, unit, f"{where}[{i}]")
 
     @staticmethod
-    def _in_metres(key, payload, unit):
+    def _in_metres(key, payload, unit, rig=1.0):
         """*payload* as its readers take it, in metres: the lights through the
         GLB's own conversion, every other length times its ``unit_scale`` --
-        or, for the articulation record (it carries none), the file's unit."""
+        the articulation record is in metres already (v2: glTF's frame).
+        A shadow plane's ``source_ramp`` is one unit of its rig, *rig*
+        metres, whatever the file's unit: it comes back in rig units."""
         import copy
 
         out = copy.deepcopy(payload)
@@ -323,22 +334,20 @@ class TestRecordUnits(MayaTkTestCase):
         elif key == ptk.SceneRecords.SHADOWS.key:
             scale = out.pop("unit_scale")
             for plane in out["planes"]:
-                for name in ("ground", "radius", "height", "source_size"):
+                for name in (
+                    "ground",
+                    "radius",
+                    "height",
+                    "source_size",
+                    "fade_height",
+                ):
                     plane[name] *= scale
+                plane["source_ramp"] *= scale / rig
                 if plane.get("horizon"):
                     plane["horizon"]["bounds"] = [
                         c * scale for c in plane["horizon"]["bounds"]
                     ]
                     plane["horizon"]["height_scale"] *= scale
-        elif key == ptk.SceneRecords.ARTICULATION.key:
-            for rig in out["rigs"]:
-                for joint in rig["joints"]:
-                    joint["t"] = [c * unit for c in joint["t"]]
-                    for channel in joint["channels"]:
-                        if channel["channel"].startswith("t"):
-                            for side in ("min", "max"):
-                                if channel[side] is not None:
-                                    channel[side] *= unit
         return out
 
     def _assert_same(self, want, got, where):
@@ -393,6 +402,9 @@ class TestRecordUnits(MayaTkTestCase):
         self._set_units(units)
         lightmap = os.path.join(self.tmp, "Bench_Lightmap.exr")
         open(lightmap, "wb").close()
+        # The set its marker names, at UV index 1: one an object lacks is
+        # refused, never published on faith (lightmaps v3, 2026-11-07).
+        cmds.polyUVSet(bench, copy=True, uvSet="map1", newUVSet="lightmap")
         LightmapRecords.commit({bench: lightmap})
         probe = os.path.join(self.tmp, "Bench_Probe.exr")
         open(probe, "wb").close()
@@ -1188,6 +1200,31 @@ class TestApplyTakesShipsEveryChannel(MayaTkTestCase):
         # 2 takes x (3 nodes' animated channels): nothing compared is no pass.
         self.assertGreaterEqual(compared, 2 * len(self.nodes))
 
+    def test_drop_undeclared_takes_leaves_one_take_per_shot(self):
+        """Maya writes ``Take 001`` beside the split; the scene's shots
+        declare A01 and A02, so the file is left exactly those two takes,
+        their curves intact. A scene with no shots keeps its file as written.
+        Added: 2026-11-05
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        path = self._export().path
+        self.assertIn("Take 001", ptk.FbxFile.load(path, raw_payloads=False).take_names())
+        self.assertIsNone(FbxUtils.drop_undeclared_takes(path), "no shots: as written")
+        for take in self.takes:
+            store.define_shot(take["name"], take["start"], take["end"])
+
+        report = FbxUtils.drop_undeclared_takes(path)
+
+        self.assertEqual(report["takes"], ["Take 001"])
+        fbx = ptk.FbxFile.load(path, decode_arrays=("KeyTime",), raw_payloads=False)
+        self.assertEqual(fbx.take_names(), ["A01", "A02"])
+        self.assertTrue(all(fbx.take_curves().get(t["name"]) for t in self.takes))
+        self.assertIsNone(FbxUtils.drop_undeclared_takes(path), "idempotent")
+
     def test_reset_takes_restores_the_resample_flag(self):
         """Sticky global state: the export's resample may not outlive it."""
         mel.eval("FBXExportBakeResampleAnimation -v false")
@@ -1203,9 +1240,7 @@ class TestApplyTakesShipsEveryChannel(MayaTkTestCase):
 
     def test_resample_off_overrules_a_preset_that_resamples(self):
         """``resample=False`` is the write's decision, not a request: a loaded
-        preset with Resample All on kept it on, so a GLB-only run's
-        intermediate opened its whole-timeline take on the bake range while
-        the published clip origin stayed on the keys. Off for the write -- the
+        preset with Resample All on would keep it on. Off for the write -- the
         authored keys ship -- and the preset's ON back after it."""
         prior = FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
         self.addCleanup(
@@ -1274,9 +1309,9 @@ class _TakeFilesCase(MayaTkTestCase):
     """FBX files whose animation Maya's own exporter splits across takes.
 
     Each is written as the Scene Exporter writes one -- ``FbxUtils.apply_takes``
-    then ``FbxUtils.export`` -- and a Shots Only file is that file less its
-    whole-timeline take (``ptk.FbxMedia.drop_takes``, what the exporter's
-    ``ship_declared_takes`` does to it).
+    then ``FbxUtils.export`` -- and a deliverable is that file less its
+    whole-timeline take (``ptk.FbxMedia.drop_takes``, what
+    ``FbxUtils.drop_undeclared_takes`` does to it after every export).
     """
 
     #: A cube's translateX keys; Maya's default (spline) tangents.
@@ -1867,17 +1902,34 @@ class TestWritePlan(MayaTkTestCase):
             FbxUtils.write_plan(takes=(11, 40), resample_all=False).resample_all
         )
 
-    def test_a_bracket_publishes_against_its_plan(self):
-        """A producer inside the bracket reads the range the write will bake,
-        not what the settings held when the bracket opened."""
-        with FbxUtils.export_prepared(
-            plan=FbxUtils.write_plan(bakes=True, span=(4, 44))
-        ):
-            self.assertEqual(FbxUtils.planned_bake_range(), (4, 44))
-        with FbxUtils.export_prepared(plan=FbxUtils.write_plan(bakes=False)):
-            self.assertIsNone(FbxUtils.planned_bake_range())
+    def test_the_planned_range_and_the_brackets_plan_are_retired(self):
+        """``planned_bake_range`` and the bracket's ``plan=`` had no reader
+        but this test (no producer reads the planned range; the audio cues
+        read ``FbxUtils._take_window``): each warns, and works as before
+        through its window (remove_in 0.32.0). A bracket opened without a
+        plan -- every caller's -- warns nothing. Retired: 2026-11-08"""
+        import warnings
+
+        with self.assertWarns(DeprecationWarning):
+            with FbxUtils.export_prepared(
+                plan=FbxUtils.write_plan(bakes=True, span=(4, 44))
+            ):
+                with self.assertWarns(DeprecationWarning):
+                    self.assertEqual(FbxUtils.planned_bake_range(), (4, 44))
+        with self.assertWarns(DeprecationWarning):
+            FbxUtils.begin_export(plan=FbxUtils.write_plan(bakes=False))
+        try:
+            with self.assertWarns(DeprecationWarning):
+                self.assertIsNone(FbxUtils.planned_bake_range())
+        finally:
+            FbxUtils.end_export()
         mel.eval("FBXExportBakeComplexAnimation -v true")
-        self.assertEqual(FbxUtils.planned_bake_range(), FbxUtils.bake_range())
+        with self.assertWarns(DeprecationWarning):
+            self.assertEqual(FbxUtils.planned_bake_range(), FbxUtils.bake_range())
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            with FbxUtils.export_prepared():
+                pass
 
 
 class TestOffsetsFolded(MayaTkTestCase):
@@ -1985,6 +2037,74 @@ class TestOffsetsFolded(MayaTkTestCase):
         (shipped,) = cmds.ls("carried_cube", long=True, type="transform")
         got = cmds.getAttr(f"{shipped}.worldMatrix[0]")
         self.assertLess(max(abs(a - b) for a, b in zip(world, got)), 1e-4)
+
+
+class TestAShotlessTakeDeclaresWhatItHolds(MayaTkTestCase):
+    """A file with no shots ships Maya's one take, and the writer declares its
+    window (``LocalTime``) as the playback range while the take holds the keys
+    of what it ships, widened by the range a resampling write bakes. Unity's
+    model importer cuts its default clip by that window: measured in Unity
+    6000.3 (2026-11-05), keys 0-100 under a 20-80 playback range imported as a
+    clip of frames 20-80 (``TakeInfo.bakeStartTime``) while the GLB, converted
+    from the keys, ran 0-100 -- two readers, one file, two clips. Every write
+    now declares the take over exactly what it holds, as Blender's does:
+    measured off the written file and fitted there
+    (``FbxUtils.drop_undeclared_takes`` -> ``ptk.FbxMedia.fit_take_windows``),
+    the scene's playback range never moved. Added: 2026-11-05
+    """
+
+    def setUp(self):
+        super().setUp()
+        store = ptk.TempArtifacts("fbx_shotless_take", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.out = store.dir_path()
+        FbxUtils.reset_export()
+        self.addCleanup(FbxUtils.reset_export)
+        cmds.currentUnit(time="film")
+        self.cube = cmds.polyCube(name="held_cube")[0]
+        cmds.setKeyframe(self.cube, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=100, value=10)
+        cmds.playbackOptions(animationStartTime=20, animationEndTime=80, min=20, max=80)
+
+    def _frames(self, path):
+        fbx = ptk.FbxFile.load(path, raw_payloads=False, span_arrays=("KeyTime",))
+        frames = lambda spans: {k: tuple(round(t * 24, 3) for t in v) for k, v in spans.items()}
+        return frames(fbx.take_windows()), frames(fbx.take_spans())
+
+    def _playback(self):
+        return tuple(
+            cmds.playbackOptions(q=True, **{flag: True})
+            for flag in ("min", "max", "animationStartTime", "animationEndTime")
+        )
+
+    def test_a_write_that_ships_the_keys_declares_their_extent(self):
+        path = FbxUtils.export(os.path.join(self.out, "keys.fbx"), [self.cube])
+        windows, spans = self._frames(path)
+        self.assertEqual(spans, {"Take 001": (0.0, 100.0)}, "the take holds the keys")
+        self.assertEqual(windows, spans, "and declares what it holds, not the playback range")
+        self.assertEqual(self._playback(), (20.0, 80.0, 20.0, 80.0), "the scene's range is never moved")
+
+    def test_a_resampled_bake_past_the_keys_declares_the_bake(self):
+        plan = FbxUtils.write_plan(bakes=True, span=(-10.0, 120.0), resample_all=True)
+        FbxUtils.apply_write_plan(plan)
+        path = FbxUtils.export(os.path.join(self.out, "bake.fbx"), [self.cube], plan=plan)
+        windows, spans = self._frames(path)
+        self.assertEqual(spans, {"Take 001": (-10.0, 120.0)})
+        self.assertEqual(windows, spans)
+        self.assertEqual(self._playback(), (20.0, 80.0, 20.0, 80.0))
+
+    def test_a_write_of_shots_keeps_their_windows(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("ShotA", 10, 40, objects=[self.cube])
+        FbxUtils.apply_takes_from_node()
+        self.addCleanup(FbxUtils.reset_takes)
+        path = FbxUtils.export(os.path.join(self.out, "shots.fbx"), [self.cube])
+        windows, _spans = self._frames(path)
+        self.assertEqual(windows.get("ShotA"), (10.0, 40.0), "a shot's take is its own window")
 
 
 class TestNonInheritingWrite(MayaTkTestCase):
@@ -2267,26 +2387,27 @@ class TestFinishDeliverable(QuickTestCase):
             fh.write(FBX_MAGIC)
         seen = {}
 
-        def finish(fbx, glb=None, **kwargs):
-            seen.update(kwargs, fbx=fbx)
-            return {}
+        def embed(fbx, search_dirs=(), walk_root="", files=(), logger=None):
+            seen.update(fbx=fbx, search_dirs=search_dirs, walk_root=walk_root, files=files)
+            return {"embedded": []}
 
+        # The guard is pythontk's (``finish_fbx_deliverable(inputs=)``), run
+        # with this host's resolver and said on this module's logger.
         with (
             patch.object(
                 FbxUtils, "_dependency_inputs", side_effect=RuntimeError("no scene")
             ),
-            patch.object(
-                ptk.MeshConvert, "finish_fbx_deliverable", side_effect=finish
-            ),
-            self.assertLogs("mayatk.env_utils.fbx_utils", level="WARNING"),
+            patch.object(ptk.FbxMedia, "embed_dependencies", side_effect=embed),
+            self.assertLogs("mayatk.env_utils.fbx_utils", level="WARNING") as logs,
         ):
             report = FbxUtils.finish_deliverable(path, search_dirs=["D:/maps"])
-        self.assertEqual(report, {})
+        self.assertIn("dependencies", report)
         self.assertEqual(seen["fbx"], path)
         self.assertEqual(
-            (seen["search_dirs"], seen["walk_root"], seen["files"]),
-            (["D:/maps"], "", ()),
+            (seen["search_dirs"], seen["walk_root"], list(seen["files"])),
+            (["D:/maps"], "", []),
         )
+        self.assertTrue(any("files not resolved (no scene)" in line for line in logs.output))
 
 
 

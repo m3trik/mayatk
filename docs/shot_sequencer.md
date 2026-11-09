@@ -8,6 +8,12 @@ stays the source of truth: the sequencer reads it and writes back to it.
 The same panel ships in Maya (`mayatk`) and Blender (`blendertk`); the few
 differences are listed under [Maya and Blender](#maya-and-blender).
 
+![The Shot Sequencer under the scene it edits](images/shot_sequencer.png)
+*Ten shots a [Shot Manifest](shot_manifest.md) built from a service sheet, on
+one timeline: each object's keys as clips per shot, the six cover bolts coming
+off in turn in B01 and going back in a star pattern in B05, and the playhead in
+B03 as the filter cartridge slides out.*
+
 **Contents:** [Getting started](#getting-started) · [Views](#views) ·
 [Shots](#shots) · [Clips and keys](#clips-and-keys) · [Shot edges and
 gaps](#shot-edges-and-gaps) · [Graph view](#graph-view) · [Ruler, tracks and
@@ -96,6 +102,10 @@ timeline's corner, with the group under the pointer lit.
 The graph replaces the track rows with curves; the track list becomes a curve
 outliner (object > attribute, with a filter). Shot lane, ruler, playhead and
 markers stay.
+
+![The Graph view on one shot](images/shot_sequencer_graph.png)
+*The Graph view framed on shot B03: the filter cartridge, picked in the curve
+outliner, slides out of the housing.*
 
 | Gesture | Effect |
 |:---|:---|

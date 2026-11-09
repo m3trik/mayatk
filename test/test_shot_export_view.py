@@ -29,10 +29,17 @@ def _clips(view):
     return [s["clip"] for s in view["animation"]["shots"]]
 
 
-def _takes(view):
-    """The take list a reader derives from an export view -- through the ONE
-    reader of the take list, as the FBX split and the GLB appliers do."""
-    return ptk.SceneRecords.declared_takes(view.get)
+def _takes(store):
+    """The takes an export of *store* splits -- through the ONE source of the
+    take list at export time (``ShotStore.declared_takes``), as the FBX split
+    and the audio and render-effect producers read it. The record states no
+    frames: each shot's take holds them."""
+    prior = ShotStore._active
+    ShotStore.set_active(store)
+    try:
+        return ShotStore.declared_takes()
+    finally:
+        ShotStore._active = prior
 
 
 def _export_selected_ascii(nodes, fname="mtk_test_export.fbx"):
@@ -103,7 +110,7 @@ class TestExportViewLogic(QuickTestCase):
             ]
         )
         view = store.to_export_view()
-        keys = [t["name"] for t in _takes(view)]
+        keys = [t["name"] for t in _takes(store)]
 
         for k in keys:
             self.assertRegex(k, r"^[A-Za-z0-9_]+$", f"{k!r} is not Unity-safe")
@@ -124,46 +131,71 @@ class TestExportViewLogic(QuickTestCase):
     def test_join_key_matches_take_name(self):
         store = _store_with([ShotBlock(0, "A B", 1, 10, description="hi")])
         view = store.to_export_view()
-        self.assertEqual(_takes(view)[0]["name"], _clips(view)[0])
+        self.assertEqual(_takes(store)[0]["name"], _clips(view)[0])
         self.assertEqual(_clips(view), ["A_B"])
 
-    def test_each_clip_carries_its_own_range_in_one_record(self):
-        """The ranges ride the clips, so the take list cannot disagree with the
-        join keys: there is no second list and no ``takes`` key on the
-        record."""
-        store = _store_with([ShotBlock(0, "A", 5, 25, description="d")])
+    def test_a_shot_ships_its_clip_description_and_metadata_alone(self):
+        """Record v2: per shot only what a clip cannot hold -- its clip name,
+        its description and the metadata its author wrote (the shipped keys;
+        the tools' bookkeeping stays in the scene). The range is the take's:
+        the take list (one per shot, spanning its range) comes from the store."""
+        store = _store_with(
+            [
+                ShotBlock(
+                    0,
+                    "A",
+                    5,
+                    25,
+                    description="d",
+                    metadata={"section": "S", "object_status": {"door": "valid"}},
+                )
+            ]
+        )
+        store.set_shipped_metadata(["section"])
         view = store.to_export_view()
         self.assertEqual(list(view), ["animation"])
         meta = view["animation"]
-        self.assertEqual(meta["version"], 1)
-        self.assertNotIn("takes", meta)
+        # And the scene's rate, which a GLB carrying the record cannot hold.
+        self.assertEqual(
+            meta,
+            {
+                "version": ptk.SceneRecords.SHOTS.version,
+                "shots": meta["shots"],
+                "fps": store.scene_fps,
+            },
+        )
         (rec,) = meta["shots"]
-        self.assertEqual((rec["clip"], rec["start"], rec["end"]), ("A", 5, 25))
-        self.assertEqual(rec["description"], "d")
-        self.assertEqual(_takes(view), [{"name": "A", "start": 5, "end": 25}])
+        self.assertEqual(rec, {"clip": "A", "description": "d", "metadata": {"section": "S"}})
+        self.assertEqual(_takes(store), [{"name": "A", "start": 5, "end": 25}])
 
-    def test_a_clip_states_its_name_and_range_alone(self):
-        """An empty ``description`` is left out, and neither ``objects`` nor
-        ``section`` rides the record: no reader used them (2026-10-20)."""
+    def test_a_shot_with_nothing_but_its_name_states_its_clip_alone(self):
+        """An empty ``description`` and empty ``metadata`` are left out, and
+        neither ``objects`` nor a frame rides the record."""
         store = _store_with(
             [ShotBlock(0, "A", 1, 10, objects=["|grp|door_L", "|grp|door_R"])]
         )
         (rec,) = store.to_export_view()["animation"]["shots"]
-        self.assertEqual(set(rec), {"clip", "start", "end"})
+        self.assertEqual(rec, {"clip": "A"})
 
     def test_empty_store(self):
         view = _store_with([]).to_export_view()
         self.assertEqual(list(view), ["animation"])
         self.assertEqual(view["animation"]["shots"], [])
-        self.assertEqual(_takes(view), [])
+        self.assertEqual(_takes(_store_with([])), [])
         self.assertIsNone(_store_with([]).export_records(), "an empty store clears")
 
-    def test_export_records_is_the_one_shot_record_with_the_clip_mode(self):
+    def test_export_records_is_the_one_shot_record_and_states_no_mode(self):
         store = _store_with([ShotBlock(0, "A", 1, 10)])
-        records = store.export_records(ptk.ExportContext(clip_mode="shots"))
+        records = store.export_records(ptk.ExportContext())
         self.assertEqual([r.key for r in records], [ptk.SceneRecords.SHOTS.key])
-        self.assertEqual(records[0].payload["clip_mode"], "shots")
-        self.assertEqual([s["clip"] for s in records[0].payload["shots"]], ["A"])
+        self.assertEqual(
+            records[0].payload,
+            {
+                "version": ptk.SceneRecords.SHOTS.version,
+                "shots": [{"clip": "A"}],
+                "fps": store.scene_fps,
+            },
+        )
 
     def test_resolve_clip_specs_orders_and_rounds(self):
         specs = resolve_clip_specs(
@@ -200,12 +232,12 @@ class TestExportRoundTrip(MayaTkTestCase):
         self.assertNodeExists(DataNodes.EXPORT)
         meta_raw = DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key)
         self.assertIn("opening", meta_raw)
-        # ONE record: each clip carries its range; the take list is not
-        # written beside it (the attr is never even created).
+        # ONE record of clip names (the takes hold the ranges); no take list
+        # is written beside it (the attr is never even created).
         meta = ptk.SceneRecords.SHOTS.load(DataNodes)
         self.assertEqual(
-            [(s["clip"], s["start"], s["end"]) for s in meta["shots"]],
-            [("Intro", 1, 50), ("Outro", 51, 100)],
+            meta["shots"],
+            [{"clip": "Intro", "description": "opening"}, {"clip": "Outro"}],
         )
         self.assertFalse(
             cmds.attributeQuery("fbx_takes", node=DataNodes.EXPORT, exists=True)
@@ -597,7 +629,7 @@ class TestExportRoundTrip(MayaTkTestCase):
         tm.objects = [keep]
         try:
             with self.assertLogs(exporter.logger, "WARNING") as logged:
-                tm.apply_declared_takes("both")
+                tm.apply_declared_takes()
         finally:
             tm.run_deferred_restores()
         stale = [line for line in logged.output if "2 stale shot(s)" in line]
@@ -808,17 +840,19 @@ class TestCsvToFbxPipeline(MayaTkTestCase):
         self.assertEqual(a01.description, "Open the hangar doors")
         self.assertEqual(a01.metadata.get("section"), "A")
 
-        # Export view carries it, keyed by clip name, each clip with its range.
+        # Export view carries it, keyed by clip name; one take per shot.
         view = store.to_export_view()
         self.assertEqual(
-            [(t["name"], t["start"], t["end"]) for t in _takes(view)],
+            [(t["name"], t["start"], t["end"]) for t in _takes(store)],
             [("A01", 1, 50), ("A02", 51, 100)],
         )
         rec = view["animation"]["shots"][0]
         self.assertEqual(rec["clip"], "A01")
         self.assertEqual(rec["description"], "Open the hangar doors")
-        # The section stays the store's: no reader of the record used it.
-        self.assertNotIn("section", rec)
+        # The manifest's keys ride with it (record v3), its section among
+        # them; the build's own records stay in the scene.
+        self.assertEqual(rec["metadata"].get("section"), "A")
+        self.assertNotIn(ShotManifest.BUILT, rec["metadata"])
 
         # Exporter task: publish → include carrier → realize takes.
         tm = TaskManager(logging.getLogger("test_pipeline"))

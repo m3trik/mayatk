@@ -48,6 +48,26 @@ def _cv2():
         return None, None
 
 
+def _lightmap_set(node, uv_set="lightmap"):
+    """*node*'s mesh -- itself, or the shapes under a transform -- given *uv_set*
+    at UV index 1 when it lacks one: the set a commit's marker names. A marker
+    naming a set its object lacks is refused, never published on faith
+    (lightmaps v3, 2026-11-07). Returns *node*."""
+    shapes = (
+        [node]
+        if cmds.nodeType(node) == "mesh"
+        else cmds.listRelatives(
+            node, shapes=True, fullPath=True, noIntermediate=True, type="mesh"
+        )
+        or []
+    )
+    for shape in shapes:
+        sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+        if uv_set not in sets:
+            cmds.polyUVSet(shape, copy=True, uvSet=sets[0] if sets else "map1", newUVSet=uv_set)
+    return node
+
+
 def _rendered_warnings(warn_mock):
     """Interpolate a mocked logger's lazy '%s'-style calls into real messages."""
     return [
@@ -1062,7 +1082,9 @@ class TestCommitLightmap(MayaTkTestCase):
         rec = objs[0]
         self.assertEqual(rec["name"], "lmKeep")
         self.assertEqual(rec["map"], "cube_Lightmap.exr")
-        self.assertEqual(rec["uvIndex"], 1)
+        # Version 3: the record reads every map through the second UV set and
+        # names none (2026-11-07).
+        self.assertNotIn("uvIndex", rec)
         # The intensity stays on the marker; the record ships none: its
         # texels carry it, the map applied as stored (2026-10-20).
         self.assertNotIn("intensity", rec)
@@ -1102,10 +1124,13 @@ class TestCommitLightmap(MayaTkTestCase):
         out = cv2.imread(shared, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
         self.assertAlmostEqual(float(out.mean()), 0.5, places=3)  # x2, not x4
 
-    def test_manifest_publishes_real_uv_index_and_warns(self):
-        # The manifest must carry the lightmap set's ACTUAL channel index --
-        # Unity samples uv2 (index 1) only, so a hardcoded 1 would hide a
-        # mis-ordered set instead of surfacing it.
+    def test_a_lightmap_set_off_the_second_slot_refuses_the_record(self):
+        """Lightmaps v3 (2026-11-07): the record reads every map through the
+        second UV set (index 1), where Unity and glTF read one, and names
+        none -- so a set elsewhere is never published on faith (it was a
+        warning beside a published ``uvIndex``): the export's producer
+        refuses the record, naming the object, its set and the fix, and the
+        bake's own publish clears the channel with the same words."""
         cube, shape, long = self._cube_with_material("lmUvIdx")
         cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="filler")
         cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="UV2")
@@ -1113,19 +1138,107 @@ class TestCommitLightmap(MayaTkTestCase):
         baker = LightmapBaker(resolution=64)
         with mock.patch.object(LightmapRecords.logger, "warning") as warn:
             baker.commit_lightmap({long: self.tex})
-        objs = self._manifest()["objects"]
-        self.assertEqual(objs[0]["uvIndex"], 2)
+        self.assertEqual(self._manifest()["objects"], [], "nothing published")
         warned = _rendered_warnings(warn)
         self.assertTrue(
-            any("UV index 2" in m for m in warned),
-            f"expected a uv-index warning, got: {warned}",
+            any("lmUvIdx ('UV2' at index 2)" in m and "create_lightmap_uvs" in m for m in warned),
+            f"expected the refusal and its fix, got: {warned}",
         )
+        # The export's producer notes it and publishes none, so the delivered
+        # record is cleared (2026-11-07: a raise was a failed producer, and
+        # the stale stored record shipped).
+        ctx = ptk.ExportContext()
+        self.assertIsNone(LightmapRecords.export_record(ctx))
+        said = [n for n in ctx.notes if "lmUvIdx ('UV2' at index 2)" in n]
+        self.assertEqual(len(said), 1, ctx.notes)
+        self.assertIn("create_lightmap_uvs", said[0])
+
+    def _baked_then_moved(self, name):
+        """A cube baked with its lightmap set at index 1, published -- then
+        its set moved to index 2, as an artist adding a set and reordering
+        leaves it: the stored record now reads the map through the wrong UVs."""
+        cube, shape, long = self._cube_with_material(name)
+        UvUtils.create_lightmap_uvs([long], map_size=64, quiet=True)
+        LightmapBaker(resolution=64).commit_lightmap({long: self.tex})
+        self.assertEqual([o["name"] for o in self._manifest()["objects"]], [name])
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="filler")
+        UvUtils.reorder_uv_sets(shape, ["map1", "filler", "lightmap"])
+        return cube, shape, long
+
+    def test_an_export_ships_none_of_a_record_refused_since_it_was_published(self):
+        """Added: 2026-11-07"""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        _, _, long = self._baked_then_moved("lmStale")
+        snapshot = FbxUtils.publish(
+            FbxUtils.export_context(scope=(long,)),
+            only=[ptk.SceneRecords.LIGHTMAPS],
+        )
+        self.assertNotIn(ptk.SceneRecords.LIGHTMAPS.key, snapshot.failed)
+        self.assertIsNone(snapshot.record(ptk.SceneRecords.LIGHTMAPS))
+        self.assertTrue(
+            any("lmStale ('lightmap' at index 2)" in n for n in snapshot.ctx.notes)
+        )
+        self.assertIsNone(ptk.SceneRecords.LIGHTMAPS.load(DataNodes), "cleared, not left stale")
+
+    def test_a_hand_off_ships_none_of_a_refused_stored_record_and_puts_it_back(self):
+        """A hand-off ships the authored record as stored, so it vets the copy
+        first (``LightmapRecords.withheld``, stated on its context by
+        ``FbxUtils.export_context``): the write ships no lightmaps, says why
+        with the fix, and the scene keeps its record. Added: 2026-11-07"""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        _, _, long = self._baked_then_moved("lmHanded")
+        stored = ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes)
+        ctx = FbxUtils.export_context(mode=ptk.ExportContext.HANDOFF, scope=(long,))
+        why = ctx.withheld.get(ptk.SceneRecords.LIGHTMAPS.key, "")
+        self.assertIn("lmHanded ('lightmap' at index 2)", why)
+        self.assertIn("create_lightmap_uvs", why)
+        with FbxUtils.export_prepared(ctx) as snapshot:
+            self.assertIsNone(
+                ptk.SceneRecords.LIGHTMAPS.load(DataNodes), "the write ships none"
+            )
+            self.assertIn(why, snapshot.ctx.notes)
+        self.assertEqual(ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes), stored)
+        self.assertEqual(
+            FbxUtils.export_context(mode=ptk.ExportContext.PIPELINE).withheld,
+            {},
+            "a write whose producer runs refuses for itself",
+        )
+
+    def test_the_refusals_fix_cures_it(self):
+        """The fix the refusal names -- create_lightmap_uvs -- moves the set
+        it reuses to index 1, so the next publish passes. Added: 2026-11-07"""
+        _, shape, long = self._baked_then_moved("lmCured")
+        ctx = ptk.ExportContext()
+        self.assertIsNone(LightmapRecords.export_record(ctx))
+        self.assertIn("create_lightmap_uvs", " ".join(ctx.notes))
+        UvUtils.create_lightmap_uvs([long], map_size=64, quiet=True)
+        self.assertEqual(self._sets(shape).index("lightmap"), 1)
+        ctx = ptk.ExportContext()
+        record = LightmapRecords.export_record(ctx)
+        self.assertEqual([o["name"] for o in record.payload["objects"]], ["lmCured"])
+        self.assertEqual(ctx.notes, [])
+
+    def test_a_committed_set_renamed_since_the_bake_is_refused(self):
+        """The second slot may hold another set once the committed one is
+        renamed or removed: refused, never published on faith (it was a
+        warning). Added: 2026-11-07"""
+        cube, shape, long = self._cube_with_material("lmRenamed")
+        UvUtils.create_lightmap_uvs([long], map_size=64, quiet=True)
+        LightmapBaker(resolution=64).commit_lightmap({long: self.tex})
+        cmds.polyUVSet(shape, rename=True, uvSet="lightmap", newUVSet="bakedUVs")
+        ctx = ptk.ExportContext()
+        self.assertIsNone(LightmapRecords.export_record(ctx))
+        said = " ".join(ctx.notes)
+        self.assertIn("lmRenamed ('lightmap', which it no longer has)", said)
+        self.assertIn("rename", said)
 
     def test_manifest_notes_duplicate_leaf_names_without_warning(self):
         # Every record carries its hierarchy and both readers -- the GLB
-        # applier and unitytk's controller -- tell same-named objects apart
-        # by it, so a recurring leaf is a note for anyone on an older Unity
-        # helper, not a warning asking for a rename.
+        # applier and unitytk's Lightmaps importer -- tell same-named objects
+        # apart by it, so a recurring leaf is a note for an older reader, not
+        # a warning asking for a rename.
         a, _, _ = self._cube_with_material("dupLeaf")
         cmds.group(a, name="dupGrpA")  # reparent -> the long name changes
         la = cmds.ls("dupGrpA|dupLeaf", long=True)[0]
@@ -1258,7 +1371,7 @@ class TestPerInstanceMarkers(MayaTkTestCase):
         return json.loads(raw)["objects"] if raw else []
 
     def _instanced_pair(self):
-        src = cmds.polyCube(name="instWall")[0]
+        src = _lightmap_set(cmds.polyCube(name="instWall")[0])
         copy = cmds.instance(src)[0]
         cmds.move(3, 0, 0, copy)
         return cmds.ls(src, long=True)[0], cmds.ls(copy, long=True)[0]
@@ -1282,7 +1395,7 @@ class TestPerInstanceMarkers(MayaTkTestCase):
         self.assertEqual(recs["instWall"]["map"], recs["instWall1"]["map"])
 
     def test_legacy_shape_marker_still_publishes_and_reverts(self):
-        cube = cmds.polyCube(name="legacyLm")[0]
+        cube = _lightmap_set(cmds.polyCube(name="legacyLm")[0])
         long = cmds.ls(cube, long=True)[0]
         shape = cmds.listRelatives(long, shapes=True, fullPath=True)[0]
         baker = LightmapBaker(resolution=16)
@@ -1361,6 +1474,8 @@ class TestMarkerScan(MayaTkTestCase):
         if not cmds.attributeQuery(self.ATTR, node=node, exists=True):
             cmds.addAttr(node, longName=self.ATTR, dataType="string")
         if payload is not None:
+            if payload.get("uv_set"):
+                _lightmap_set(node, payload["uv_set"])
             cmds.setAttr(f"{node}.{self.ATTR}", json.dumps(payload), type="string")
 
     def _info(self, name):
@@ -6486,7 +6601,7 @@ class TestLightmapDependencies(MayaTkTestCase):
     # -- helpers ------------------------------------------------------------
 
     def _cube(self, name):
-        return cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+        return _lightmap_set(cmds.ls(cmds.polyCube(name=name)[0], long=True)[0])
 
     def _file(self, *parts):
         path = os.path.join(self.tmp, *parts)
@@ -6860,7 +6975,7 @@ class TestLightmapSearchDirs(MayaTkTestCase):
         cmds.workspace(os.path.dirname(self.si), openWorkspace=True)
 
     def _cube(self, name):
-        return cmds.ls(cmds.polyCube(name=name)[0], long=False)[0]
+        return _lightmap_set(cmds.ls(cmds.polyCube(name=name)[0], long=False)[0])
 
     def _map(self, folder, name):
         path = os.path.join(self.tmp, folder, name)

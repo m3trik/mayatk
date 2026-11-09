@@ -3,8 +3,8 @@
 """Shared helpers for Marmoset Toolbag template scripts.
 
 These run inside Toolbag's bundled Python (where ``mset`` is available) --
-NOT inside Maya. They must not import mayatk or anything else from the
-host Maya install.
+NOT inside a DCC. They must not import a host library or anything else
+from a host install.
 
 Template scripts pick this module up via a ``sys.path`` insert pointing at
 this package directory; the path itself is substituted into the rendered

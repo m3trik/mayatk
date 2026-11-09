@@ -301,6 +301,21 @@ class RecipeRoundTripTest(MayaTkTestCase):
         self.assertTrue(self._keys("opacity"))
         self.assertFalse(self.store.edit_ledger.authored(behavior="highlight"))
 
+    def test_the_unused_tail_ends_at_a_faded_members_own_keys(self):
+        """Assess's "Nf unused" is what Trim Trailing Space would cut
+        (``ShotSequencer.content_end``): a door that fades in AND slides until
+        frame 130 leaves the frames after it, though its curve holds on to
+        a key at 1000, past the shot. Measured before: all but the fade read
+        as unused (the keys of an object with a behavior were never read).
+        Fixed: 2026-11-08"""
+        steps = self._steps(("door", ["fade_in"], "scene"))
+        self._build(steps)
+        for frame, value in ((0, 0.0), (130, 5.0), (1000, 5.0)):
+            cmds.setKeyframe(f"{self.door}.translateX", time=frame, value=value)
+        [status] = ShotManifest(self.store).assess(steps)
+        shot = self.store.sorted_shots()[0]
+        self.assertEqual(status.shrinkable_frames, shot.end - 130.0, (shot.start, shot.end))
+
     def test_an_animators_key_inside_the_shot_keeps_the_fade_off(self):
         """The ownership guard where it matters: the animator's key sits
         INSIDE the shot (the drop test's key at 1000 is outside it)."""
