@@ -6,7 +6,6 @@ entry allows.
 """
 
 import os
-import re
 import math
 import logging
 from typing import Optional, Dict, Any, List
@@ -34,7 +33,6 @@ class _TaskChecksMixin(_TaskDataMixin):
     """The pre-export validation checks -- each returns ``(passed, messages)``
     and is hoisted to the earliest point its ``ptk.ExportProfile.CHECK_DEPENDENCIES`` entry allows."""
 
-    _LOD_SUFFIX_REGEX = re.compile(r"_lod\d*$", re.IGNORECASE)
     _MAX_LISTED_OBJECTS = 25
     _DEFAULT_FLOOR_TOLERANCE = 0.5
 
@@ -120,46 +118,6 @@ class _TaskChecksMixin(_TaskDataMixin):
             f"Still over the limit with Optimize Textures clamped to {ceiling} px. "
             "Lower the ceiling, or raise this limit."
         )
-
-    def check_geometry_lod_suffix(self) -> tuple:
-        """Check for geometry whose names end with '_LOD' or '_LOD' followed by digits.
-
-        Returns:
-            tuple: (status: bool, messages: list)
-
-        Notes:
-            - This check is informational. It returns True regardless, and lists any matches.
-            - Suffix examples matched: '_LOD', '_LOD0', '_LOD1', '_LOD02', etc. (case-insensitive)
-        """
-        messages: List[str] = []
-
-        matches = {}
-        for obj in self._live_objects():
-            # Check if geometry (has shapes)
-            # Use cmds for speed
-            shapes = cmds.listRelatives(obj, shapes=True)
-            if not shapes:
-                continue
-
-            name = obj.split("|")[-1]
-            if self._LOD_SUFFIX_REGEX.search(name):
-                matches.setdefault(name, obj)
-
-        if matches:
-            items = [
-                f"  - {self._obj_link(matches[n], 'reveal')}" for n in sorted(matches)
-            ]
-            messages.append("Geometry with LOD suffix detected (informational):")
-            messages.extend(items)
-            # The runner only surfaces messages from FAILING checks; this one
-            # always passes, so its listing must be logged directly or the
-            # check is a silent no-op. As ONE grouped record: every log record
-            # is its own paragraph in the export panel, so a line per match
-            # rendered the listing as N blank-line-separated sections.
-            if self.logger.isEnabledFor(logging.INFO):
-                self._log_group(f"LOD suffixes detected ({len(matches)})", items)
-
-        return True, messages
 
     def check_root_default_transforms(self) -> tuple:
         """Check if all root group nodes have default transforms.

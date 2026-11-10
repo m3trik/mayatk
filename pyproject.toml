@@ -99,6 +99,10 @@ order = [
     "uv_utils/texture_combine",
     "core_utils/diagnostics",
     "core_utils/auto_instancer",
+    # The Scene Exporter composes the animation bake, the edit checks and
+    # the LOD tools: above every domain it reads (blendertk ranks its
+    # env_utils above edit_utils for the same reason).
+    "env_utils/scene_exporter",
     "anim_utils",
     "rig_utils",
     "nurbs_utils",

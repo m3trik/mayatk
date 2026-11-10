@@ -321,7 +321,9 @@ class SceneExporter(ptk.SceneExporterBase):
                 and geometry node; ``"visible"`` (the default, and any unknown
                 mode) the visible geometry -- templated objects hidden, a
                 parent's visibility inherited, animated visibility counted
-                visible.
+                visible, and every level of a LOD group counted, not only the
+                one its camera shows (that switch is display state; the
+                export would otherwise change with the camera).
         """
         from mayatk.display_utils._display_utils import DisplayUtils
 
@@ -333,6 +335,7 @@ class SceneExporter(ptk.SceneExporterBase):
             consider_templated_visible=False,
             inherit_parent_visibility=True,
             consider_animated_visible=True,
+            consider_lod_visible=True,
         )
 
     @ptk.Deprecation.parameter(
@@ -632,6 +635,17 @@ class SceneExporter(ptk.SceneExporterBase):
                         f"Added {len(extras)} pipeline object(s) to the export selection."
                     )
 
+            # Most Detailed Only: the FBX and USD writers carry each selected
+            # node's whole subtree, so a selected group would ship the levels
+            # prepare_lods left out -- the selection holds its kept levels
+            # instead (their ancestors still ship). Every scope, every format.
+            chosen = cmds.ls(selection=True, long=True) or []
+            refined = self.task_manager.lod_write_selection(chosen)
+            if refined != chosen:
+                if refined:
+                    cmds.select(refined, replace=True)
+                else:
+                    cmds.select(clear=True)
             if not cmds.ls(selection=True):
                 self.logger.error("No objects to export.")
                 return False
@@ -1047,13 +1061,10 @@ class SceneExporter(ptk.SceneExporterBase):
         )["path"]
 
     #: ``mayaUSDExport`` flags for the USD output format: the shared interchange
-    #: set (``UsdUtils.INTERCHANGE_EXPORT_OPTIONS``; a MaterialX network is an
-    #: ``usd_options`` override), with textures referenced relative to the layer
-    #: where possible -- a deliverable beside its scene, unlike a scratch payload.
-    USD_EXPORT_OPTIONS: Dict[str, Any] = dict(
-        UsdUtils.INTERCHANGE_EXPORT_OPTIONS,
-        exportRelativeTextures="automatic",
-    )
+    #: set for a deliverable (``UsdUtils.DELIVERABLE_EXPORT_OPTIONS``; a
+    #: MaterialX network is an ``usd_options`` override), textures referenced
+    #: relative to the layer where possible, unlike a scratch payload.
+    USD_EXPORT_OPTIONS: Dict[str, Any] = UsdUtils.DELIVERABLE_EXPORT_OPTIONS
 
     def _write_usd(self, usd_path: str) -> str:
         """Write the current selection as a USD layer (the ``usd`` output format).
@@ -1101,7 +1112,17 @@ class SceneExporter(ptk.SceneExporterBase):
             file_path=usd_path, options=options, selection_only=True
         )
         self.logger.info(f"USD written: {written}")
+        self._author_lod_variants(written, selection)
         return written
+
+    def _author_lod_variants(self, written: str, selection: List[str]) -> None:
+        """State the written LOD groups (authored and generated) as USD
+        variant sets ``LOD`` (``UsdUtils.author_lod_variants``). A ``.usdz`` is
+        packaged already, and AR Quick Look reads no LOD: said, left as is."""
+        from mayatk.edit_utils.lods import LodUtils
+
+        plan = ptk.LodChain.variant_plan(LodUtils.groups(selection))
+        self._state_lod_variants(written, plan, UsdUtils.author_lod_variants)
 
     #: What a GLB deliverable cannot ship without, whoever configured the run
     #: (see :meth:`_default_fbx_options` for each measurement): FBX2glTF embeds

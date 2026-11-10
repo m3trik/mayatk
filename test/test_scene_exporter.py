@@ -567,10 +567,11 @@ class TestSceneExporter(MayaTkTestCase):
         currents = [c for c, _, _ in events]
         self.assertEqual(currents, sorted(currents), f"current went back: {events}")
         # The named task, the take split every FBX run arms (one take per
-        # shot, a no-op here), the write and the sidecar.
-        self.assertEqual({t for _, t, _ in events}, {4}, "two tasks + write + sidecar")
+        # shot, a no-op here), the LOD read every export arms, the write and
+        # the sidecar.
+        self.assertEqual({t for _, t, _ in events}, {5}, "three tasks + write + sidecar")
         self.assertEqual(events[0][0], 0)
-        self.assertEqual(events[-1][:2], (4, 4), "the last tick snaps to total")
+        self.assertEqual(events[-1][:2], (5, 5), "the last tick snaps to total")
         messages = [m for _, _, m in events if m]
         self.assertTrue(any("set_linear_unit" in m for m in messages), messages)
         self.assertTrue(any(m.startswith("Writing FBX") for m in messages), messages)
@@ -2824,18 +2825,21 @@ class TestSceneExporter(MayaTkTestCase):
 
         logger = logging.getLogger("test_plain_logger_groups")
         tm = TaskManager(logger)
-        lod = cmds.polyCube(name="PROP_LOD0")[0]
+        levels = [
+            cmds.polyCube(name=f"PROP_LOD{i}", sx=2 - i, sy=2 - i, sz=2 - i)[0]
+            for i in range(2)
+        ]
+        cmds.group(levels, name="PROP")
         scrap = cmds.polyCube(name="scrap")[0]
         cmds.group(scrap, name="temp_grp")
-        tm.objects = cmds.ls([lod, "|temp_grp|scrap"], long=True)
+        tm.objects = cmds.ls(["|PROP|PROP_LOD0", "|PROP|PROP_LOD1", "|temp_grp|scrap"], long=True)
 
         with self.assertLogs(logger, "INFO") as logged:  # the listings are INFO
-            passed, _messages = tm.check_geometry_lod_suffix()
+            tm.prepare_lods("authored")
             tm.ignore_groups("temp_grp")
 
-        self.assertTrue(passed)
         self.assertTrue(
-            any("LOD suffixes detected (1)" in line for line in logged.output),
+            any("LOD groups (1)" in line for line in logged.output),
             logged.output,
         )
         self.assertTrue(
@@ -5364,6 +5368,350 @@ class TestExcludeHdrOption(MayaTkTestCase):
         self.assertNotIn(skydome_transform, self.tm.objects)
 
 
+class TestLodsOption(MayaTkTestCase):
+    """The LODs row: what an export ships of the scene's LOD groups.
+
+    Feature (2026-11-10, the LOD pipeline): every export reads the groups
+    (``prepare_lods``, armed by ``ExportRun.from_tasks``); As Authored ships each
+    as one (Maya's FBX writer states a lodGroup as an FbxLODGroup, thresholds
+    included, measured), Most Detailed Only leaves the lower levels out of the
+    written file and never touches the scene.
+    """
+
+    def setUp(self):
+        super().setUp()
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        levels = [cmds.polySphere(name=f"chair_LOD{i}", sx=24 >> i, sy=24 >> i)[0] for i in range(3)]
+        group = cmds.createNode("lodGroup", name="chair")
+        cmds.parent(levels, group)
+        cmds.setAttr(f"{group}.useScreenHeightPercentage", True)
+        cmds.setAttr(f"{group}.percentageThreshold[0]", 50.0)
+        cmds.setAttr(f"{group}.percentageThreshold[1]", 20.0)
+        cmds.polyCube(name="lamp")
+        self.exporter = SceneExporter(log_level="WARNING")
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+
+    def _export(self, name, **tasks):
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=cmds.ls(["chair", "lamp"], long=True),
+                output_name=name,
+                tasks=tasks,
+            )
+        )
+        return ptk.FbxFile.load(os.path.join(self.temp_dir, f"{name}.fbx"), raw_payloads=False)
+
+    def test_the_row_is_a_settings_mode(self):
+        spec = self.exporter.task_manager.task_definitions["lods"]
+        self.assertEqual(spec["widget_type"], "ComboBox")
+        self.assertEqual(spec["panel"], "settings")
+        self.assertEqual(spec["add"], ptk.ExportProfile.LOD_OPTIONS)
+        self.assertIn("lods", ptk.ExportRun.MODE_KEYS)
+        self.assertIn("prepare_lods", self.exporter.task_manager.TASK_ORDER)
+        self.assertNotIn("check_geometry_lod_suffix", self.exporter.task_manager.check_definitions)
+
+    def test_as_authored_ships_every_level_as_a_lod_group(self):
+        fbx = self._export("authored")
+        self.assertLessEqual({"chair", "chair_LOD0", "chair_LOD1", "chair_LOD2", "lamp"}, set(fbx.object_names("Model")))
+        kinds = [r["props"][2] for r in fbx.iter_objects() if r["name"] == "NodeAttribute"]
+        self.assertIn(b"LodGroup", kinds)
+
+    def test_the_fbx_carries_the_lods_record_unity_builds_its_groups_from(self):
+        """Unity's FBX import merges every level-named mesh of a file onto one
+        root LODGroup and drops the thresholds (measured), so the carrier holds
+        each group's levels and heights for the record's Unity consumer."""
+        import json
+
+        fbx = self._export("record", export_data_node=True)
+        (stored,) = [v for v in fbx.user_properties(ptk.SceneRecords.LODS.key) if v]
+        payload = json.loads(stored.decode() if isinstance(stored, bytes) else stored)
+        self.assertEqual(payload["version"], ptk.SceneRecords.LODS.version)
+        self.assertEqual(
+            payload["groups"],
+            [{"name": "chair", "levels": ["chair_LOD0", "chair_LOD1", "chair_LOD2"], "heights": [0.5, 0.2, 0.0]}],
+        )
+        self.assertEqual(ptk.LodsRecord.validate(payload).errors, [])
+
+    def test_most_detailed_only_ships_lod0_and_leaves_the_scene(self):
+        fbx = self._export("lod0", lods="lod0")
+        models = set(fbx.object_names("Model"))
+        self.assertLessEqual({"chair", "chair_LOD0", "lamp"}, models)
+        self.assertTrue({"chair_LOD1", "chair_LOD2"}.isdisjoint(models), sorted(models))
+        self.assertEqual(sorted(cmds.listRelatives("chair", children=True)), ["chair_LOD0", "chair_LOD1", "chair_LOD2"])
+
+    def test_a_malformed_group_is_warned_and_ships_as_plain_nodes(self):
+        cmds.delete("chair|chair_LOD0")
+        with self.assertLogs(self.exporter.task_manager.logger, "WARNING") as logged:
+            self.exporter.task_manager.objects = cmds.ls(["chair", "lamp"], long=True)
+            self.exporter.task_manager.prepare_lods("lod0")
+        self.assertTrue(any("no LOD0" in line for line in logged.output), logged.output)
+        self.assertEqual(
+            self.exporter.task_manager._lod_plan["drop"], [], "nothing dropped from a malformed group"
+        )
+
+    def test_as_authored_states_a_usd_lod_variant_set_and_expands_it_back(self):
+        """USD (2026-11-10): a variant set ``LOD`` with variants ``LOD0..n``
+        (Unreal's ``interpret_lods``), one level each, LOD0 selected -- what a
+        reader without LOD support composes; ``expand_lod_variants`` gives a
+        host import every level back as plain children."""
+        try:
+            cmds.loadPlugin("mayaUsdPlugin", quiet=True)
+        except Exception:
+            self.skipTest("mayaUsdPlugin not available")
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=cmds.ls(["chair", "lamp"], long=True),
+                output_name="lods_usd",
+                tasks={"output_format": "usd"},
+            )
+        )
+        from pxr import Usd  # bundled with mayaUsd
+
+        from mayatk.env_utils.usd import UsdUtils
+
+        path = self.exporter.export_path
+        stage = Usd.Stage.Open(path)
+        chair = next(p for p in stage.Traverse() if p.GetName() == "chair")
+        variants = chair.GetVariantSets().GetVariantSet("LOD")
+        self.assertEqual(variants.GetVariantNames(), ["LOD0", "LOD1", "LOD2"])
+        self.assertEqual(variants.GetVariantSelection(), "LOD0")
+        self.assertEqual([c.GetName() for c in chair.GetChildren()], ["chair_LOD0"])
+        variants.SetVariantSelection("LOD2")
+        self.assertEqual([c.GetName() for c in chair.GetChildren()], ["chair_LOD2"])
+        expanded = UsdUtils.expand_lod_variants(path, os.path.join(self.temp_dir, "expanded.usda"))
+        flat = Usd.Stage.Open(expanded)
+        chair = next(p for p in flat.Traverse() if p.GetName() == "chair")
+        self.assertEqual(sorted(c.GetName() for c in chair.GetChildren()), ["chair_LOD0", "chair_LOD1", "chair_LOD2"])
+        self.assertFalse(chair.GetVariantSets().HasVariantSet("LOD"))
+        # A host import brings every level back.
+        cmds.file(new=True, force=True)
+        UsdUtils.import_scene(path)
+        self.assertEqual(
+            sorted(n.rsplit("|", 1)[-1] for n in cmds.ls("chair_LOD*", type="transform", long=True)),
+            ["chair_LOD0", "chair_LOD1", "chair_LOD2"],
+        )
+
+    def _generate_scene(self):
+        rock = cmds.polySphere(name="rock", sx=40, sy=40)[0]
+        spinner = cmds.polySphere(name="spinner", sx=40, sy=40)[0]
+        cmds.setKeyframe(spinner, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(spinner, attribute="rotateY", time=10, value=90)
+        return cmds.ls([rock, spinner, "chair"], long=True)
+
+    def test_generate_missing_ships_a_group_for_the_write_and_restores_the_scene(self):
+        objects = self._generate_scene()
+        with self.assertLogs(self.exporter.logger, "INFO") as logged:
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.temp_dir,
+                    objects=objects,
+                    output_name="generated",
+                    tasks={"lods": "generate"},
+                )
+            )
+        fbx = ptk.FbxFile.load(os.path.join(self.temp_dir, "generated.fbx"), raw_payloads=False)
+        models = set(fbx.object_names("Model"))
+        self.assertLessEqual({"rock", "rock_LOD0", "rock_LOD1", "rock_LOD2", "spinner", "chair_LOD2"}, models)
+        self.assertNotIn("spinner_LOD0", models, "an animated mesh is left alone")
+        self.assertTrue(any("animated" in line and "spinner" in line for line in logged.output), logged.output)
+        # Export Copies: the scene is as it was.
+        self.assertEqual(cmds.nodeType("|rock"), "transform")
+        self.assertEqual(sorted(cmds.ls(type="lodGroup")), ["chair"])
+        self.assertFalse(cmds.ls("rock_LOD*"), "the copies and the renamed level are gone")
+
+    def test_export_copies_puts_a_parented_mesh_back_exactly(self):
+        """Out of its group to its old parent, at its old place among its
+        siblings, its local transform to the digit (the group sat at identity
+        where the parent space was)."""
+        props = cmds.createNode("transform", name="props")
+        cmds.xform(props, translation=(3, 0, 0), rotation=(0, 30, 0))
+        rock = cmds.polySphere(name="rock", sx=40, sy=40)[0]
+        cmds.polyCube(name="crate")
+        cmds.parent(["|rock", "|crate"], props)
+        cmds.xform("|props|rock", translation=(1.25, 0.5, -2.0), rotation=(10, 20, 30))
+        local = cmds.xform("|props|rock", q=True, os=True, matrix=True)
+        order = cmds.listRelatives(props, children=True)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=["|props|rock", "|props|crate"],
+                output_name="generated_parented",
+                tasks={"lods": "generate"},
+            )
+        )
+        self.assertEqual(cmds.listRelatives(props, children=True), order)
+        self.assertEqual(cmds.xform("|props|rock", q=True, os=True, matrix=True), local)
+        self.assertEqual(cmds.ls(type="lodGroup"), ["chair"])
+
+    def test_export_copies_keeps_the_order_of_two_generated_siblings(self):
+        """Two generated meshes with a plain one between them come back in
+        their order (2026-11-10 review: restored one index at a time, X A Y B Z
+        came back X A B Y Z)."""
+        props = cmds.createNode("transform", name="props")
+        for name, heavy in (("x", False), ("a", True), ("y", False), ("b", True), ("z", False)):
+            node = cmds.polySphere(name=name, sx=40, sy=40)[0] if heavy else cmds.polyCube(name=name)[0]
+            cmds.parent(node, props)
+        order = cmds.listRelatives(props, children=True)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=cmds.listRelatives(props, children=True, fullPath=True),
+                output_name="generated_order",
+                tasks={"lods": "generate"},
+            )
+        )
+        self.assertEqual(cmds.listRelatives(props, children=True), order)
+
+    def test_generate_missing_says_why_it_leaves_a_mesh(self):
+        """A mesh holding another, and a constrained one, need authored LODs."""
+        plate = cmds.polySphere(name="plate", sx=40, sy=40)[0]
+        bolt = cmds.polySphere(name="bolt", sx=40, sy=40)[0]
+        cmds.parent(bolt, plate)
+        driver = cmds.spaceLocator(name="driver")[0]
+        follower = cmds.polySphere(name="follower", sx=40, sy=40)[0]
+        cmds.pointConstraint(driver, follower)
+        with self.assertLogs(self.exporter.logger, "INFO") as logged:
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.temp_dir,
+                    objects=cmds.ls([plate, follower], long=True),
+                    output_name="generated_reasons",
+                    tasks={"lods": "generate"},
+                )
+            )
+        text = "\n".join(logged.output)
+        self.assertRegex(text, r"holds other nodes.*plate")
+        self.assertRegex(text, r"animated.*follower")
+        self.assertEqual(cmds.ls(type="lodGroup"), ["chair"])
+
+    def test_a_mesh_whose_generation_fails_is_put_back_and_the_rest_ship(self):
+        from unittest import mock
+
+        from mayatk.edit_utils.lods import LodUtils
+
+        objects = self._generate_scene()
+        real = LodUtils.generate.__func__
+
+        def generate(cls, meshes, *args, **kwargs):
+            if any(m.rsplit("|", 1)[-1] == "rock" for m in meshes):
+                real(cls, meshes, *args, **kwargs)  # half made, then it fails
+                raise RuntimeError("polyReduce refused it")
+            return real(cls, meshes, *args, **kwargs)
+
+        boulder = cmds.polySphere(name="boulder", sx=40, sy=40)[0]
+        with mock.patch.object(LodUtils, "generate", classmethod(generate)):
+            with self.assertLogs(self.exporter.logger, "WARNING") as logged:
+                self.assertTrue(
+                    self.exporter.perform_export(
+                        export_dir=self.temp_dir,
+                        objects=objects + cmds.ls(boulder, long=True),
+                        output_name="generated_failed",
+                        tasks={"lods": "generate"},
+                    )
+                )
+        self.assertTrue(any("rock" in line and "failed" in line for line in logged.output), logged.output)
+        fbx = ptk.FbxFile.load(os.path.join(self.temp_dir, "generated_failed.fbx"), raw_payloads=False)
+        models = set(fbx.object_names("Model"))
+        self.assertIn("boulder_LOD1", models)
+        self.assertIn("rock", models)
+        self.assertNotIn("rock_LOD1", models)
+        self.assertEqual(cmds.nodeType("|rock"), "transform")
+        self.assertEqual(cmds.ls(type="lodGroup"), ["chair"])
+
+    def test_generate_missing_in_place_keeps_the_groups(self):
+        objects = self._generate_scene()
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=objects,
+                output_name="generated_in_place",
+                tasks={"lods": "generate", "lod_write_back": True},
+            )
+        )
+        self.assertEqual(cmds.nodeType("|rock"), "lodGroup")
+        self.assertEqual(
+            [c.rsplit("|", 1)[-1] for c in cmds.listRelatives("|rock", children=True)],
+            ["rock_LOD0", "rock_LOD1", "rock_LOD2"],
+        )
+
+    def test_a_scene_with_no_level_names_plans_nothing(self):
+        """The cheap gate: no level-named node, no plan and no triangle count."""
+        cmds.rename("chair|chair_LOD0", "seat")
+        cmds.rename("chair|chair_LOD1", "back")
+        cmds.rename("chair|chair_LOD2", "legs")
+        tm = self.exporter.task_manager
+        tm._lod_plan = None
+        tm.objects = cmds.ls(["chair", "lamp"], long=True)
+        tm.prepare_lods("lod0")
+        self.assertIsNone(tm._lod_plan)
+
+    def test_most_detailed_only_holds_in_the_selected_scope(self):
+        """The Selected scope writes the user's selection, not the export set:
+        a selected group still ships LOD0 alone (the write's selection is
+        refined, its ancestors kept)."""
+        cmds.select("chair", replace=True)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                output_name="selected",
+                export_visible=False,
+                tasks={"lods": "lod0"},
+            )
+        )
+        fbx = ptk.FbxFile.load(os.path.join(self.temp_dir, "selected.fbx"), raw_payloads=False)
+        models = set(fbx.object_names("Model"))
+        self.assertLessEqual({"chair", "chair_LOD0"}, models)
+        self.assertTrue({"chair_LOD1", "chair_LOD2"}.isdisjoint(models), sorted(models))
+
+    def test_most_detailed_only_records_no_level_the_write_leaves_out(self):
+        """The ``lods`` record states what the file holds: a group shipped at
+        LOD0 alone is no group (2026-11-10 review: it named the dropped
+        levels)."""
+        import json
+
+        cmds.select("chair", replace=True)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                output_name="selected_record",
+                export_visible=False,
+                tasks={"lods": "lod0", "export_data_node": True},
+            )
+        )
+        fbx = ptk.FbxFile.load(os.path.join(self.temp_dir, "selected_record.fbx"), raw_payloads=False)
+        stored = [v for v in fbx.user_properties(ptk.SceneRecords.LODS.key) if v]
+        for value in stored:
+            payload = json.loads(value.decode() if isinstance(value, bytes) else value)
+            self.assertEqual(payload.get("groups"), [], payload)
+
+    def test_most_detailed_only_holds_in_a_usd_write(self):
+        try:
+            cmds.loadPlugin("mayaUsdPlugin", quiet=True)
+        except Exception:
+            self.skipTest("mayaUsdPlugin not available")
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=cmds.ls(["chair", "lamp"], long=True),
+                output_name="lod0_usd",
+                tasks={"lods": "lod0", "output_format": "usd"},
+            )
+        )
+        from pxr import Usd  # bundled with mayaUsd
+
+        stage = Usd.Stage.Open(self.exporter.export_path)  # held: prims expire with it
+        names = {p.GetName() for p in stage.Traverse()}
+        self.assertLessEqual({"chair", "chair_LOD0", "lamp"}, names)
+        self.assertTrue({"chair_LOD1", "chair_LOD2"}.isdisjoint(names), sorted(names))
+
+
 class TestExcludeRigHelpersOption(MayaTkTestCase):
     """The 'Exclude Rig Helpers' row drops a baked rig's apparatus from the FBX.
 
@@ -6106,8 +6454,8 @@ class TestExportSetStalePaths(MayaTkTestCase):
         Both emit through ``logger.log_group``, gated on ``isEnabledFor(INFO)``
         — and both branches were previously unreachable from any test:
         ``ignore_groups`` was never called at all, and
-        ``check_geometry_lod_suffix`` was only ever called on objects with no
-        LOD suffix, so its ``if matches:`` block never ran. A gated report is
+        the LOD listing (now ``prepare_lods``) was only ever reached with no
+        LOD-named node, so its report never ran. A gated report is
         dead code under a suite that never enables the level or the branch,
         which is how a bad attribute reference ships unnoticed. Drive both
         with the data that reaches the report.
@@ -6117,11 +6465,11 @@ class TestExportSetStalePaths(MayaTkTestCase):
 
         lod = self._cube("PROP_LOD0", self.static)
         self.tm.objects = [self.clean, lod]
-        ok, messages = self.tm.check_geometry_lod_suffix()
-        self.assertTrue(ok)
+        with self.assertLogs(self.exporter.logger, "INFO") as logged:
+            self.tm.prepare_lods("authored")
         self.assertTrue(
-            any("PROP_LOD0" in m for m in messages),
-            f"LOD match missing from messages: {messages}",
+            any("PROP_LOD0" in line and "no sibling level" in line for line in logged.output),
+            f"lone LOD level missing from the report: {logged.output}",
         )
 
         # ignore_groups: STATIC is the top-level parent of every fixture cube,
@@ -6144,12 +6492,12 @@ class TestExportSetStalePaths(MayaTkTestCase):
                 lambda: self.tm.check_duplicate_names("locators"),
             ),
             ("check_mangled_names", self.tm.check_mangled_names),
-            ("check_geometry_lod_suffix", self.tm.check_geometry_lod_suffix),
             ("check_hidden_geometry", self.tm.check_hidden_geometry),
         ):
             with self.subTest(check=name):
                 ok, messages = check()
                 self.assertTrue(ok, messages)
+        self.tm.prepare_lods("lod0")  # the LOD read takes the same guard
 
     def test_locator_check_still_flags_duplicates(self):
         loc_a = cmds.ls(cmds.spaceLocator(name="SNAP")[0], long=True)[0]
@@ -8746,6 +9094,26 @@ class TestObjectsToExport(MayaTkTestCase):
         self.assertNotIn(long_hidden, visible)
         # An unknown mode reads as the default, Visible.
         self.assertEqual(SceneExporter.objects_to_export("bogus"), visible)
+
+    def test_the_visible_scope_ships_every_level_of_a_lod_group(self):
+        """A lodGroup drives its children's ``.lodVisibility`` from its camera
+        (measured 2026-11-10: camera at 12% of the screen, only LOD2 visible),
+        so the Visible scope shipped the one level the camera showed and the
+        export changed with the camera."""
+        levels = [cmds.polyCube(name=f"scopeLod_LOD{i}")[0] for i in range(2)]
+        group = cmds.createNode("lodGroup", name="scopeLod")
+        cmds.parent(levels, group)
+        cam = cmds.listRelatives("persp", shapes=True)[0]
+        cmds.connectAttr(f"{cam}.worldMatrix[0]", f"{group}.cameraMatrix")
+        cmds.connectAttr(f"{cam}.focalLength", f"{group}.focalLength")
+        cmds.setAttr(f"{group}.useScreenHeightPercentage", True)
+        cmds.setAttr(f"{group}.percentageThreshold[0]", 99.0)  # the camera shows LOD1
+        cmds.dgdirty(allPlugs=True)
+
+        visible = [p.rsplit("|", 1)[-1] for p in SceneExporter.objects_to_export("visible")]
+
+        self.assertIn("scopeLod_LOD0", visible)
+        self.assertIn("scopeLod_LOD1", visible)
 
 
 class TestGeneralTextureFileType(MayaTkTestCase):

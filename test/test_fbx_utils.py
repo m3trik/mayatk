@@ -135,6 +135,7 @@ class TestRecordUnits(MayaTkTestCase):
         ptk.SceneRecords.VISIBILITY.key: "frames with their fps, and colours",
         ptk.SceneRecords.AUDIO.key: "seconds and file names",
         ptk.SceneRecords.MATERIALS.key: "factors and file names",
+        ptk.SceneRecords.LODS.key: "node names and screen-height fractions",
     }
     UNITS = (("cm", "deg"), ("m", "rad"))
 
@@ -208,6 +209,11 @@ class TestRecordUnits(MayaTkTestCase):
             if path:
                 self.addCleanup(lambda p=path: os.path.exists(p) and os.remove(p))
         cmds.playbackOptions(min=1, max=40)
+        from mayatk.edit_utils.lods import LodUtils
+
+        rock = cmds.polySphere(name="EvRock", sx=32, sy=32)[0]
+        cmds.move(0, 50, -600, rock)
+        LodUtils.generate([rock])
         cube = cmds.polyCube(name="EvCube")[0]
         cmds.move(0, 50, 600, cube)
         store = ShotStore()

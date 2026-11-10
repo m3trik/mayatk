@@ -43,6 +43,8 @@ class _TaskDefinitionsMixin:
         ptk.ExportProfile.texture_file_type_options()
     )
     _export_mode_options: Dict[str, Any] = ptk.ExportProfile.EXPORT_MODE_OPTIONS
+    _lod_options: Dict[str, Any] = ptk.ExportProfile.LOD_OPTIONS
+    _lod_output_options: Dict[str, Any] = ptk.ExportProfile.LOD_OUTPUT_OPTIONS
     _bake_range_options: Dict[str, Any] = ptk.ExportProfile.BAKE_RANGE_OPTIONS
     _optimize_keys_options: Dict[str, Any] = ptk.ExportProfile.OPTIMIZE_KEYS_OPTIONS
     _secondary_max_size_options: Dict[str, Any] = (
@@ -201,6 +203,70 @@ class _TaskDefinitionsMixin:
                     ],
                 ),
                 "setChecked": True,
+            },
+            # A mode, not a task: ``ExportRun.from_tasks`` pops it and hands it to
+            # ``prepare_lods``, armed on every export.
+            "lods": {
+                "widget_type": "ComboBox",
+                "panel": "settings",
+                "set_row_label": "LODs",
+                "setToolTip": TooltipFormat.fmt(
+                    title="LODs",
+                    body="What the export ships of the scene's LOD groups: a node "
+                    "whose children are named &lt;name&gt;_LOD0, _LOD1 … (a Maya "
+                    "LOD group named so is one), LOD0 the most detailed.",
+                    bullets=[
+                        "<b>As Authored</b> — each group ships as one: the FBX "
+                        "keeps the names Unity reads and the LOD group Unreal and "
+                        "Maya read, the GLB states it in MSFT_lod.",
+                        "<b>Most Detailed Only</b> — LOD0 alone: the lower levels "
+                        "are left out of the written file. The scene is not "
+                        "changed.",
+                        "<b>Generate Missing</b> — authored groups as authored, and a "
+                        "LOD group made for each mesh with none that can take one "
+                        "(see LOD Output).",
+                    ],
+                    notes=[
+                        "Every export lists the groups it finds; a malformed one "
+                        "(no LOD0, a gap, levels sharing a node with other nodes) "
+                        "is named and ships as plain nodes.",
+                        "Maya's Generate LOD Meshes holds levels in LOD_0, LOD_1 "
+                        "containers, which Unity does not read: the export names "
+                        "them.",
+                        "Most Detailed Only keeps LOD0's name, so Unity's "
+                        "importer still builds a one-level LOD Group around it, "
+                        "which culls it below 1% of the screen height.",
+                    ],
+                ),
+                "add": self._lod_options,
+            },
+            # A mode, not a task: Generate Missing's LOD Output (the Texture /
+            # Animation Output pattern), popped by ``ExportRun.from_tasks``.
+            "lod_write_back": {
+                "widget_type": "ComboBox",
+                "panel": "settings",
+                "set_row_label": "LOD Output",
+                "setToolTip": TooltipFormat.fmt(
+                    title="LOD Output",
+                    body="Whether the LOD groups <b>Generate Missing</b> makes stay "
+                    "in the scene.",
+                    bullets=[
+                        "<b>Export Copies (Scene Untouched)</b> — non-destructive: "
+                        "the groups are made for the write and each mesh is put "
+                        "back as it was afterwards.",
+                        "<b>Scene (In Place)</b> — the groups stay: each mesh is "
+                        "&lt;name&gt;_LOD0 under a LOD group &lt;name&gt;, its "
+                        "reduced copies beside it, ready to tune. The export runs "
+                        "outside undo: remove the groups by hand to go back.",
+                    ],
+                    notes=[
+                        "Generate Missing leaves alone a mesh a scene record names "
+                        "(lightmaps, articulation, shadows), a skinned, instanced, "
+                        "animated or constrained one, one holding other nodes, and "
+                        "one too light for a lower level; each is listed with why.",
+                    ],
+                ),
+                "add": self._lod_output_options,
             },
             "reassign_duplicate_materials": {
                 "widget_type": "QCheckBox",
@@ -865,21 +931,6 @@ class _TaskDefinitionsMixin:
                     notes=[
                         "Scans the whole scene, not just the export set.",
                         "Import the reference (or remove it) to pass.",
-                    ],
-                ),
-                "setChecked": True,
-            },
-            "check_geometry_lod_suffix": {
-                "widget_type": "QCheckBox",
-                "group": "Hierarchy & Naming",
-                "setText": "Check Geometry LOD Suffix (_LODx)",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check Geometry LOD Suffix (_LODx)",
-                    body="Lists geometry named with an LOD suffix — '_LOD' alone "
-                    "or followed by digits ('_LOD1', '_LOD02'), case-insensitive.",
-                    notes=[
-                        "Informational only: it reports what it finds and never "
-                        "fails the export."
                     ],
                 ),
                 "setChecked": True,

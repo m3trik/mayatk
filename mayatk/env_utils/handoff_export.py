@@ -227,9 +227,12 @@ class MayaExportMixin:
         # inherit_parent_visibility=True is what actually walks the transform
         # chain and drops hidden geometry (without it the helper returns every
         # renderable shape regardless of visibility).
+        # A level hidden only by its LOD group's camera switch counts as
+        # visible (the Scene Exporter's rule): the send never depends on
+        # where the camera stands.
         shapes = (
             DisplayUtils.get_visible_geometry(
-                shapes=True, inherit_parent_visibility=True
+                shapes=True, inherit_parent_visibility=True, consider_lod_visible=True
             )
             or []
         )

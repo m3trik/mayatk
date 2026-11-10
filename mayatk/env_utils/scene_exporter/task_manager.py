@@ -337,7 +337,7 @@ class TaskManager(
     MAX_VERIFY_FBX_BYTES = 512 * 1024 * 1024
     #: Gates whose passing row is a measurement worth reading, so
     #: :meth:`verify_deliverables` logs it like a warning.
-    VERIFY_MEASUREMENTS = ("glb_image_bytes",)
+    VERIFY_MEASUREMENTS = ("glb_image_bytes", "glb_lod_deviation")
 
     def verify_deliverables(
         self,
