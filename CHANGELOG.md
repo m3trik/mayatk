@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-11-11 -- Fixed: Create LODs gives back the selection it was given, and cleans its copies within its own layer (`edit_utils/lods.py` `LodUtils.generate`, `_reduce_copy`).** Each level's `duplicate` selects the copy, so the per-copy restore around the non-manifold cleanup put the copy back, and a generate left the last copy selected; the selection held on entry (by uuid: the meshes are renamed) now comes back when it ends, even on an error. The cleanup runs Maya's Mesh > Cleanup (`polyCleanupArgList`) itself instead of `MeshDiagnostics.clean_geometry`, which ranks above `edit_utils` (`MeshDiagnostics` uses `EditUtils`); the layer gate stopped the release on that import.
+  - Test(s): red first, then green: `test_lods.py` new `test_a_non_manifold_mesh_is_cleaned_on_its_copies_and_the_selection_kept` (two spheres merged at their poles; selection `['pair_LOD1']` before, `['keep']` after); the module 14 passed in mayapy; `check_layers.py --check mayatk` 0 new.
 - **2026-11-10 -- LOD pipeline end to end, and its full review (`edit_utils/lods.py`, `env_utils/scene_exporter/{_task_scene.py, _scene_exporter.py, task_manager.py}`, `env_utils/usd.py`).**
   - **Export Copies keeps sibling order.** Two generated meshes under one parent came back swapped (X A Y B Z as X A B Y Z). Each touched parent's children are snapshotted before any move and restored whole.
   - **`LodUtils`:**

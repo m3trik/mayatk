@@ -40,6 +40,25 @@ class TestGenerate(MayaTkTestCase):
         (read,) = mtk.LodUtils.groups([group])
         self.assertEqual(read["issues"], [])
 
+    def test_a_non_manifold_mesh_is_cleaned_on_its_copies_and_the_selection_kept(self):
+        """polyReduce refuses non-manifold geometry, so each level's copy goes
+        through Maya's Mesh > Cleanup first; the source mesh and the user's
+        selection stay as they were."""
+        a = cmds.polySphere(name="a", sx=40, sy=40)[0]
+        b = cmds.polySphere(name="b", sx=40, sy=40)[0]
+        cmds.move(0, 2, 0, b)  # the two poles meet at one point
+        pair = cmds.polyUnite(a, b, name="pair", constructionHistory=False)[0]
+        cmds.polyMergeVertex(pair, distance=1e-4, constructionHistory=False)
+        self.assertTrue(cmds.polyInfo(pair, nonManifoldVertices=True))
+        before = _tris(pair)
+        keep = cmds.polyCube(name="keep")[0]
+        cmds.select(keep, replace=True)
+        (group,) = mtk.LodUtils.generate([pair])
+        levels = cmds.listRelatives(group, children=True, fullPath=True)
+        self.assertEqual(_tris(levels[0]), before)  # LOD0 is the source, untouched
+        self.assertLess(_tris(levels[1]), before * 0.6)
+        self.assertEqual(cmds.ls(selection=True), ["keep"])
+
     def test_generation_is_one_undo_step(self):
         sphere = cmds.polySphere(name="ball", sx=40, sy=40)[0]
         cmds.undoInfo(state=True)

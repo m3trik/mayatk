@@ -26,8 +26,9 @@ from typing import Any, Dict, List, Optional, Sequence
 
 try:
     import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError:
-    cmds = None
+    cmds = mel = None
 
 import logging
 
@@ -249,11 +250,8 @@ class LodUtils(ptk.HelpMixin):
         copy = cmds.duplicate(source, name=name, renameChildren=True)[0]
         copy = cmds.ls(copy, long=True)[0]
         if cmds.polyInfo(copy, nonManifoldVertices=True) or cmds.polyInfo(copy, nonManifoldEdges=True):
-            from mayatk.core_utils.diagnostics.mesh_diag import MeshDiagnostics
-
-            chosen = cmds.ls(selection=True, long=True)  # the cleanup selects; the user's comes back
-            MeshDiagnostics.clean_geometry(copy, repair=True, historyOn=False, nonmanifold=2, lamina=True)
-            cmds.select(chosen, replace=True) if chosen else cmds.select(clear=True)
+            cmds.select(copy, replace=True)  # Mesh > Cleanup: repair non-manifold (geometry too) and lamina, no history
+            mel.eval('polyCleanupArgList 4 {"0","1","0","0","0","0","0","0","0","1e-05","0","1e-05","0","1e-05","0","2","1","0"}')
         cmds.polyTriangulate(copy, constructionHistory=False)
         cmds.polyReduce(
             copy,
@@ -308,27 +306,32 @@ class LodUtils(ptk.HelpMixin):
                 skipped.setdefault(reason, []).append(candidate.rsplit("|", 1)[-1])
         for reason, names in skipped.items():
             logger.info("Create LODs left %d mesh(es) alone (%s): %s", len(names), reason, ", ".join(sorted(names)))
+        held = cmds.ls(selection=True, uuid=True)  # by uuid: the meshes are renamed
         made = []
-        for mesh in meshes:
-            triangles = cmds.polyEvaluate(mesh, triangle=True)
-            targets = ptk.LodChain.ladder(triangles if isinstance(triangles, int) else 0, levels, ratio)
-            if not targets:
-                continue
-            base = mesh.rsplit("|", 1)[-1]
-            parent = (cmds.listRelatives(mesh, parent=True, fullPath=True) or [None])[0]
-            # By uuid from here: a short name can match a namesake elsewhere.
-            (uuid,) = cmds.ls(mesh, uuid=True)
-            cmds.rename(mesh, ptk.LodChain.level_name(base, 0))
-            group = cls._new_group(base, parent)
-            # The group sits at identity in the mesh's parent space: relative
-            # keeps its local transform to the digit (absolute re-derives it).
-            cmds.parent(cmds.ls(uuid, long=True)[0], group, relative=True)
-            lod0 = cmds.ls(uuid, long=True)[0]
-            for index, target in enumerate(targets, 1):
-                cls._reduce_copy(lod0, ptk.LodChain.level_name(base, index), target, preserve)
-            count = len(targets) + 1
-            cls.set_heights(group, heights if heights and len(heights) == count else ptk.LodChain.default_heights(count))
-            made.append(cmds.ls(group, long=True)[0])
+        try:
+            for mesh in meshes:
+                triangles = cmds.polyEvaluate(mesh, triangle=True)
+                targets = ptk.LodChain.ladder(triangles if isinstance(triangles, int) else 0, levels, ratio)
+                if not targets:
+                    continue
+                base = mesh.rsplit("|", 1)[-1]
+                parent = (cmds.listRelatives(mesh, parent=True, fullPath=True) or [None])[0]
+                # By uuid from here: a short name can match a namesake elsewhere.
+                (uuid,) = cmds.ls(mesh, uuid=True)
+                cmds.rename(mesh, ptk.LodChain.level_name(base, 0))
+                group = cls._new_group(base, parent)
+                # The group sits at identity in the mesh's parent space: relative
+                # keeps its local transform to the digit (absolute re-derives it).
+                cmds.parent(cmds.ls(uuid, long=True)[0], group, relative=True)
+                lod0 = cmds.ls(uuid, long=True)[0]
+                for index, target in enumerate(targets, 1):
+                    cls._reduce_copy(lod0, ptk.LodChain.level_name(base, index), target, preserve)
+                count = len(targets) + 1
+                cls.set_heights(group, heights if heights and len(heights) == count else ptk.LodChain.default_heights(count))
+                made.append(cmds.ls(group, long=True)[0])
+        finally:  # a copy's duplicate and cleanup select it; the user's selection comes back
+            kept = cmds.ls(held, long=True) if held else []
+            cmds.select(kept, replace=True) if kept else cmds.select(clear=True)
         return made
 
     @classmethod
