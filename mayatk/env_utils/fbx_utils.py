@@ -2247,6 +2247,11 @@ class FbxUtils(ptk.HelpMixin):
             "LightmapRecords",
             "export_record",
         ),
+        ptk.SceneRecords.LODS: (
+            "mayatk.edit_utils.lods",
+            "LodUtils",
+            "export_record",
+        ),
         ptk.SceneRecords.MATERIALS: (
             "mayatk.env_utils.material_records",
             "MaterialRecords",
@@ -2357,7 +2362,9 @@ class FbxUtils(ptk.HelpMixin):
         way, and none is loaded to ask -- or outside Maya). A write that ships
         a record as stored (a hand-off) is told which stored copies it must
         ship none of (``withheld``: the ``"withheld_records"`` hook, the
-        lightmaps record a moved lightmap set has made false)."""
+        lightmaps record a moved lightmap set has made false). *omit* names
+        nodes under the scope the write leaves out (the Scene Exporter's Most
+        Detailed Only levels): none of them ships, so no record names them."""
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}
@@ -2369,8 +2376,11 @@ class FbxUtils(ptk.HelpMixin):
             )
         except Exception:  # noqa: BLE001 - provenance never costs an export
             pass
+        omit = frozenset(decisions.pop("omit", None) or ())
         if decisions.get("scope") is not None and "nodes" not in decisions:
             decisions["nodes"] = cls._shipped_nodes(decisions["scope"])
+        if omit and decisions.get("nodes") is not None:
+            decisions["nodes"] = frozenset(decisions["nodes"]) - omit
         if "unit_scale" not in decisions:
             decisions["unit_scale"] = cls._writer_unit(writer, writer_options)
         if "animated" not in decisions and mode != ptk.ExportContext.AUTHORING:

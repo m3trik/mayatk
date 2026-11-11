@@ -113,6 +113,52 @@ class TestIsVisibleMatchesTheRenderer(MayaTkTestCase):
         cmds.setAttr(f"{self.cube}.lodVisibility", False)
         self.assertFalse(mtk.DisplayUtils.is_visible(self.shape))
 
+    def _lod_group_showing_its_last_level(self):
+        """A lodGroup on the persp camera, thresholds set so the camera shows
+        LOD1 (measured 2026-11-10: the group drives each child's
+        ``.lodVisibility`` from the camera)."""
+        lod1 = cmds.polyCube(name="visLod_LOD1")[0]
+        lod0 = cmds.rename(self.cube, "visLod_LOD0")
+        group = cmds.createNode("lodGroup", name="visLod")
+        cmds.parent([lod0, lod1], group)
+        cam = cmds.listRelatives("persp", shapes=True)[0]
+        cmds.connectAttr(f"{cam}.worldMatrix[0]", f"{group}.cameraMatrix")
+        cmds.connectAttr(f"{cam}.focalLength", f"{group}.focalLength")
+        cmds.setAttr(f"{group}.useScreenHeightPercentage", True)
+        cmds.setAttr(f"{group}.percentageThreshold[0]", 99.0)  # LOD0 only above 99%
+        cmds.dgdirty(allPlugs=True)
+        shapes = [
+            cmds.listRelatives(f"|visLod|{name}", shapes=True, fullPath=True)[0]
+            for name in ("visLod_LOD0", "visLod_LOD1")
+        ]
+        return group, shapes
+
+    def test_a_lod_groups_level_switch_is_display_state_when_asked(self):
+        """A LOD group hides all but the level its camera shows: display state,
+        not authoring. An export asks for every level (the Scene Exporter's
+        visible scope shipped only the camera's level)."""
+        _group, (lod0, lod1) = self._lod_group_showing_its_last_level()
+        self.assertFalse(mtk.DisplayUtils.is_visible(lod0), "the camera shows LOD1")
+        self.assertTrue(mtk.DisplayUtils.is_visible(lod1))
+        self.assertTrue(mtk.DisplayUtils.is_visible(lod0, consider_lod_visible=True))
+
+    def test_a_hand_set_lod_visibility_still_hides_when_asked(self):
+        """Only a LOD group's switch is display state: ``.lodVisibility`` turned
+        off by hand (nothing drives it) still hides the node."""
+        cmds.setAttr(f"{self.cube}.lodVisibility", False)
+        self.assertFalse(mtk.DisplayUtils.is_visible(self.shape, consider_lod_visible=True))
+
+    def test_visible_geometry_keeps_every_level_when_asked(self):
+        _group, _shapes = self._lod_group_showing_its_last_level()
+        names = lambda result: sorted(n.rsplit("|", 1)[-1] for n in result)  # noqa: E731
+        kept = mtk.DisplayUtils.get_visible_geometry(inherit_parent_visibility=True)
+        self.assertNotIn("visLod_LOD0", names(kept))
+        kept = mtk.DisplayUtils.get_visible_geometry(
+            inherit_parent_visibility=True, consider_lod_visible=True
+        )
+        self.assertIn("visLod_LOD0", names(kept))
+        self.assertIn("visLod_LOD1", names(kept))
+
     def test_a_template_display_layer_templates_its_members(self):
         layer = cmds.createDisplayLayer(self.cube, name="visTemplate", noRecurse=True)
         cmds.setAttr(f"{layer}.displayType", 1)

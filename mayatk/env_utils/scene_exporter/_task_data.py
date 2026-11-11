@@ -85,6 +85,10 @@ class _TaskDataMixin:
     #: The flatten task's scan and outcome, for the shear check to reuse
     #: (see ``_sheared_offenders_after_flatten``). Per-run: ``begin_run``.
     _shear_verdict: Optional[Dict[str, Any]] = None
+    #: This run's LOD plan (``prepare_lods``: ``ptk.LodChain.plan``), its
+    #: ``drop`` the levels the write leaves out. None: no level-named node.
+    #: Per-run.
+    _lod_plan: Optional[Dict[str, Any]] = None
     _assess_cache: Dict[tuple, Any]
 
     # -- report lines a plain logger can carry ------------------------------
@@ -144,6 +148,7 @@ class _TaskDataMixin:
         self._realized_whole_take = None
         self._texture_network_snapshot = None
         self._shear_verdict = None
+        self._lod_plan = None
         self._invalidate_material_caches()
         self._invalidate_keyframe_cache()
 

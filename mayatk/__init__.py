@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.32.0"
+__version__ = "0.33.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -123,6 +123,7 @@ DEFAULT_INCLUDE = {
     "edit_utils.naming._naming": "Naming",
     "edit_utils.primitives": "Primitives",
     "edit_utils.snap": "Snap",
+    "edit_utils.lods": "LodUtils",
     "edit_utils.macros._macros": "Macros",
     "edit_utils.bevel": "Bevel",
     "edit_utils.bridge": "Bridge",
@@ -269,6 +270,10 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
+    # The Scene Exporter's informational LOD listing retired with its row
+    # (2026-11-10): every export reads the LOD groups, and the LODs row
+    # decides what ships.
+    "TaskManager.check_geometry_lod_suffix": ("mayatk.TaskManager.prepare_lods", "0.33.0"),
     # The Substance bridge runs scripts in Painter and finds a Painter by its
     # instance record (2026-11-05): the Painter row's values, no fixed port, no
     # code-evaluating op, no render template.
@@ -645,8 +650,9 @@ MOVED_NAMES = {
         "tentacle.slots.tools.texture_path_editor.TexturePathEditorSlots",
         "0.30.0",
     ),
+    # The panel went (2026-11-11): an Arnold render bridges what it needs itself.
     "ArnoldBridgeSlots": (
-        "tentacle.slots.tools.arnold_bridge.ArnoldBridgeSlots",
+        "removed: an Arnold render bridges the game shaders itself (mayatk.RenderUtils.prepare_arnold_preview)",
         "0.30.0",
     ),
     "LightRigSlots": (

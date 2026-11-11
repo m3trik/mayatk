@@ -220,6 +220,7 @@ class DisplayUtils(ptk.HelpMixin):
         node: str,
         consider_templated_visible: bool = False,
         consider_animated_visible: bool = False,
+        consider_lod_visible: bool = False,
     ) -> bool:
         """Whether *node* renders -- its own visibility AND every parent's.
 
@@ -248,6 +249,10 @@ class DisplayUtils(ptk.HelpMixin):
                 regardless of the current frame -- it is hidden *now*, not
                 hidden *always*, and a bake or export covering other frames
                 still needs it.
+            consider_lod_visible: Treat a ``.lodVisibility`` a LOD group
+                drives as visible: the group shows the level its camera
+                picks, which is display state, and an export ships every
+                level. A ``.lodVisibility`` set by hand still hides.
 
         Returns:
             bool: True when the node and every ancestor pass.
@@ -261,7 +266,15 @@ class DisplayUtils(ptk.HelpMixin):
                     pass  # Treat as visible — animation will be baked
                 else:
                     return False
-            if not cmds.getAttr(f"{current}.lodVisibility"):
+            if not cmds.getAttr(f"{current}.lodVisibility") and not (
+                consider_lod_visible
+                and cmds.listConnections(
+                    f"{current}.lodVisibility",
+                    source=True,
+                    destination=False,
+                    type="lodGroup",
+                )
+            ):
                 return False
             overridden = cmds.getAttr(f"{current}.overrideEnabled")
             if overridden and not cmds.getAttr(f"{current}.overrideVisibility"):
@@ -282,6 +295,7 @@ class DisplayUtils(ptk.HelpMixin):
         consider_templated_visible: bool = False,
         inherit_parent_visibility: bool = False,
         consider_animated_visible: bool = False,
+        consider_lod_visible: bool = False,
     ) -> List[str]:
         """Get a list of visible geometry.
 
@@ -295,6 +309,8 @@ class DisplayUtils(ptk.HelpMixin):
                 of the current-frame value.  This ensures geometry that
                 is hidden at the current frame but animated at other
                 frames is included in the result.
+            consider_lod_visible (bool): Count every level of a LOD group,
+                not only the one its camera shows (:meth:`is_visible`).
 
         Returns:
             List[str]: A list of visible node names of the specified type.
@@ -305,6 +321,7 @@ class DisplayUtils(ptk.HelpMixin):
                 node,
                 consider_templated_visible=consider_templated_visible,
                 consider_animated_visible=consider_animated_visible,
+                consider_lod_visible=consider_lod_visible,
             )
 
         result = []

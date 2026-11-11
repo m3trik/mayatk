@@ -676,6 +676,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 # the GLB's envelope does, with this run's choices.
                 rendering=self.run.rendering,
                 scope=tuple(self._live_objects()) or None,
+                # Most Detailed Only: the levels the write leaves out ship no record.
+                omit=self.lod_omitted(),
             )
             if not FbxUtils._export_depth:
                 staged = dict(FbxUtils._session_stagers)

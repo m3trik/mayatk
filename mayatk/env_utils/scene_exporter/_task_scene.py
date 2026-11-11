@@ -579,6 +579,279 @@ class _SceneTasksMixin(_TaskDataMixin):
         else:
             self.logger.debug("No HDR skydome in the export set — nothing to exclude.")
 
+    def prepare_lods(self, mode: str = "authored") -> None:
+        """Read the export set's LOD groups and ship them as the LODs row asks.
+
+        A LOD group is a node ``<base>`` whose children ``<base>_LOD0..n`` are
+        its levels (``ptk.LodChain``; a Maya ``lodGroup`` named so is one, and
+        the ``LOD_<n>`` containers Maya's Generate LOD Meshes writes are read
+        and named, since Unity reads neither). Armed on every export by
+        ``ExportRun.from_tasks``; ``ptk.LodChain.plan`` decides, this lists the
+        nodes and applies it. A scene with no level-named node costs one name
+        scan: triangles are counted for levels alone.
+
+        Parameters:
+            mode: ``"authored"`` ships each group as one; ``"lod0"`` (Most
+                Detailed Only) takes every lower level out of the export set,
+                and :meth:`lod_write_selection` out of the write's selection
+                (a selected group carries its whole subtree into the file).
+                The scene is never touched.
+        """
+        objects = [
+            o for o in self._live_objects() if cmds.objectType(o, isAType="transform")
+        ]
+        # The write carries each selected node's whole subtree and its
+        # ancestors, so read both around the export set.
+        paths: Dict[str, None] = {}
+        for obj in objects:
+            parts = obj.split("|")
+            for end in range(2, len(parts) + 1):
+                paths.setdefault("|".join(parts[:end]), None)
+        if objects:
+            below = cmds.listRelatives(
+                objects, allDescendents=True, type="transform", fullPath=True
+            )
+            for path in below or []:
+                paths.setdefault(path, None)
+        if not ptk.LodChain.names_levels(paths):
+            return
+        from mayatk.edit_utils.lods import LodUtils
+
+        plan = ptk.LodChain.plan(LodUtils.nodes(list(paths)), mode)
+        self._lod_plan = plan
+        for warning in plan["warnings"]:
+            self.logger.warning(warning)
+        for note in plan["notes"]:
+            self.logger.info(note)
+        by_distance = [
+            g["parent"].rsplit("|", 1)[-1]
+            for g in plan["groups"]
+            if g["parent"] and LodUtils.switches_by_distance(g["parent"])
+        ]
+        if by_distance:
+            self.logger.warning(
+                f"LOD groups switching by camera distance ({', '.join(by_distance)}): a "
+                "distance is no screen height, so the file states the default switch "
+                "heights for them; set Screen Height Percentage on the lodGroup to state your own."
+            )
+        if plan["listing"] and self.logger.isEnabledFor(logging.INFO):
+            self._log_group(f"LOD groups ({len(plan['groups'])})", plan["listing"])
+        drop = plan["drop"]
+        if drop:
+            self.objects = [
+                o
+                for o in self.objects
+                if not any(o == p or o.startswith(p + "|") for p in drop)
+            ]
+            self.logger.info(
+                f"Most Detailed Only: {len(drop)} lower LOD level(s) left out of the export."
+            )
+
+    @staticmethod
+    def _lod_ineligible(mesh: str, named) -> Optional[str]:
+        """Why Generate Missing leaves *mesh* alone, or None: its levels would
+        be renamed and regrouped, so a mesh a scene record names (lightmaps,
+        articulation, shadows) needs authored LODs, as does one
+        ``LodUtils.ineligible`` names (deforming, instanced, moving, holding
+        other transforms, too light)."""
+        from mayatk.edit_utils.lods import LodUtils
+
+        leaf = mesh.rsplit("|", 1)[-1]
+        if mesh in named or leaf in named or leaf.rsplit(":", 1)[-1] in named:
+            return "named by a scene record"
+        return LodUtils.ineligible(mesh)
+
+    def generate_lods(self) -> None:
+        """Generate Missing (the LODs row): a LOD group for each eligible mesh
+        of the export set (``mtk.LodUtils.generate``: ``<name>_LOD0`` and
+        reduced copies under a ``lodGroup`` ``<name>``). Authored groups ship
+        as authored; a mesh left alone is said, with why (:meth:`_lod_ineligible`).
+        LOD Output (``run.lod_write_back``): Export Copies, the default, makes
+        the groups for the write and puts each mesh back after it; Scene (In
+        Place) keeps them.
+        """
+        from mayatk.edit_utils.lods import LodUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        plan = self._lod_plan or {}
+        authored = [p for g in plan.get("groups", []) for p in g["levels"] if p]
+        try:
+            named = ptk.SceneRecords.named_nodes(
+                DataNodes.dump(), skip=(ptk.SceneRecords.LODS.key,)
+            )
+        except Exception:  # no carrier: nothing names a node
+            named = set()
+        eligible: List[str] = []
+        skipped: Dict[str, List[str]] = {}
+        for mesh in self._live_objects():
+            if not cmds.objectType(mesh, isAType="transform"):
+                continue
+            shapes = cmds.listRelatives(
+                mesh, shapes=True, type="mesh", noIntermediate=True, fullPath=True
+            )
+            if not shapes or ptk.LodChain.parse(mesh):
+                continue
+            if any(mesh == p or mesh.startswith(p + "|") for p in authored):
+                continue
+            reason = self._lod_ineligible(mesh, named)
+            if reason:
+                skipped.setdefault(reason, []).append(mesh.rsplit("|", 1)[-1])
+                continue
+            eligible.append(mesh)
+        for reason, names in skipped.items():
+            self.logger.info(
+                f"Generate Missing left {len(names)} mesh(es) alone ({reason}; "
+                f"authored LODs needed): {', '.join(sorted(names))}"
+            )
+        if not eligible:
+            return
+        keep = self.run.lod_write_back
+        originals: List[tuple] = []  # (uuid, name, parent, sibling index) per mesh grouped
+        made: List[str] = []  # the groups' uuids
+        orders: Dict[Optional[str], List[str]] = {}  # each touched parent's children, before any moved
+        if not keep:
+            # Staged before the first mesh: a run that stops midway still puts
+            # back every mesh it grouped.
+            self.stage_deferred_restore(
+                "generated_lods", lambda: self._restore_lod_meshes(originals, made, orders)
+            )
+        groups: List[str] = []
+        grouped: List[str] = []  # the export set's paths of the meshes grouped
+        for mesh in eligible:
+            leaf = mesh.rsplit("|", 1)[-1]
+            parent = (cmds.listRelatives(mesh, parent=True, fullPath=True) or [None])[0]
+            siblings = (
+                cmds.listRelatives(parent, children=True, type="transform", fullPath=True)
+                if parent
+                else cmds.ls(assemblies=True, long=True)
+            ) or []
+            if parent not in orders:  # before this parent's first mesh moves
+                orders[parent] = cmds.ls(siblings, uuid=True) or []
+            record = (
+                cmds.ls(mesh, uuid=True)[0],
+                leaf,
+                parent,
+                siblings.index(mesh) if mesh in siblings else None,
+            )
+            originals.append(record)
+            try:
+                made_here = LodUtils.generate([mesh])
+            except Exception as error:  # noqa: BLE001 -- one mesh never costs the rest
+                self._restore_lod_meshes([record], [], orders)
+                originals.remove(record)
+                skipped.setdefault(f"its generation failed: {error}", []).append(leaf)
+                continue
+            if not made_here:
+                originals.remove(record)
+                continue
+            groups.extend(made_here)
+            grouped.append(mesh)
+            made.extend(cmds.ls(made_here, uuid=True))
+        for reason, names in skipped.items():
+            if reason.startswith("its generation failed"):
+                self.logger.warning(
+                    f"Generate Missing left {len(names)} mesh(es) as they were ({reason}): "
+                    f"{', '.join(sorted(names))}"
+                )
+        if not groups:
+            return
+        levels = [
+            child
+            for group in groups
+            for child in cmds.listRelatives(group, children=True, fullPath=True) or []
+        ]
+        gone = set(grouped)
+        self.objects = [o for o in self.objects if o not in gone] + levels
+        if keep:
+            self.record_kept_edit("generated LOD groups")
+        if self.logger.isEnabledFor(logging.INFO):
+            self._log_group(
+                f"Generated LOD groups ({len(groups)})"
+                + ("" if keep else " -- for the write only"),
+                [g.rsplit("|", 1)[-1] for g in groups],
+            )
+
+    @staticmethod
+    def _restore_lod_meshes(
+        originals: List[tuple], groups: List[str], orders: Optional[Dict[Optional[str], List[str]]] = None
+    ) -> None:
+        """Put each grouped mesh back as it was: out of its group to its old
+        parent, its local transform as it is (the group sat at identity where
+        the parent space was), then the groups go with their copies -- a group
+        a failed generation left half made too -- then each name back (the
+        group holds it until it is gone), then each parent's children in the
+        order *orders* took before any moved (2026-11-10 review: restored one
+        index at a time, two generated siblings came back swapped)."""
+        doomed = list(groups)
+        for uuid, _name, parent, index in originals:
+            found = cmds.ls(uuid, long=True)
+            if not found:
+                continue
+            current = (cmds.listRelatives(found[0], parent=True, fullPath=True) or [None])[0]
+            if current == parent:
+                continue
+            if current and cmds.nodeType(current) == "lodGroup":
+                doomed.extend(cmds.ls(current, uuid=True))
+            if parent:
+                moved = cmds.parent(found[0], parent, relative=True)[0]
+            else:
+                moved = cmds.parent(found[0], world=True, relative=True)[0]
+            if index is not None and not orders:
+                cmds.reorder(moved, front=True)
+                cmds.reorder(moved, relative=index)
+        for uuid in dict.fromkeys(doomed):
+            found = cmds.ls(uuid, long=True)
+            if found:
+                cmds.delete(found)
+        for uuid, name, _parent, _index in originals:
+            found = cmds.ls(uuid, long=True)
+            if found and found[0].rsplit("|", 1)[-1] != name:
+                cmds.rename(found[0], name)
+        for order in (orders or {}).values():
+            # Each to the front, last first: the snapshot's order, ahead of any
+            # node the run made since (the data carrier).
+            for uuid in reversed(order):
+                found = cmds.ls(uuid, long=True)
+                if found:
+                    cmds.reorder(found[0], front=True)
+
+    def lod_omitted(self) -> frozenset:
+        """The names of the nodes the write leaves out though its scope holds
+        them -- Most Detailed Only's lower levels and all under them -- which
+        no record may name (``FbxUtils.export_context(omit=)``)."""
+        drop = (self._lod_plan or {}).get("drop") or []
+        if not drop:
+            return frozenset()
+        names = set()
+        for path in cmds.ls(drop, long=True) or []:
+            for node in [path] + (cmds.listRelatives(path, allDescendents=True, fullPath=True) or []):
+                names.add(node.rsplit("|", 1)[-1])
+        return frozenset(names)
+
+    def lod_write_selection(self, selection: List[str]) -> List[str]:
+        """*selection* without the levels :meth:`prepare_lods` left out.
+
+        Maya's FBX and USD writers carry each selected node's whole subtree, so
+        a selected node above a dropped level is replaced by its children
+        (shapes included); its ancestors still ship (``ptk.LodChain.
+        refine_selection``). A run that dropped nothing gets *selection* back.
+        """
+        drop = (self._lod_plan or {}).get("drop") or []
+        if not drop:
+            return list(selection)
+        children: Dict[str, List[str]] = {}
+        for path in cmds.ls(selection, long=True) or []:
+            for node in [path] + (
+                cmds.listRelatives(path, allDescendents=True, fullPath=True) or []
+            ):
+                if any(d.startswith(node + "|") for d in drop):
+                    children[node] = (
+                        cmds.listRelatives(node, children=True, fullPath=True) or []
+                    )
+        return ptk.LodChain.refine_selection(
+            cmds.ls(selection, long=True) or [], drop, children
+        )
+
     def _shear_sample_frames(self, limit: int = 5) -> List[float]:
         """COARSE grid: *limit* frames spread across the scene's keyed range.
 

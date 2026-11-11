@@ -1686,7 +1686,7 @@ class EnvUtils(ptk.HelpMixin):
 
         Maya has no glTF writer, so a GLB is an FBX converted by FBX2glTF
         (:meth:`_write_scene_glb`); a USD is the interchange export
-        (``SceneExporter.USD_EXPORT_OPTIONS``), sampled only where it moves.
+        (``UsdUtils.DELIVERABLE_EXPORT_OPTIONS``), sampled only where it moves.
 
         Parameters:
             file_path (str): The file to write.
@@ -1754,10 +1754,9 @@ class EnvUtils(ptk.HelpMixin):
         """Export Scene's USD: the interchange set of the Scene Exporter's USD format.
         The skin toggle maps to the skeleton flags; the rest have no USD equivalent
         (a layer references its textures; cameras and lights are prims like any)."""
-        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
         from mayatk.env_utils.usd import UsdUtils
 
-        usd_options = dict(SceneExporter.USD_EXPORT_OPTIONS)
+        usd_options = dict(UsdUtils.DELIVERABLE_EXPORT_OPTIONS)
         if not options["include_skins"]:
             usd_options.update(exportSkels="none", exportSkin="none")
         frame_range = UsdUtils.sampling_frame_range(
