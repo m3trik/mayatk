@@ -645,8 +645,9 @@ MOVED_NAMES = {
         "tentacle.slots.tools.texture_path_editor.TexturePathEditorSlots",
         "0.30.0",
     ),
+    # The panel went (2026-11-11): an Arnold render bridges what it needs itself.
     "ArnoldBridgeSlots": (
-        "tentacle.slots.tools.arnold_bridge.ArnoldBridgeSlots",
+        "removed: an Arnold render bridges the game shaders itself (mayatk.RenderUtils.prepare_arnold_preview)",
         "0.30.0",
     ),
     "LightRigSlots": (
