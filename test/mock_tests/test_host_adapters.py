@@ -28,6 +28,7 @@ ADAPTERS = (
         lambda: _adapter("mayatk.anim_utils.shots._shots", "MayaShotsHost")().transfer(),
     ),
     ("KeyStashHost", _adapter("mayatk.anim_utils.key_stash._key_stash", "MayaKeyStashHost")),
+    ("LightRigHost", _adapter("mayatk.light_utils.light_rig", "MayaLightRigHost")),
     (
         "SidecarHost",
         _adapter("mayatk.env_utils.hierarchy_sync.scene_data_sidecar", "MayaSidecarHost"),
