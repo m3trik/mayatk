@@ -5532,7 +5532,7 @@ class TestLodsOption(MayaTkTestCase):
         where the parent space was)."""
         props = cmds.createNode("transform", name="props")
         cmds.xform(props, translation=(3, 0, 0), rotation=(0, 30, 0))
-        rock = cmds.polySphere(name="rock", sx=40, sy=40)[0]
+        cmds.polySphere(name="rock", sx=40, sy=40)
         cmds.polyCube(name="crate")
         cmds.parent(["|rock", "|crate"], props)
         cmds.xform("|props|rock", translation=(1.25, 0.5, -2.0), rotation=(10, 20, 30))
@@ -5640,6 +5640,67 @@ class TestLodsOption(MayaTkTestCase):
             [c.rsplit("|", 1)[-1] for c in cmds.listRelatives("|rock", children=True)],
             ["rock_LOD0", "rock_LOD1", "rock_LOD2"],
         )
+
+    def _record(self, name):
+        import json
+
+        fbx = ptk.FbxFile.load(os.path.join(self.temp_dir, f"{name}.fbx"), raw_payloads=False)
+        stored = [v for v in fbx.user_properties(ptk.SceneRecords.LODS.key) if v]
+        return [json.loads(v.decode() if isinstance(v, bytes) else v) for v in stored]
+
+    def test_levels_exported_without_their_group_are_recorded_with_it(self):
+        """The write carries a node's ancestors, so a group whose levels alone
+        are in the set ships, and the record names it (2026-11-11: a group at
+        the scene root, Generate Missing's, shipped unrecorded)."""
+        levels = cmds.listRelatives("|chair", children=True, fullPath=True)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=levels + cmds.ls("lamp", long=True),
+                output_name="levels_only",
+                tasks={"export_data_node": True},
+            )
+        )
+        (payload,) = self._record("levels_only")
+        self.assertEqual([g["name"] for g in payload["groups"]], ["chair"])
+
+    def test_generate_missing_records_a_root_group_and_keeps_no_stale_path(self):
+        """The panel's scope lists shapes beside their transforms: a grouped
+        mesh's shape path went stale (the write warned "no longer exist and
+        will not ship" for nodes that shipped), and the record missed the group
+        (production scene, 2026-11-11)."""
+        rock = cmds.polySphere(name="rock", sx=40, sy=40)[0]
+        objects = cmds.ls(rock, long=True) + cmds.listRelatives(rock, shapes=True, fullPath=True)
+        with self.assertLogs(self.exporter.logger, "INFO") as logged:
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.temp_dir,
+                    objects=objects,
+                    output_name="generated_root",
+                    tasks={"lods": "generate", "export_data_node": True},
+                )
+            )
+        self.assertFalse([line for line in logged.output if "no longer exist" in line], logged.output)
+        (payload,) = self._record("generated_root")
+        self.assertEqual([g["name"] for g in payload["groups"]], ["rock"])
+
+    def test_export_copies_puts_a_mesh_back_among_its_parents_shapes(self):
+        """A production rig's ``_LOC`` holds its locator shape first, then the
+        mesh: the restore put the mesh back ahead of the shape in every such
+        parent (2026-11-11)."""
+        loc = cmds.spaceLocator(name="knob_LOC")[0]
+        ball = cmds.parent(cmds.polySphere(name="knob_GEO", sx=40, sy=40)[0], loc)[0]
+        order = cmds.listRelatives(loc, children=True)
+        self.assertEqual(order, ["knob_LOCShape", "knob_GEO"])
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=cmds.ls(ball, long=True),
+                output_name="generated_loc",
+                tasks={"lods": "generate"},
+            )
+        )
+        self.assertEqual(cmds.listRelatives(loc, children=True), order)
 
     def test_a_scene_with_no_level_names_plans_nothing(self):
         """The cheap gate: no level-named node, no plan and no triangle count."""

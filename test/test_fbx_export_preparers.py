@@ -507,6 +507,17 @@ class TestProducerContract(MayaTkTestCase):
         self.assertFalse(ctx.ships("DROP_cube"))
         self.assertIsNone(FbxUtils.export_context().nodes, "no scope: the whole scene")
 
+    def test_a_scoped_fbx_context_names_the_ancestors_its_write_keeps(self):
+        """The FBX writer keeps a node's parent chain (``ships_parent_chain``),
+        so a record naming an ancestor ships (2026-11-11: a LOD group above
+        levels exported alone shipped unrecorded); a USD write names none."""
+        cube = cmds.polyCube(name="KEEP_cube")[0]
+        grp = cmds.group(cube, name="KEEP_grp")
+        cmds.group(grp, name="KEEP_top")
+        scope = (cmds.ls("KEEP_cube", long=True)[0],)
+        self.assertLessEqual({"KEEP_top", "KEEP_grp", "KEEP_cube"}, FbxUtils.export_context(scope=scope).nodes)
+        self.assertNotIn("KEEP_grp", FbxUtils.export_context(scope=scope, writer="usd").nodes)
+
     def test_a_scoped_handoff_ships_the_stored_bake_narrowed_and_keeps_it_whole(self):
         """A hand-off refreshes only the derived records, so the authored ones
         shipped as stored -- both cubes' lightmaps and the other cube's shadow
