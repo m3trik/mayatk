@@ -109,12 +109,50 @@ class TestGenerate(MayaTkTestCase):
         self.assertEqual(mtk.LodUtils.generate([base]), [])
 
     def test_namesakes_under_two_parents_each_get_their_group(self):
-        """Addressed by uuid, not short name (2026-11-10 review)."""
+        """Addressed by uuid, not short name (2026-11-10 review), and each
+        group's levels numbered from its own LOD0: ``duplicate -name`` makes a
+        name unique scene-wide, so the second mesh's copies were numbered on
+        past the first's (``knob_LOD3``, ``knob_LOD4``), a gapped chain every
+        reader refuses (production scene, 2026-11-11)."""
         for holder in ("left", "right"):
             cmds.createNode("transform", name=holder)
             cmds.parent(cmds.polySphere(name="knob", sx=40, sy=40)[0], holder)
         made = mtk.LodUtils.generate(["|left|knob", "|right|knob"])
         self.assertEqual(sorted(made), ["|left|knob", "|right|knob"])
+        for group in made:
+            levels = [p.rsplit("|", 1)[-1] for p in cmds.listRelatives(group, children=True)]
+            self.assertEqual(levels, ["knob_LOD0", "knob_LOD1", "knob_LOD2"], group)
+        self.assertEqual([g["issues"] for g in mtk.LodUtils.groups()], [[], []])
+
+    def test_a_level_name_a_non_dag_node_holds_is_refused_not_renumbered(self):
+        """Non-DAG names are global: a shader named ``knob_LOD1`` made Maya
+        rename the copy ``knob_LOD3``, a gapped chain that read as made
+        (2026-11-11 review)."""
+        cmds.shadingNode("lambert", asShader=True, name="knob_LOD1")
+        knob = cmds.polySphere(name="knob", sx=40, sy=40)[0]
+        with self.assertRaisesRegex(ValueError, "knob_LOD1 names another node"):
+            mtk.LodUtils.generate([knob])
+        self.assertFalse(cmds.ls("knob_LOD3"))
+
+    def test_a_mesh_under_a_moving_parent_is_generated_and_its_levels_follow(self):
+        """A level sits under the mesh's own parent, so it inherits whatever
+        moves above; only the mesh's own drivers stay with LOD0 alone.
+        Production rigs key the ``_LOC`` above each mesh: refusing an animated
+        ancestor left 330 of an assembly's 331 meshes ungenerated (2026-11-11)."""
+        rig = cmds.createNode("transform", name="arm_LOC")
+        cmds.setKeyframe(rig, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(rig, attribute="rotateY", time=10, value=90)
+        ball = cmds.parent(cmds.polySphere(name="ball", sx=40, sy=40)[0], rig)[0]
+        cmds.xform(ball, translation=(2, 0, 0))
+        self.assertIsNone(mtk.LodUtils.ineligible(ball))
+        (group,) = mtk.LodUtils.generate([ball])
+        cmds.currentTime(10)
+        lod0, lod1 = cmds.listRelatives(group, children=True, fullPath=True)[:2]
+        for got, want in zip(cmds.xform(lod1, q=True, ws=True, matrix=True), cmds.xform(lod0, q=True, ws=True, matrix=True)):
+            self.assertAlmostEqual(got, want, places=4)
+        spinner = cmds.polySphere(name="spinner", sx=40, sy=40)[0]
+        cmds.setKeyframe(spinner, attribute="rotateY", time=1, value=0)
+        self.assertEqual(mtk.LodUtils.ineligible(spinner), "animated")
 
     def test_an_empty_list_reads_no_group(self):
         """``cmds.ls([])`` lists the whole scene: nothing chosen reads nothing."""

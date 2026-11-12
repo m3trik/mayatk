@@ -2350,7 +2350,8 @@ class FbxUtils(ptk.HelpMixin):
         (``rendering``, ``scope``) as given.
 
         A *scope* names the nodes the write ships as well (``nodes``: every
-        DAG node under its roots, :meth:`_shipped_nodes`), what the snapshot
+        DAG node under its roots, and for the FBX writer their ancestors,
+        :meth:`_shipped_nodes`), what the snapshot
         narrows each export-scoped record by -- once, here, so no producer
         walks the export set again. The *writer* (``"fbx"``, ``"usd"``) and
         its *writer_options* state the unit every record is labelled with
@@ -2378,7 +2379,9 @@ class FbxUtils(ptk.HelpMixin):
             pass
         omit = frozenset(decisions.pop("omit", None) or ())
         if decisions.get("scope") is not None and "nodes" not in decisions:
-            decisions["nodes"] = cls._shipped_nodes(decisions["scope"])
+            # The FBX writer ships each node's parent chain; a USD write keeps
+            # an ancestor as a bare Xform, its geometry left out.
+            decisions["nodes"] = cls._shipped_nodes(decisions["scope"], parent_chain=writer == "fbx")
         if omit and decisions.get("nodes") is not None:
             decisions["nodes"] = frozenset(decisions["nodes"]) - omit
         if "unit_scale" not in decisions:
@@ -2422,18 +2425,23 @@ class FbxUtils(ptk.HelpMixin):
         )
 
     @staticmethod
-    def _shipped_nodes(roots: Iterable[str]) -> Optional[frozenset]:
+    def _shipped_nodes(roots: Iterable[str], parent_chain: bool = False) -> Optional[frozenset]:
         """The name of every DAG node a write of *roots* ships, as the file
-        names it: each root and everything under it, shapes included, by its
-        leaf (namespace kept -- Maya writes ``NS:leaf`` as the FBX Model
-        name); ``None`` outside Maya, where no node can be named."""
+        names it: each root and everything under it, shapes included, and with
+        *parent_chain* its ancestors too (the FBX writer keeps a selected
+        node's parents whole, ``ptk.SceneDataSidecarBase.with_ancestors``: a
+        LOD group above levels chosen alone ships), by its leaf (namespace kept
+        -- Maya writes ``NS:leaf`` as the FBX Model name); ``None`` outside
+        Maya, where no node can be named."""
         if cmds is None:
             return None
         roots = [str(root) for root in roots or ()]
         if not roots:
             return frozenset()
         nodes = cmds.ls(roots, dag=True, long=True) or []
-        return frozenset(node.rsplit("|", 1)[-1] for node in nodes)
+        if parent_chain:
+            nodes = ptk.SceneDataSidecarBase.with_ancestors(nodes)
+        return frozenset(node.rsplit("|", 1)[-1] for node in nodes if node)
 
     @classmethod
     def publish(

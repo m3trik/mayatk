@@ -720,8 +720,10 @@ class _SceneTasksMixin(_TaskDataMixin):
         for mesh in eligible:
             leaf = mesh.rsplit("|", 1)[-1]
             parent = (cmds.listRelatives(mesh, parent=True, fullPath=True) or [None])[0]
+            # Every child, shapes too: a rig's _LOC holds its locator shape
+            # ahead of the mesh, and the restore puts the order back whole.
             siblings = (
-                cmds.listRelatives(parent, children=True, type="transform", fullPath=True)
+                cmds.listRelatives(parent, children=True, fullPath=True)
                 if parent
                 else cmds.ls(assemblies=True, long=True)
             ) or []
@@ -760,8 +762,16 @@ class _SceneTasksMixin(_TaskDataMixin):
             for group in groups
             for child in cmds.listRelatives(group, children=True, fullPath=True) or []
         ]
+        # A grouped mesh's path is its group's now, and its shapes moved with
+        # it: every set path at or below one goes (each path's prefixes looked
+        # up, not every pair compared), the levels come in.
         gone = set(grouped)
-        self.objects = [o for o in self.objects if o not in gone] + levels
+
+        def under_grouped(path: str) -> bool:
+            parts = path.split("|")
+            return any("|".join(parts[:end]) in gone for end in range(2, len(parts) + 1))
+
+        self.objects = [o for o in self.objects if not under_grouped(o)] + levels
         if keep:
             self.record_kept_edit("generated LOD groups")
         if self.logger.isEnabledFor(logging.INFO):

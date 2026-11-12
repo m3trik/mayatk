@@ -131,7 +131,7 @@ class LodUtils(ptk.HelpMixin):
         if cmds is None:
             return None
         entries = ptk.LodChain.record_groups(
-            cls.groups(list(ctx.scope) if ctx.scope else None), ctx.ships, cls.heights
+            cls.groups(list(ctx.scope) if ctx.scope else None), ctx.ships, cls.heights, note=ctx.note
         )
         if not entries:
             return None
@@ -149,9 +149,11 @@ class LodUtils(ptk.HelpMixin):
     ) -> Optional[str]:
         """Why :meth:`generate` leaves *mesh* (a transform) alone, or None: a
         level is a static copy of it, so a skinned or blend-shaped mesh, an
-        instanced one, one moving (keyed, layered, constrained, expression- or
-        path-driven, itself or above), one holding other transforms, or one
-        too light for a lower level needs authored LODs. Twin of blendertk's."""
+        instanced one, one moving by its own drivers (keyed, layered,
+        constrained, expression- or path-driven: what moves above it moves
+        every level, which sits under the same parent), one holding other
+        transforms, or one too light for a lower level needs authored LODs.
+        Twin of blendertk's."""
         shapes = cmds.listRelatives(mesh, shapes=True, type="mesh", noIntermediate=True, fullPath=True)
         if not shapes:
             return "no mesh"
@@ -162,11 +164,8 @@ class LodUtils(ptk.HelpMixin):
             return "skinned or with blend shapes"
         if len(cmds.listRelatives(shapes[0], allParents=True, fullPath=True) or []) > 1:
             return "instanced"
-        parts = cmds.ls(mesh, long=True)[0].split("|")
-        for end in range(2, len(parts) + 1):
-            node = "|".join(parts[:end])
-            if any(cmds.listConnections(node, source=True, destination=False, type=kind) for kind in cls._DRIVERS):
-                return "animated"
+        if any(cmds.listConnections(mesh, source=True, destination=False, type=kind) for kind in cls._DRIVERS):
+            return "animated"
         # After the drivers: a constraint is a DAG child of what it drives.
         if cmds.listRelatives(mesh, children=True, type="transform"):
             return "holds other nodes"
@@ -247,8 +246,15 @@ class LodUtils(ptk.HelpMixin):
     @staticmethod
     def _reduce_copy(source: str, name: str, target: int, preserve: Dict[str, bool]) -> Optional[str]:
         """A copy of *source* named *name*, reduced to *target* triangles."""
-        copy = cmds.duplicate(source, name=name, renameChildren=True)[0]
-        copy = cmds.ls(copy, long=True)[0]
+        # Renamed after, not ``duplicate -name``: that makes the name unique
+        # scene-wide, so a namesake's levels numbered this one's on (LOD3, LOD4).
+        # A DAG namesake is fine under another parent; a non-DAG one is not.
+        (uuid,) = cmds.ls(cmds.duplicate(source, renameChildren=True)[0], uuid=True)
+        cmds.rename(cmds.ls(uuid, long=True)[0], name)
+        copy = cmds.ls(uuid, long=True)[0]
+        if copy.rsplit("|", 1)[-1] != name:  # a non-DAG node (a shader, a set) holds it: names are global there
+            cmds.delete(copy)
+            raise ValueError(f"{name} names another node (not a transform); rename it to make this level.")
         if cmds.polyInfo(copy, nonManifoldVertices=True) or cmds.polyInfo(copy, nonManifoldEdges=True):
             cmds.select(copy, replace=True)  # Mesh > Cleanup: repair non-manifold (geometry too) and lamina, no history
             mel.eval('polyCleanupArgList 4 {"0","1","0","0","0","0","0","0","0","1e-05","0","1e-05","0","1e-05","0","2","1","0"}')
