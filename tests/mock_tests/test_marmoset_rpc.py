@@ -657,13 +657,19 @@ class TestMainThreadMarshalling(unittest.TestCase):
         self.assertFalse(plugin_marshaller.is_active())
 
     def test_server_dispatch_goes_through_the_marshaller(self):
-        """EVERY dispatched op must trampoline via the marshaller.
+        """Every dispatched op that touches the host must trampoline via the
+        marshaller; one that reads only the plugin's own tables
+        (``main_thread=False``: ``system.ping``) is answered without it, so a
+        busy host still answers.
 
         Asserted behaviourally, not by reading the dispatch source: a call that
         reached the op without passing through the marshaller would silently
         bypass the main-thread guarantee on a real Toolbag install, and only an
         actual round trip proves it did not.
         """
+        registry = plugin.PLUGIN.registry
+        registry.register("test.host_op")(lambda: "ran")
+        self.addCleanup(registry._ops.pop, "test.host_op", None)
         seen = []
         original = plugin_marshaller.run
         plugin_marshaller.run = lambda fn, *a, **kw: (
@@ -673,9 +679,9 @@ class TestMainThreadMarshalling(unittest.TestCase):
         port = _free_port()
         plugin.start_server(port=port)
         try:
-            self.assertEqual(
-                _attached().invoke("system.ping"), "pong"
-            )
+            self.assertEqual(_attached().invoke("system.ping"), "pong")
+            self.assertEqual(seen, [], "a bookkeeping op waits for no thread")
+            self.assertEqual(_attached().invoke("test.host_op"), "ran")
         finally:
             plugin.stop_server()
             plugin_marshaller.run = original

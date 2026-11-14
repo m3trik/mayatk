@@ -23,7 +23,7 @@ Usage:
     python run_tests.py                          # Run default core tests (headless)
     python run_tests.py core_utils components    # Run specific modules
     python run_tests.py edit_utils -k mirror     # ...only tests whose id matches "mirror"
-    python run_tests.py --all                    # Run ALL test modules
+    python run_tests.py --all                    # Run ALL test modules (mock_tests/ too)
     python run_tests.py --gui                    # Force everything through a GUI Maya
     python run_tests.py --no-gui-pass            # Skip the GUI pass (GUI-only modules DEFERRED; no badge)
     python run_tests.py --chunk-size 12          # Modules per fresh mayapy process
@@ -578,8 +578,9 @@ class MayaTestRunner:
     # Discovery
     # ------------------------------------------------------------------
 
-    # Subdirectories opted out of default discovery — caller must pass
-    # ``--extended`` or ``--mocks`` to include them.
+    # Subdirectories outside the default module set: ``--extended`` adds
+    # extended/; mock_tests/ joins every full run (``--all``; ``--mocks``
+    # is still accepted).
     EXTENDED_DIR = "extended"
     MOCKS_DIR = "mock_tests"
     SKIP_INFRA = {
@@ -622,7 +623,7 @@ class MayaTestRunner:
         groups = (
             ("MAIN", self._discover_in()),
             ("EXTENDED (--extended)", self._discover_in(self.EXTENDED_DIR)),
-            ("MOCK-ONLY (--mocks, pytest)", self._discover_in(self.MOCKS_DIR)),
+            ("MOCK (in --all; CI runs them under pytest)", self._discover_in(self.MOCKS_DIR)),
         )
         print("\n" + "=" * 70)
         print("AVAILABLE TEST MODULES")
@@ -2073,8 +2074,10 @@ def main() -> int:
 
         full_run = "--all" in args or "-a" in args
         if full_run:
+            # mock_tests/ always: no full run passed --mocks, and 0.34.0 shipped
+            # with one of them failing behind a green --all.
             modules = runner.discover_tests(
-                include_extended=extended, include_mocks=mocks
+                include_extended=extended, include_mocks=True
             )
             print(f"\nRunning ALL {len(modules)} test modules...")
         elif args:

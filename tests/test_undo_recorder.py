@@ -226,7 +226,7 @@ class TestUndoRecorder(MayaTkTestCase):
         prompts, so the load itself is checked: the step rides the
         ``ufeSupport`` plugin Maya ships, and recording loads nothing from
         anywhere else (what another test loaded before stays out of it; the
-        package-wide rule is ``mock_tests/test_plugins``).
+        package-wide rule is ``mock_tests/test_plugins_mock``).
         """
         before = set(cmds.pluginInfo(query=True, listPlugins=True) or [])
         with UndoRecorder.record() as recorder:

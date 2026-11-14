@@ -92,6 +92,8 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
     #: lists and opens as its templates. Not the ``templates/`` folder, which holds
     #: what a preset is spliced into (the run wrappers and the shared includes).
     SCRIPT_DIR = _SCRIPT_DIR
+    #: Executables whose version could not be read, already said.
+    _VERSION_WARNED: set = set()
     #: The preset that opens the selection in RizomUV one way
     #: (:meth:`send_to_rizomuv`) instead of a round trip.
     SEND_PRESET = "send"
@@ -102,6 +104,17 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
     # Namespace the round-trip FBX is imported into; created fresh per run
     # and removed again during cleanup.
     _IMPORT_NAMESPACE = "RizomUVImport"
+
+    #: Exit codes of a RizomUV that died rather than ended (Windows: its own
+    #: abort, and an access violation), and what is known to cause one
+    #: (``tests/rizom_headless_probe.py``'s results). It prints nothing in
+    #: ``-cfi`` mode, so the code is the only evidence.
+    _CRASH_CODES = (0xC00000FF, 0xC0000005)
+    _CRASH_HINT = (
+        "RizomUV crashed. Known causes: input UVs collapsed onto one point "
+        "(unwrap or lay them out first, or run an unwrap preset); a field this "
+        "RizomUV version does not have; a Lua syntax error in a custom script."
+    )
 
     def __init__(self, rizom_path=None, timeout=600, hidden=True):
         """Initialize the RizomUV bridge.
@@ -184,10 +197,15 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             self.logger.debug("rizom_version: no executable resolved yet -> (0, 0).")
             return (0, 0)
         version = _RizomUVBridgeInternal._parse_rizom_version(path)
-        if version == (0, 0):
-            self.logger.debug(
-                f"rizom_version: could not parse version from {path!r}; "
-                f"gating all version-flagged params off -> (0, 0)."
+        if version == (0, 0) and path not in self._VERSION_WARNED:
+            # Once per executable: every gated knob is then off and the
+            # presets needing a newer RizomUV are hidden, which reads as the
+            # panel missing features unless it says why.
+            self._VERSION_WARNED.add(path)
+            self.logger.warning(
+                f"RizomUV's version cannot be read from {path!r} (no 'RizomUV <year>.<n>' "
+                "folder in it): it is treated as the oldest, so newer presets and "
+                "settings are off."
             )
         return version
 
@@ -247,7 +265,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # namespace re-import are all FBX-shaped. The old '.obj' option was
         # a trap -- the export step always wrote FBX data regardless of the
         # extension, so an .obj path produced a file Rizom couldn't parse.
-        if value and not value.lower().endswith(".fbx"):
+        if value and not str(value).lower().endswith(".fbx"):
             raise ValueError("The specified export path must end with '.fbx'")
         self._export_path = Path(value)
 
@@ -427,6 +445,27 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self._params = params or {}
 
         chunk_name = f"RizomUV: {preset or 'script'}"
+        # The export selects its copies, then deletes them: a run that failed
+        # or was cancelled left NOTHING selected, so the next Process read an
+        # empty scope (a finished run selects what it processed).
+        selection = cmds.ls(selection=True, long=True) or []
+        try:
+            return self._round_trip(preset, original_transforms, moving, needs_selection, chunk_name)
+        except BaseException:  # a cancel too
+            self._restore_selection(selection)
+            raise
+
+    def _restore_selection(self, selection) -> None:
+        """Select what was selected before the run, where it still exists."""
+        with CoreUtils.undo_disabled():
+            try:
+                cmds.select(cmds.ls(selection, long=True) or [], replace=True)
+            except Exception as e:  # noqa: BLE001 -- never over the run's own error
+                self.logger.debug(f"Selection not restored: {e}")
+
+    def _round_trip(self, preset, original_transforms, moving, needs_selection, chunk_name):
+        """The export -> RizomUV -> transfer of :meth:`process_with_rizomuv`,
+        its arguments resolved."""
         # The guard sits INSIDE the chunk: a rigged original that comes out of
         # the run unbound or re-topologized raises here, and that one Ctrl+Z
         # reverts the whole run -- rather than a rig that silently stopped
@@ -463,7 +502,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # payloads can go. A raise above skips this on purpose: the scoped
         # policy keeps them (logged) so a failure stays debuggable -- the
         # no-save error tells the user to open that very script in RizomUV.
-        self._release_temp_payloads()
+        # A run whose UVs reached nothing keeps them too.
+        if transferred:
+            self._release_temp_payloads()
 
     def _import_objects(self):
         """Import the RizomUV-processed FBX and return its transform nodes.
@@ -667,6 +708,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                     )
 
                     duplicates.append(dup)
+                    self._keep_current_uv_set(dup)
                     # Key on the name cmds.rename actually RETURNED, not the one
                     # requested — a stale *__RZTMP survivor from a crashed run
                     # makes Maya uniquify the rename (…RZTMP1), and a map keyed on
@@ -703,6 +745,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             # Live Maya sessions don't always have fbxmaya on by default;
             # cmds.file(type="FBX export") raises "Invalid file type" without it.
             FbxUtils.load_plugin()
+            self._reset_fbx_export()
 
             try:
                 # A scratch write: the session's export preparers stand down, so
@@ -734,6 +777,52 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             if tag:
                 self._delete_nodes(cmds.ls(list(tag)) or [], "subset tag")
         return tag[0] if tag else None
+
+    def _reset_fbx_export(self) -> None:
+        """Start the export from the FBX plug-in's factory options, best effort.
+
+        Its export options are sticky across the session: an interactive
+        export with Triangulate or Smooth Mesh on made the next round trip
+        ship a different face count, and the transfer back then fell from the
+        exact topology copy to a spatial sample. Every other hand-off resets
+        first (``handoff_export``); a reset that fails never blocks the run.
+        """
+        try:
+            FbxUtils.reset_export()
+        except Exception:  # noqa: BLE001
+            self.logger.debug("FBX export options not reset.", exc_info=True)
+
+    def _keep_current_uv_set(self, copy) -> None:
+        """Leave *copy* (an export duplicate) its CURRENT UV set alone, as its
+        first and only set.
+
+        RizomUV works on the first UV set of each mesh it loads, and the
+        transfer back writes the original's current set. A mesh being worked on
+        in another set (a lightmap set) therefore came back untouched: RizomUV
+        had packed ``map1``, the bridge copied the unedited second set onto
+        itself and reported the UVs "UNCHANGED" (measured through the real
+        2020.1). The copy is throwaway, so the current set's UVs are copied
+        over its first set and every other set is dropped: what RizomUV edits
+        is what the artist is looking at, and the re-import's only set is the
+        one the transfer reads. A failure leaves the copy as it was, said.
+        """
+        try:
+            sets = cmds.polyUVSet(copy, query=True, allUVSets=True) or []
+            if len(sets) < 2:
+                return
+            first = sets[0]
+            current = (cmds.polyUVSet(copy, query=True, currentUVSet=True) or [first])[0]
+            if current != first:
+                cmds.polyUVSet(copy, copy=True, uvSet=current, newUVSet=first)
+                cmds.polyUVSet(copy, currentUVSet=True, uvSet=first)
+            for extra in sets[1:]:
+                cmds.polyUVSet(copy, delete=True, uvSet=extra)
+            cmds.delete(copy, constructionHistory=True)
+        except Exception as e:  # noqa: BLE001 -- the copy still ships, as before
+            self.logger.warning(
+                f"Could not narrow {CoreUtils.leaf_name(copy)} to its current UV set ({e}): "
+                "RizomUV will edit its first UV set."
+            )
 
     @staticmethod
     def _shape_uuid(node):
@@ -971,10 +1060,13 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             stdout_tail = tail(result.stdout)
             stderr_tail = tail(result.stderr)
             ver = self.rizom_version
+            code = result.returncode & 0xFFFFFFFF
             msg = [
-                f"RizomUV exited with code {result.returncode} "
+                f"RizomUV exited with code 0x{code:08X} "
                 f"(version detected: {ver}, script: {self._script_path})."
             ]
+            if code in self._CRASH_CODES:
+                msg.append(self._CRASH_HINT)
             if stdout_tail:
                 msg.append(f"--- stdout (tail) ---\n{stdout_tail}")
             if stderr_tail:
@@ -1008,7 +1100,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         RizomUV writes nothing to stdout/stderr in ``-cfi`` mode, so there is
         no Lua traceback to enable -- the script itself is the only evidence.
         The first thing worth ruling out is a mid-run overwrite of that
-        script (see :meth:`_process_tag` for why that used to happen and how
+        script (see :attr:`_temp_store` for why that used to happen and how
         the paths now prevent it), so compare what's on disk against what we
         handed RizomUV instead of guessing.
         """
@@ -1481,7 +1573,8 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         if len(all_objects) <= len(new_objects) and not partial:
             self.logger.warning(
                 "No other meshes share the selection's material(s) -- there is no "
-                "existing layout to pack into. Use the 'pack' preset instead."
+                "existing layout to pack into (Maya's default material defines "
+                "none). Use the 'pack' preset instead."
             )
             return None
         self.logger.info(
@@ -1520,7 +1613,13 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         selected = Components.get_mesh_transforms(objects)
         expanded = set(selected)
+        # Not the default materials: every untextured mesh in the scene wears
+        # one, so "sharing it" named no layout, and the pack shipped (and
+        # packed around) every such mesh there was.
+        authored = {CoreUtils.short_name(m) for m in MatUtils.get_scene_mats() or []}
         for mat in MatUtils.get_mats(selected) or []:
+            if CoreUtils.short_name(mat) not in authored:
+                continue
             members = MatUtils.find_by_mat_id(mat, shell=True) or []
             # Normalized the same way the export set is -- ``find_by_mat_id``
             # answers with whatever the shading assignment names (shapes,
@@ -1596,6 +1695,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # resolved param values; the wrapper then sees the (already-substituted)
         # user_script as a single block.
         user_script = StrUtils.replace_delimited(user_script, param_context)
+        self._refuse_unresolved_tokens(user_script, param_context)
 
         # If the script handles its own load/save, pass it through (already
         # stripped + substituted above).
@@ -1627,6 +1727,29 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         self.logger.debug(f"Constructed full script:\n{full_script}")
         return full_script
+
+    #: A placeholder as a script spells one: ``__PACK_SPACING__``.
+    _TOKEN_RE = re.compile(r"__[A-Z][A-Z0-9_]*__")
+
+    @classmethod
+    def _refuse_unresolved_tokens(cls, script: str, known) -> None:
+        """Raise when *script* still holds a ``__TOKEN__`` after substitution.
+
+        Lua reads one as a global nobody set: nil. A field given it silently
+        vanishes and an ``if`` on it is false, so a misspelt token in a custom
+        script (``__ITERATION__``) ran with that setting dropped and said
+        nothing. Comment lines are not code and may name tokens.
+
+        Raises:
+            ValueError: naming the tokens and the ones that exist.
+        """
+        code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("--"))
+        unknown = sorted(set(cls._TOKEN_RE.findall(code)))
+        if unknown:
+            raise ValueError(
+                f"The script uses {', '.join(unknown)}, which no setting provides "
+                f"(RizomUV would read each as nil). Known: {', '.join(f'__{k}__' for k in sorted(known))}."
+            )
 
     def _prepare_script_file(self, script_contents) -> Path:
         """Save the Lua script for RizomUV; returns (and stores) its Path.
@@ -1715,6 +1838,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         self._params = params or {}
 
+        exe = self.rizom_path
+        if not exe:
+            raise RuntimeError(
+                "RizomUV executable not found. Pass rizom_path= or add RizomUV to PATH."
+            )
+
         # Per-send unique paths so prior Rizom sessions (which the -cfi flag
         # keeps watching via mtime) are not disturbed by a subsequent send.
         # ``detached`` is the honest policy: the session may outlive us and
@@ -1743,12 +1872,6 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             f'<a href="action://open?path={send_script_path}">{send_script_path}</a>'
         )
         self.logger.debug(f"Send script content:\n{send_script}")
-
-        exe = self.rizom_path
-        if not exe:
-            raise RuntimeError(
-                "RizomUV executable not found. Pass rizom_path= or add RizomUV to PATH."
-            )
 
         # Detached launch: Rizom stays open for the artist; Maya returns
         # control immediately. With ``-cfi`` Rizom runs the script on
@@ -1783,6 +1906,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         # Live Maya sessions don't always have fbxmaya loaded by default.
         FbxUtils.load_plugin()
+        self._reset_fbx_export()
 
         try:
             with FbxUtils.scratch_export():  # not a deliverable: no preparers

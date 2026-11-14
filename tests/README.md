@@ -41,7 +41,7 @@ launched and keeps between runs.
 python run_tests.py                # default "core" modules (fast sanity check)
 python run_tests.py core_utils components   # specific modules (test_ prefix optional)
 python run_tests.py --all          # every test_*.py in the main suite
-python run_tests.py --all --extended --mocks  # + extended/ + mock_tests/ too
+python run_tests.py --all --extended  # + extended/ too (--all includes mock_tests/)
 python run_tests.py --list         # list discovered modules by category
 python run_tests.py --gui          # force everything through one GUI Maya
 python run_tests.py --dry-run      # validate module names/paths, run nothing

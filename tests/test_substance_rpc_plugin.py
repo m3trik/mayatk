@@ -17,8 +17,10 @@ the user's cache.
 """
 
 import os
+import shutil
 import socket
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -688,6 +690,150 @@ class TestScriptRunner(unittest.TestCase):
         status = self.client.job(job)
         self.assertEqual(status["state"], "failed", status)
         self.assertIn("read no mesh", status["error"])
+
+    def test_new_project_stops_before_creating_when_its_project_file_exists(self):
+        """Painter's ``save_as`` replaces a file without asking, and the
+        Project row may still name the project the last script ran on."""
+        created = []
+        project = self.painter.modules["substance_painter.project"]
+        project.create = lambda **kwargs: created.append(kwargs)
+        self.painter.project_open = False
+        template = _PLUGIN_SRC.parents[1] / "templates" / "new_project.py"
+        existing = Path(__file__)  # a file that exists, standing in for a project
+        job = self.client.run_script(
+            template.read_text(encoding="utf-8"),
+            path=str(template),
+            args={"MESH": str(existing), "MESH_MAP_FILES": [], "PAINTER_SAVE": True, "PROJECT": str(existing)},
+        )
+        self._drain()
+        status = self.client.job(job)
+        self.assertEqual(status["state"], "failed", status)
+        self.assertIn("already exists", status["error"])
+        self.assertEqual(created, [], "nothing is created")
+
+    def test_new_project_saves_over_nothing_that_appeared_while_it_was_made(self):
+        """New Project checks its Project path when it starts and saves minutes
+        later, once Painter has loaded the project: a file there by then is
+        left alone, the new project unsaved (found in the release review: only
+        the check at the start was tested)."""
+        folder = Path(tempfile.mkdtemp(prefix="new_project_"))
+        self.addCleanup(shutil.rmtree, folder, True)
+        target = folder / "body.spp"
+        saved = []
+        project = self.painter.modules["substance_painter.project"]
+        project.Settings = lambda **options: options
+
+        def create(**kwargs):  # another hand saves a project there meanwhile
+            self.painter.project_open = True
+            target.write_text("someone else's", encoding="utf-8")
+
+        project.create = create
+        project.save_as = saved.append
+        self.painter.project_open = False
+        template = _PLUGIN_SRC.parents[1] / "templates" / "new_project.py"
+        job = self.client.run_script(
+            template.read_text(encoding="utf-8"),
+            path=str(template),
+            args={"MESH": __file__, "MESH_MAP_FILES": [], "PAINTER_SAVE": True, "PROJECT": str(target)},
+        )
+        self._drain()
+        status = self.client.job(job)
+        self.assertEqual(status["state"], "failed", status)
+        self.assertIn("exists now", status["error"])
+        self.assertEqual(saved, [], "saved over a file that appeared meanwhile")
+        self.assertEqual(target.read_text(encoding="utf-8"), "someone else's")
+
+    # -- Export Textures, the script as it ships ---------------------------
+
+    def _export(self, args=None, status="Success", files=("C:/out/Body_BaseColor.png",)):
+        """Run the built-in Export Textures against a stand-in exporter; the
+        job's status, and the configs Painter was handed."""
+        handed = []
+        export = types.ModuleType("substance_painter.export")
+        export.list_predefined_export_presets = lambda: [types.SimpleNamespace(name="2D View", url="preset://2d")]
+        export.list_resource_export_presets = lambda: [
+            types.SimpleNamespace(
+                resource_id=types.SimpleNamespace(name="PBR Metallic Roughness", url=lambda: "resource://shelf/pbr")
+            )
+        ]
+        export.get_default_export_path = lambda: ""
+
+        def export_project_textures(config):
+            handed.append((config, list(self.painter.undo_scopes)))
+            return types.SimpleNamespace(
+                textures={("Body", ""): list(files)}, status=types.SimpleNamespace(name=status), message="what Painter said"
+            )
+
+        export.export_project_textures = export_project_textures
+        sys.modules["substance_painter.export"] = export
+        self.addCleanup(sys.modules.pop, "substance_painter.export", None)
+        self.painter.modules["substance_painter"].export = export
+        template = _PLUGIN_SRC.parents[1] / "templates" / "export_textures.py"
+        folder = tempfile.mkdtemp(prefix="export_textures_")
+        self.addCleanup(shutil.rmtree, folder, True)
+        job = self.client.run_script(
+            template.read_text(encoding="utf-8"),
+            path=str(template),
+            label="Export Textures",
+            args=dict({"EXPORT_DIR": folder}, **(args or {})),
+        )
+        self._drain()
+        return self.client.job(job), handed
+
+    def test_the_export_runs_outside_the_undo_entry_with_what_was_asked(self):
+        status, handed = self._export(
+            {"EXPORT_SIZE": "8192", "EXPORT_BIT_DEPTH": "16f", "EXPORT_FORMAT": "exr", "EXPORT_PADDING": "diffusion"}
+        )
+        self.assertEqual(status["state"], "done", status)
+        ((config, scopes_at_export),) = handed
+        # Painter computes the stack only once an undo entry is closed: the
+        # script's own entry is closed by the time the export runs, and the
+        # export step opens none.
+        self.assertEqual(self.painter.undo_scopes, ["Export Textures"])
+        self.assertEqual(scopes_at_export, ["Export Textures"])
+        self.assertEqual(config["defaultExportPreset"], "resource://shelf/pbr", "a shelf preset, by its resource")
+        self.assertEqual(
+            config["exportParameters"][0]["parameters"],
+            {"fileFormat": "exr", "bitDepth": "16f", "paddingAlgorithm": "diffusion", "dilationDistance": 16, "sizeLog2": 13},
+        )
+
+    def test_the_project_size_and_infinite_padding_send_neither_size_nor_dilation(self):
+        _, handed = self._export()
+        self.assertEqual(
+            handed[0][0]["exportParameters"][0]["parameters"],
+            {"fileFormat": "png", "bitDepth": "8", "paddingAlgorithm": "infinite"},
+        )
+
+    def test_an_export_painter_calls_an_error_fails_the_job(self):
+        status, _ = self._export(status="Error")
+        self.assertEqual(status["state"], "failed", status)
+        self.assertIn("what Painter said", status["error"])
+
+    def test_an_export_that_wrote_nothing_fails_the_job(self):
+        status, _ = self._export(files=())
+        self.assertEqual(status["state"], "failed", status)
+        self.assertIn("0 map(s)", status["error"])
+
+    def test_a_preset_painter_does_not_have_fails_naming_the_ones_it_has(self):
+        status, handed = self._export({"EXPORT_PRESET": "No Such Preset"})
+        self.assertEqual((status["state"], handed), ("failed", []))
+        self.assertIn("PBR Metallic Roughness", status["error"])
+        self.assertIn("2D View", status["error"])
+
+    def test_a_plugin_from_before_undo_free_steps_says_to_reload_it(self):
+        """A Painter left open over an upgrade keeps serving the plugin it
+        loaded: the script says what to do, not ``TypeError``."""
+        from unittest import mock
+
+        from substance_rpc.ops import script_ops
+
+        def when_idle(self, fn):  # the earlier signature
+            self._job["_steps"].append((fn, True))
+
+        with mock.patch.object(script_ops.ScriptArgs, "when_idle", when_idle):
+            status, handed = self._export()
+        self.assertEqual((status["state"], handed), ("failed", []))
+        self.assertIn("Reload Plugins Folder", status["error"])
 
 
 class TestInstanceRecord(unittest.TestCase):

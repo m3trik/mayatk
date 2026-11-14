@@ -19,7 +19,7 @@ or the person's own in ``ptk.ScriptTemplate.user_dir("substance")``, which
 shadows a built-in of its name), its values given as ``args``
 (``substance_rpc``'s ``script.start``). Its header, read without running it::
 
-    \"\"\"Bake Lighting to Diffuse: Iray AO composited onto Base Color.\"\"\"
+    \"\"\"Bake Lighting to Diffuse: AO baked and laid over Base Color.\"\"\"
     WORKS_ON = "project"
     # Rows: __PAINTER_SAVE__ __PAINTER__
     # Row: __AO_RAYS__ int 64 "AO Rays" min=1 max=256
@@ -846,14 +846,14 @@ class SubstanceEngine(ptk.HandoffBridge):
         except (TimeoutError, ConnectionError) as e:
             return {"job": job, "state": "failed", "error": str(e)}
 
-    def conclude(self, task: Any) -> Dict[str, Any]:
+    def conclude(self, task: Any, job: Optional[str] = None) -> Dict[str, Any]:
         """A panel's end of a background :meth:`follow` (on the UI thread): the
-        finished *task*'s status (a failed one when it raised), said
-        (:meth:`report`)."""
+        finished *task*'s status (a failed one when it raised, naming *job*:
+        it was queued, and may still be running), said (:meth:`report`)."""
         try:
             status = task.result()
         except Exception as error:  # noqa: BLE001 -- said, the panel stays up
-            status = {"state": "failed", "error": str(error)}
+            status = {"job": job, "state": "failed", "error": str(error)}
         self.report(status)
         return status
 

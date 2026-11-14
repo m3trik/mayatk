@@ -306,13 +306,49 @@ class TestLightingLayerIntensity(unittest.TestCase):
         self.assertIn(("AO (Curvature)", "Overlay", "BaseColor"), calls["blend"])
         self.assertEqual(calls["space"], [("AO", "Raw")], "the curvature source keeps Painter's reading")
 
+    def _stack_with_a_previous_run(self, layerstack):
+        """The fake's stack holding the lighting layers of an earlier run;
+        returns what a delete removes from it."""
+        import types
+
+        deleted = []
+        previous = [types.SimpleNamespace(get_name=lambda n=n: n) for n in ("AO", "AO (Curvature)", "Paint")]
+        layerstack.get_root_layer_nodes = lambda stack: list(previous)
+        layerstack.delete_node = deleted.append
+        return deleted
+
     def test_a_texture_set_with_no_ao_map_is_an_error_not_an_empty_layer(self):
+        """It raised, but only after it had deleted the last run's lighting
+        layer and inserted a fill that paints nothing: the project was left
+        worse than it was found."""
         from substance_rpc.ops import bake_ops as bake_utils
 
-        self._install_fake_painter()
+        calls, layerstack = self._install_fake_painter()
+        deleted = self._stack_with_a_previous_run(layerstack)
         with self.assertRaises(RuntimeError) as ctx:
             self._add(bake_utils, ts=self._texture_set(maps=()))
         self.assertIn("no AO mesh map", str(ctx.exception))
+        self.assertEqual(calls["layers"], [], "no layer is inserted")
+        self.assertEqual(deleted, [], "the last run's layers stay")
+
+    def test_a_missing_curvature_map_stops_before_the_ao_layer_is_touched(self):
+        from substance_rpc.ops import bake_ops as bake_utils
+
+        calls, layerstack = self._install_fake_painter()
+        deleted = self._stack_with_a_previous_run(layerstack)
+        with self.assertRaises(RuntimeError) as ctx:
+            self._add(bake_utils, ts=self._texture_set(maps=("AO",)), include_curvature=True)
+        self.assertIn("no Curvature mesh map", str(ctx.exception))
+        self.assertEqual((calls["layers"], deleted), ([], []))
+
+    def test_a_rerun_replaces_the_last_runs_layers_once_its_maps_are_there(self):
+        from substance_rpc.ops import bake_ops as bake_utils
+
+        calls, layerstack = self._install_fake_painter()
+        deleted = self._stack_with_a_previous_run(layerstack)
+        self._add(bake_utils, include_curvature=True)
+        self.assertEqual([node.get_name() for node in deleted], ["AO", "AO (Curvature)"])
+        self.assertEqual([layer.name for layer in calls["layers"]], ["AO", "AO (Curvature)"])
 
     def test_a_specular_glossiness_set_takes_the_lighting_on_diffuse(self):
         from substance_rpc.ops import bake_ops as bake_utils

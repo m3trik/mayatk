@@ -2199,6 +2199,248 @@ class TestRizomBridgePanelSurface(MayaTkTestCase):
         self.assertEqual(kwargs["params"], {"PACK_SPACING": 2})
 
 
+class TestRizomBridgeReview(MayaTkTestCase):
+    """Defects a review of the bridge found, each pinned where it was."""
+
+    def setUp(self):
+        super().setUp()
+        fd, path = tempfile.mkstemp(suffix=".fbx", prefix="rizom_review_")
+        os.close(fd)
+        Path(path).unlink(missing_ok=True)
+        self.export_path = path
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.bridge.export_path = self.export_path
+
+    def tearDown(self):
+        Path(self.export_path).unlink(missing_ok=True)
+        super().tearDown()
+
+    # -- the current UV set ---------------------------------------------
+
+    @staticmethod
+    def _layout(mesh, uv_set):
+        """Every face-vertex's (u, v) in *uv_set*: the layout, whatever its ids."""
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(mesh)
+        fn = om.MFnMesh(sel.getDagPath(0))
+        return [
+            tuple(round(c, 4) for c in fn.getPolygonUV(face, corner, uv_set))
+            for face in range(fn.numPolygons)
+            for corner in range(len(fn.getPolygonVertices(face)))
+        ]
+
+    def _two_sets(self, name="twoSets"):
+        """A cube with its default ``map1`` and a second set, ``lightmap``, of
+        another layout (six shells), which is the current one."""
+        cube = cmds.polyCube(name=name)[0]
+        cmds.polyUVSet(cube, create=True, uvSet="lightmap")
+        cmds.polyUVSet(cube, currentUVSet=True, uvSet="lightmap")
+        cmds.polyAutoProjection(f"{cube}.f[*]", layoutMethod=0, uvSetName="lightmap", insertBeforeDeformers=False)
+        cmds.polyUVSet(cube, currentUVSet=True, uvSet="lightmap")
+        cmds.delete(cube, constructionHistory=True)
+        return cube
+
+    def _exported(self):
+        """The meshes of the FBX the bridge just wrote, imported to look at."""
+        nodes = cmds.file(
+            self.export_path, i=True, type="FBX", ignoreVersion=True, namespace="rzchk", returnNewNodes=True
+        )
+        return cmds.ls(cmds.listRelatives(cmds.ls(nodes, type="mesh"), parent=True, fullPath=True), long=True)
+
+    def test_rizom_is_sent_the_current_uv_set_not_the_first(self):
+        """RizomUV edits the FIRST UV set of a mesh, and the transfer back
+        writes the CURRENT one: a mesh worked on in a second set came back
+        untouched, reported "UNCHANGED" (measured through the real 2020.1:
+        ``pack`` left both sets as they were)."""
+        cube = self._two_sets()
+        want = self._layout(cube, "lightmap")
+        self.assertNotEqual(want, self._layout(cube, "map1"), "the two sets differ, or this proves nothing")
+
+        self.bridge._export_objects([cube])
+
+        (sent,) = self._exported()
+        sets = cmds.polyUVSet(sent, query=True, allUVSets=True)
+        self.assertEqual(len(sets), 1, f"only the set being worked on travels: {sets}")
+        self.assertEqual(self._layout(sent, sets[0]), want)
+        # The original is as it was: both sets, the same one current.
+        self.assertEqual(cmds.polyUVSet(cube, query=True, allUVSets=True), ["map1", "lightmap"])
+        self.assertEqual(cmds.polyUVSet(cube, query=True, currentUVSet=True), ["lightmap"])
+        self.assertEqual(self._layout(cube, "lightmap"), want)
+
+    def test_a_round_trip_lands_on_the_current_uv_set_alone(self):
+        """End of the same defect: what comes back is written to the current
+        set, and the first set is not touched."""
+        cube = self._two_sets("twoSetsTrip")
+        first = self._layout(cube, "map1")
+        before = self._layout(cube, "lightmap")
+
+        def fake_rizom(exe, args=None, timeout=None, **kwargs):
+            """RizomUV as it behaves: it moves the FIRST set of what it loads."""
+            prev = cmds.undoInfo(query=True, state=True)
+            cmds.undoInfo(stateWithoutFlush=False)
+            try:
+                nodes = cmds.file(
+                    self.bridge.export_path, i=True, type="FBX", ignoreVersion=True, returnNewNodes=True
+                )
+                meshes = cmds.listRelatives(cmds.ls(nodes, type="mesh"), parent=True, fullPath=True)
+                for mesh in meshes:
+                    sets = cmds.polyUVSet(mesh, query=True, allUVSets=True)
+                    cmds.polyUVSet(mesh, currentUVSet=True, uvSet=sets[0])
+                    cmds.polyEditUV(f"{mesh}.map[*]", uValue=0.25, vValue=0.25)
+                cmds.select(meshes, replace=True)
+                with FbxUtils.scratch_export():
+                    cmds.file(self.bridge.export_path, exportSelected=True, type="FBX export", force=True)
+                cmds.delete(cmds.ls(nodes, dag=True, long=True))
+            finally:
+                cmds.undoInfo(stateWithoutFlush=prev)
+            return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+        with mock.patch.object(AppLauncher, "run", staticmethod(fake_rizom)):
+            self.bridge.process_with_rizomuv([cube], uv_script="-- current set")
+
+        self.assertEqual(self._layout(cube, "map1"), first, "the first set is not the one being worked on")
+        moved = [(round(u + 0.25, 4), round(v + 0.25, 4)) for u, v in before]
+        self.assertEqual(self._layout(cube, "lightmap"), moved)
+
+    def test_a_mesh_with_one_uv_set_is_sent_as_it_is(self):
+        cube = cmds.polyCube(name="oneSet")[0]
+        cmds.delete(cube, constructionHistory=True)
+        want = self._layout(cube, "map1")
+        self.bridge._export_objects([cube])
+        (sent,) = self._exported()
+        self.assertEqual(self._layout(sent, cmds.polyUVSet(sent, query=True, allUVSets=True)[0]), want)
+
+    # -- the export's options -------------------------------------------
+
+    def test_the_export_starts_from_the_plugins_factory_options(self):
+        """Its options are sticky: Triangulate left on by an interactive export
+        shipped a different face count, and the transfer back fell from the
+        exact copy to a spatial sample."""
+        import maya.mel as mel
+
+        FbxUtils.load_plugin()
+        mel.eval("FBXExportTriangulate -v true")
+        self.addCleanup(mel.eval, "FBXResetExport")
+        cube = cmds.polyCube(name="stickyOptions")[0]
+        self.bridge._export_objects([cube])
+        (sent,) = self._exported()
+        self.assertEqual(cmds.polyEvaluate(sent, face=True), 6, "quads, as the scene has them")
+
+    # -- failures that say what to do ------------------------------------
+
+    def _crash(self, code):
+        Path(self.export_path).write_bytes(b"pre-run FBX")
+        self.bridge.script_path = "ZomPack({})"
+        crashed = subprocess.CompletedProcess(args=["x"], returncode=code, stdout="", stderr="")
+        with mock.patch.object(AppLauncher, "run", staticmethod(lambda *a, **k: crashed)):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.bridge._execute_uv_script()
+        return str(ctx.exception)
+
+    def test_a_crash_names_its_known_causes(self):
+        """A RizomUV that dies takes the exit-code branch: it said "exited with
+        code 3221225727" and to run the script by hand, while the one cause a
+        person can fix (UVs collapsed onto a point) was only named on the
+        exit-0 path a crash never reaches."""
+        message = self._crash(3221225727)
+        self.assertIn("0xC00000FF", message)
+        self.assertIn("collapsed onto one point", message)
+        self.assertNotIn("3221225727", message)
+
+    def test_a_plain_failure_is_not_called_a_crash(self):
+        message = self._crash(1)
+        self.assertIn("0x00000001", message)
+        self.assertNotIn("Known causes", message)
+
+    def test_a_token_nothing_provides_is_refused_before_rizom_reads_it_as_nil(self):
+        self.bridge.script_path = "ZomUnfold({Iterations=__ITERATION__})  -- a misspelt __ITERATIONS__"
+        with self.assertRaises(ValueError) as ctx:
+            self.bridge._construct_full_script(Path(self.bridge.script_path).read_text(encoding="utf-8"))
+        self.assertIn("__ITERATION__", str(ctx.exception))
+        self.assertIn("__ITERATIONS__", str(ctx.exception), "the ones that exist are listed")
+
+    def test_a_comment_may_name_a_token(self):
+        script = self.bridge._construct_full_script("-- see __NOT_A_SETTING__\nZomUnfold({Iterations=__ITERATIONS__})")
+        self.assertIn("ZomUnfold", script)
+
+    def test_every_bundled_preset_still_constructs(self):
+        for lua in sorted(_SCRIPT_DIR.glob("*.lua")):
+            if lua.stem == RizomUVBridge.SEND_PRESET:
+                continue  # never wrapped: the send has its own script
+            with self.subTest(preset=lua.stem):
+                bridge = RizomUVBridge(rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2022.2\rizomuv.exe")
+                bridge.export_path = self.export_path
+                bridge._params = {"PACK_SELECT_NAMES": '{"tag"}'}
+                self.assertIn("ZomSave", bridge._construct_full_script(lua.read_text(encoding="utf-8")))
+
+    def test_an_unreadable_version_is_said_once(self):
+        RizomUVBridge._VERSION_WARNED.discard("D:/tools/rizomuv.exe")
+        bridge = RizomUVBridge(rizom_path="D:/tools/rizomuv.exe")
+        with self.assertLogs(bridge.logger, "WARNING") as logs:
+            self.assertEqual(bridge.rizom_version, (0, 0))
+        self.assertIn("version cannot be read", logs.output[0])
+        with self.assertNoLogs(bridge.logger, "WARNING"):
+            bridge.rizom_version
+
+    def test_the_export_path_may_be_a_path(self):
+        self.bridge.export_path = Path(self.export_path)
+        self.assertTrue(self.bridge.export_path.endswith(".fbx"))
+
+    # -- pack into existing ----------------------------------------------
+
+    def test_the_default_material_names_no_layout_to_pack_into(self):
+        """Every untextured mesh wears it: "sharing the selection's material"
+        shipped, and packed around, every such mesh in the scene."""
+        new = cmds.polyCube(name="untexturedNew")[0]
+        for i in range(3):
+            cmds.polyCube(name=f"untexturedOther{i}")
+        all_objects, selected = RizomUVBridge.expand_by_materials([new])
+        self.assertEqual([n.rsplit("|", 1)[-1] for n in all_objects], ["untexturedNew"])
+        self.assertEqual(len(selected), 1)
+        with self.assertLogs(self.bridge.logger, "WARNING") as logs:
+            self.assertIsNone(self.bridge.pack_into_existing([new]))
+        self.assertIn("no existing layout", "\n".join(logs.output))
+
+    def test_a_run_whose_uvs_reached_nothing_keeps_its_payloads(self):
+        """They are what there is to look at: a run that landed nothing
+        deleted the FBX and the script its own warning pointed to."""
+        cube = cmds.polyCube(name="nothingLanded")[0]
+        store = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(store, "_execute_uv_script"), mock.patch.object(store, "_import_objects", return_value=[]):
+            store.process_with_rizomuv([cube], uv_script="-- nothing comes back")
+        self.addCleanup(store._release_temp_payloads)
+        self.assertTrue(Path(store.export_path).is_file(), "the FBX RizomUV was given")
+        self.assertTrue(Path(store.script_path).is_file(), "the script it ran")
+
+    # -- the selection ----------------------------------------------------
+
+    def test_a_failed_run_gives_the_selection_back(self):
+        """The export selects its copies and deletes them: a run that failed or
+        was cancelled left nothing selected, and the next Process read an
+        empty scope."""
+        cube = cmds.polyCube(name="keepSelected")[0]
+        picked = [f"{cube}.f[0:2]"]
+        cmds.select(picked, replace=True)
+        before = cmds.ls(selection=True, flatten=True)
+        with mock.patch.object(self.bridge, "_execute_uv_script", side_effect=RuntimeError("RizomUV died")):
+            with self.assertRaises(RuntimeError):
+                self.bridge.process_with_rizomuv(picked, preset="pack")
+        self.assertEqual(cmds.ls(selection=True, flatten=True), before)
+
+    def test_a_failed_run_that_began_with_nothing_selected_ends_with_nothing_selected(self):
+        """An API call names its objects and selects none: restoring "nothing"
+        leaves nothing selected (not the export's copies, not the scene)."""
+        cube = cmds.polyCube(name="apiCall")[0]
+        cmds.polyCube(name="bystander")
+        cmds.select(clear=True)
+        with mock.patch.object(self.bridge, "_execute_uv_script", side_effect=RuntimeError("RizomUV died")):
+            with self.assertRaises(RuntimeError):
+                self.bridge.process_with_rizomuv([cube], preset="pack")
+        self.assertEqual(cmds.ls(selection=True), [])
+
+
 class TestRizomBridgeSendFlow(MayaTkTestCase):
     """One-way ``send_to_rizomuv`` flow: export + Lua render + detached launch.
 
@@ -2395,6 +2637,21 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
             body,
             "Missing texture file should be filtered out, not passed to Rizom.",
         )
+
+    def test_a_send_with_no_rizomuv_exports_nothing(self):
+        """A send checks for RizomUV before it exports: without one it wrote
+        an FBX nobody would open, then failed (the claim was untested, found
+        in the release review)."""
+        cube = cmds.polyCube(name="rizom_send_none")[0]
+        self.bridge._export_for_send = mock.MagicMock()
+        with mock.patch.object(
+            type(self.bridge), "rizom_path", new_callable=mock.PropertyMock, return_value=None
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.bridge.send_to_rizomuv([cube])
+        self.assertIn("not found", str(ctx.exception))
+        self.bridge._export_for_send.assert_not_called()
+        self.assertEqual(self._launch_calls, [])
 
 
 if __name__ == "__main__":

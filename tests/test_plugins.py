@@ -4,7 +4,7 @@
 
 Standalone never shows GUI Maya's untrusted-plug-in prompt, so these check the
 loads themselves: Maya's own, by name from its install. Which load the door
-issues is pinned on a mocked Maya in ``mock_tests/test_plugins.py``.
+issues is pinned on a mocked Maya in ``mock_tests/test_plugins_mock.py``.
 """
 
 import os
