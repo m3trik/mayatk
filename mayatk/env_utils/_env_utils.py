@@ -1751,9 +1751,10 @@ class EnvUtils(ptk.HelpMixin):
 
     @classmethod
     def _write_scene_usd(cls, file_path, options, progress):
-        """Export Scene's USD: the interchange set of the Scene Exporter's USD format.
-        The skin toggle maps to the skeleton flags; the rest have no USD equivalent
-        (a layer references its textures; cameras and lights are prims like any)."""
+        """Export Scene's USD: the interchange set of the Scene Exporter's USD format,
+        under one root prim (``UsdUtils.single_root``). The skin toggle maps to the
+        skeleton flags; the rest have no USD equivalent (a layer references its
+        textures; cameras and lights are prims like any)."""
         from mayatk.env_utils.usd import UsdUtils
 
         usd_options = dict(UsdUtils.DELIVERABLE_EXPORT_OPTIONS)
@@ -1768,6 +1769,7 @@ class EnvUtils(ptk.HelpMixin):
             file_path=file_path,
             options=usd_options,
             selection_only=options["selection_only"],
+            single_root=True,  # a deliverable: whole through a reference
         )
 
     @classmethod

@@ -11,7 +11,9 @@ launched is still finding its export presets), on the main thread, each piece of
 script, then each idle step) one entry in Painter's undo history named for the
 script (``layerstack.ScopedModification(label)``) when a project is open as
 that piece starts; what Painter itself does not undo (a project created,
-opened or saved) stays done.
+opened or saved) stays done. Painter computes the layer stack only once such
+an entry is closed, so a step that reads what the stack computes (a texture
+export) is queued outside one: ``args.when_idle(fn, undo=False)``.
 
 A script is Python, run as written, with these names given:
 
@@ -19,13 +21,16 @@ A script is Python, run as written, with these names given:
   ``args.get("ITERATIONS", 4)``), plus ``args.report(line)``,
   ``args.progress(fraction, text)``, ``args.cancelled()``,
   ``args.check_cancel()`` (raises :class:`ScriptCancelled` once asked) and
-  ``args.when_idle(fn)``: a step run once Painter is idle again (a save after
-  ``project.create``, which returns before Painter finished loading); the job
-  ends after its last step;
+  ``args.when_idle(fn, undo=True)``: a step run once Painter is idle again (a
+  save after ``project.create``, which returns before Painter finished
+  loading); the job ends after its last step;
 * ``substance_painter`` -- Painter's API.
 
 What it prints is the job's console. A job's states: ``queued``, ``running``,
 ``done``, ``failed``, ``cancelled`` (the shape a Unity Scripts job has).
+``script.status``, ``script.cancel`` and ``script.jobs`` only read and flag
+that bookkeeping, so they answer off Painter's main thread: a job is followed,
+and cancelled, through a step that holds that thread for minutes.
 
 Paused in Painter (:func:`set_paused`, the plugin's menu), a run is refused and
 a queued one ends cancelled, saying so.
@@ -92,10 +97,19 @@ class ScriptArgs(dict):
         if self._job["cancel"]:
             raise ScriptCancelled()
 
-    def when_idle(self, fn):
+    def when_idle(self, fn, undo=True):
         """Run *fn* (no arguments) once Painter is idle, after the script and
-        any step before it: the job ends after its last step."""
-        self._job["_steps"].append(fn)
+        any step before it: the job ends after its last step.
+
+        Parameters:
+            fn: The step.
+            undo: False runs it outside Painter's undo history: for a step
+                that changes nothing and reads what the layer stack computes
+                (a texture export). Painter computes the stack only once an
+                undo entry is closed, so inside one an export writes what was
+                last computed, not what the job just changed.
+        """
+        self._job["_steps"].append((fn, bool(undo)))
 
 
 class _Console(object):
@@ -215,33 +229,41 @@ def _later(fn):
     _after(0, when_idle)
 
 
-def _step(job, fn):
+def _step(job, fn, undo=True):
     """Run one piece of the job (the script, or one of its idle steps) in its
-    undo entry, its output the job's console; False when the job ended in it.
-    Painter must still hold the project the run was meant for: the job waited
-    for Painter to be idle, and a person may have opened another meanwhile."""
+    undo entry (none for a step queued ``undo=False``), its output the job's
+    console; the state the job ended in (``"cancelled"``, ``"failed"``), or
+    None when the piece ran through. Painter must still hold the project the
+    run was meant for: the job waited for Painter to be idle, and a person may
+    have opened another meanwhile.
+
+    The state itself is :func:`_end`'s to write, last: ``script.status``
+    answers off the main thread, and a caller that reads a finished state
+    stops polling, so the error, the traceback and the console's tail are in
+    place before it can."""
     console = _Console(job)
+    entry = _undo_entry(job["label"]) if undo else contextlib.nullcontext()
+    ended = None
     try:
         _refuse_other_project(job["expect"])
-        with _undo_entry(job["label"]), contextlib.redirect_stdout(console), contextlib.redirect_stderr(console):
+        with entry, contextlib.redirect_stdout(console), contextlib.redirect_stderr(console):
             fn()
-        return True
     except ScriptCancelled:
-        job["state"] = "cancelled"
+        ended = "cancelled"
     except BaseException as exc:  # noqa: BLE001 -- a script's failure is its job's, never Painter's
-        job["state"] = "failed"
         job["error"] = f"{type(exc).__name__}: {exc}"
         job["traceback"] = traceback.format_exc()
+        ended = "failed"
     finally:
         console.flush()
-    return False
+    return ended
 
 
-def _end(job, state=None):
-    if state:
-        job["state"] = state
+def _end(job, state):
+    """End *job* in *state*, written after everything a reader takes with it."""
     job["ended"] = time.time()
     job["_steps"] = []
+    job["state"] = state
     _prune()
 
 
@@ -261,8 +283,9 @@ def _run(job, code):
         namespace["substance_painter"] = substance_painter
     except ImportError:
         pass
-    if not _step(job, lambda: exec(code, namespace)):
-        _end(job)
+    ended = _step(job, lambda: exec(code, namespace))
+    if ended:
+        _end(job, ended)
     elif job["_steps"]:
         _later(lambda: _next_step(job))
     else:
@@ -274,8 +297,10 @@ def _next_step(job):
     if job["cancel"]:
         _end(job, "cancelled")
         return
-    if not _step(job, job["_steps"].pop(0)):
-        _end(job)
+    fn, undo = job["_steps"].pop(0)
+    ended = _step(job, fn, undo)
+    if ended:
+        _end(job, ended)
     elif job["_steps"]:
         _later(lambda: _next_step(job))
     else:
@@ -283,7 +308,7 @@ def _next_step(job):
 
 
 def _prune():
-    finished = [k for k, j in _JOBS.items() if j["state"] in _FINISHED]
+    finished = [k for k, j in list(_JOBS.items()) if j["state"] in _FINISHED]
     for key in finished[: max(0, len(finished) - KEEP)]:
         del _JOBS[key]
 
@@ -312,6 +337,10 @@ def start(source="", path="", args=None, expect=None, label=""):
         "label": label or os.path.splitext(os.path.basename(path or "script"))[0],
         "state": "queued",
         "queued": time.time(),
+        # Every key a job ever has, from the start: its status is read off
+        # Painter's main thread while that thread goes on writing it.
+        "started": None,
+        "ended": None,
         "args": dict(args or {}),
         "cancel": False,
         "report": [],
@@ -326,7 +355,7 @@ def start(source="", path="", args=None, expect=None, label=""):
     return {"job": job_id, "state": job["state"]}
 
 
-@register("script.status")
+@register("script.status", main_thread=False)
 def status(job=""):
     """The job's state, report, console, progress and error; ``None`` for a job
     this Painter does not know (it restarted, or the job was pruned)."""
@@ -334,7 +363,7 @@ def status(job=""):
     return None if found is None else _public(found)
 
 
-@register("script.cancel")
+@register("script.cancel", main_thread=False)
 def cancel(job=""):
     """Stop the job: a queued one never starts; a running one stops at its next
     ``args.check_cancel()``. The job's status after."""
@@ -346,7 +375,7 @@ def cancel(job=""):
     return _public(found)
 
 
-@register("script.jobs")
+@register("script.jobs", main_thread=False)
 def jobs():
     """Every kept job's status, oldest first."""
-    return [_public(j) for j in _JOBS.values()]
+    return [_public(j) for j in list(_JOBS.values())]

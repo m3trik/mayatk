@@ -1,0 +1,2401 @@
+# !/usr/bin/python
+# coding=utf-8
+"""Test Suite for mayatk.uv_utils.rizom_bridge.
+
+Regression coverage for the Maya-side of the bridge -- export path only.
+RizomUV invocation (and every Lua preset) is exercised by the standalone
+``tests/rizom_headless_probe.py`` because it needs the external executable
+-- run it after ANY edit to ``scripts/*.lua`` or ``templates/*.lua``.
+
+Tests here run inside a live Maya session via ``run_tests.py`` and catch
+the failure modes the standalone smoketest cannot:
+
+- ``fbxmaya`` plugin not pre-loaded in interactive Maya.
+- Multiple duplicates collapsing to the same leaf name (different parents)
+  causing ``cmds.select`` ambiguity.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import unittest
+import tempfile
+import filecmp
+from pathlib import Path
+from unittest import mock
+
+import maya.cmds as cmds
+
+from pythontk import AppLauncher
+
+from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.env_utils.fbx_utils import FbxUtils
+from mayatk.uv_utils._uv_utils import UvUtils
+from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DIR
+from mayatk.uv_utils.rizom_bridge import parameters as _params
+
+from base_test import MayaTkTestCase
+
+
+def _code_lines(script: str) -> str:
+    """*script* with its Lua comment lines dropped.
+
+    Preset headers discuss the very fields these tests assert on (which
+    ZomPack knobs are gated, why KeepMetric is off), so a raw substring
+    scan reads that prose as code.
+    """
+    return "\n".join(
+        ln for ln in script.splitlines() if not ln.lstrip().startswith("--")
+    )
+
+
+class TestRizomBridgeExport(MayaTkTestCase):
+    """Maya-only: validates the export half of the bridge end-to-end."""
+
+    def setUp(self):
+        super().setUp()
+        # Force the bridge to a temp path each test so we can assert on it.
+        fd, path = tempfile.mkstemp(suffix=".fbx", prefix="rizom_test_")
+        os.close(fd)
+        # The file must NOT exist when the export runs (mtime check is permissive
+        # but we only care about the post-state here).
+        Path(path).unlink(missing_ok=True)
+        self.export_path = path
+
+        # Construct a bridge but do not require RizomUV on disk -- we never
+        # invoke the executable from these tests.
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.bridge.export_path = self.export_path
+
+    def tearDown(self):
+        Path(self.export_path).unlink(missing_ok=True)
+        super().tearDown()
+
+    def test_export_loads_fbx_plugin_when_unloaded(self):
+        """Bridge must load fbxmaya itself; live Maya doesn't pre-load it."""
+        if cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            try:
+                cmds.unloadPlugin("fbxmaya", force=True)
+            except RuntimeError:
+                self.skipTest("fbxmaya cannot be unloaded in this session.")
+
+        cube = cmds.polyCube(name="rizom_plugin_test")[0]
+        self.bridge._export_objects([cube])
+
+        self.assertTrue(
+            cmds.pluginInfo("fbxmaya", query=True, loaded=True),
+            "Bridge should have loaded fbxmaya before exporting.",
+        )
+        self.assertTrue(
+            Path(self.export_path).exists(),
+            f"FBX not written to {self.export_path}",
+        )
+        self.assertGreater(Path(self.export_path).stat().st_size, 0, "FBX is empty.")
+
+    def test_export_handles_name_collisions_under_different_parents(self):
+        """Two duplicates may share a leaf name -- bridge must use long paths.
+
+        Reproduces the 29-object failure: when ``cmds.duplicate`` produces
+        nodes whose post-rename leaf names collide (e.g. one at world root
+        and one under another parent), ``cmds.select`` raises
+        'More than one object matches name'. The bridge must resolve to
+        full DAG paths before selecting.
+        """
+        # Parent group whose child collides with a world-root sibling.
+        parent = cmds.group(empty=True, name="OUTPUT_CTRL")
+        inside = cmds.polyCube(name="SWITCH_GEO")[0]
+        cmds.parent(inside, parent)
+        # Need its long path for export -- short name "SWITCH_GEO" exists twice.
+        inside_long = cmds.ls(inside, long=True)[0]
+
+        outside = cmds.polyCube(name="SWITCH_GEO")[0]  # world root, same leaf
+        outside_long = cmds.ls(outside, long=True)[0]
+
+        # Add a few unrelated cubes so the test mirrors the bulk-export shape.
+        extras = [cmds.polyCube(name=f"extra_{i}")[0] for i in range(5)]
+
+        exported = [inside_long, outside_long] + extras
+        # Should not raise.
+        self.bridge._export_objects(exported)
+
+        self.assertTrue(
+            Path(self.export_path).exists(),
+            f"FBX not written to {self.export_path}",
+        )
+        self.assertGreater(Path(self.export_path).stat().st_size, 0, "FBX is empty.")
+        # Every exported object must land on its OWN map key -- colliding
+        # leaf names used to collapse to one key, cross-wiring the UV
+        # transfer (both SWITCH_GEOs would receive the same shell).
+        self.assertEqual(
+            len(self.bridge._export_name_map),
+            len(exported),
+            f"Expected one unique map key per export, got: "
+            f"{self.bridge._export_name_map}",
+        )
+        # ... and on its own destination: both SWITCH_GEOs must be mapped
+        # as distinct transfer targets.
+        destinations = list(self.bridge._export_name_map.values())
+        self.assertEqual(
+            len(set(destinations)),
+            len(exported),
+            f"Transfer destinations are not unique: {destinations}",
+        )
+        switch_geos = [
+            d for d in destinations if d.split("|")[-1].split(":")[-1] == "SWITCH_GEO"
+        ]
+        self.assertEqual(
+            len(switch_geos),
+            2,
+            f"Both name-colliding originals should be mapped: {destinations}",
+        )
+
+    def test_export_resolves_meshes_out_of_a_locator_hierarchy(self):
+        """Non-mesh transforms name their meshes; they are never exported themselves.
+
+        Reproduces a live "pack" failure on a rig whose meshes hang off
+        locators. The export set arrived as [locator, mesh, locator, mesh],
+        and ``cmds.duplicate`` on a LOCATOR clones its whole subtree -- so the
+        run cloned the meshes a second time under a ``__RZTMP`` root. Three
+        consequences, all in one log:
+
+        * the clones re-used their sources' leaf names, which made the
+          still-unresolved entries of the export list ambiguous -- every
+          later ``cmds.duplicate`` died with "More than one object matches
+          name" and those objects never reached RizomUV;
+        * the locators themselves landed in ``_export_name_map``, so the
+          re-import aimed ``transferAttributes`` at a locatorShape
+          ("Selected item ...LOCShape is not deformable");
+        * the second locator's clone swept up the first clone, multiplying
+          ``__RZTMP`` nodes inside the FBX.
+        """
+        root = cmds.group(empty=True, name="RZ_INTERACTIVE")
+        outer_loc = cmds.parent(cmds.spaceLocator(name="RZ_OUTER_LOC")[0], root)[0]
+        outer_geo = cmds.parent(cmds.polyCube(name="RZ_OUTER_GEO")[0], outer_loc)[0]
+        inner_grp = cmds.group(empty=True, name="RZ_INNER_GRP", parent=outer_loc)
+        inner_loc = cmds.parent(cmds.spaceLocator(name="RZ_INNER_LOC")[0], inner_grp)[0]
+        inner_geo = cmds.parent(cmds.polySphere(name="RZ_INNER_GEO")[0], inner_loc)[0]
+
+        long = {n: cmds.ls(n, long=True)[0] for n in (outer_geo, inner_geo)}
+        # The order the live failure arrived in: locator, mesh, locator, mesh.
+        self.bridge._export_objects([outer_loc, outer_geo, inner_loc, inner_geo])
+
+        self.assertTrue(Path(self.export_path).exists(), "FBX not written.")
+        destinations = list(self.bridge._export_name_map.values())
+        self.assertEqual(
+            sorted(destinations),
+            sorted(long.values()),
+            f"Export set should be exactly the two meshes, got: {destinations}",
+        )
+        for dst in destinations:
+            self.assertTrue(
+                cmds.listRelatives(dst, shapes=True, type="mesh", noIntermediate=True),
+                f"{dst} has no mesh shape -- transferAttributes cannot target it.",
+            )
+
+    def test_export_copies_carry_no_stray_geometry(self):
+        """A mesh parented under another mesh must not ride along in the copy.
+
+        ``cmds.duplicate`` brings children with it, so the copy of a parent
+        mesh carried a copy of its child -- extra islands competing for space
+        in the pack, under a name the re-import cannot map back to anything.
+        """
+        parent = cmds.polyCube(name="RZ_NEST_PARENT")[0]
+        child = cmds.parent(cmds.polySphere(name="RZ_NEST_CHILD")[0], parent)[0]
+        parent_long = cmds.ls(parent, long=True)[0]
+        child_long = cmds.ls(child, long=True)[0]
+
+        seen = []
+        real_export = cmds.file
+
+        def _spy(*args, **kwargs):
+            if kwargs.get("exportSelected"):
+                seen.extend(
+                    cmds.ls(
+                        selection=True,
+                        dagObjects=True,
+                        type="mesh",
+                        noIntermediate=True,
+                    )
+                    or []
+                )
+            return real_export(*args, **kwargs)
+
+        with mock.patch.object(cmds, "file", _spy):
+            self.bridge._export_objects([parent_long, child_long])
+
+        self.assertEqual(
+            len(seen), 2, f"Exactly one mesh shape per export copy; got {seen}"
+        )
+        self.assertEqual(
+            sorted(self.bridge._export_name_map.values()),
+            sorted([parent_long, child_long]),
+            self.bridge._export_name_map,
+        )
+
+    def test_export_survives_a_leaf_collision_created_mid_run(self):
+        """A duplicate that shadows a pending entry's name must not break it.
+
+        ``cmds.ls`` answers with the SHORTEST UNIQUE name, so the export
+        list is only unambiguous as of the moment it was resolved. Anything
+        the loop itself adds to the scene can retroactively make a later
+        entry's name match two nodes. The loop therefore has to carry full
+        DAG paths of its own rather than trust the spelling it was handed.
+        """
+        grp_a = cmds.group(empty=True, name="RZ_COLL_A")
+        grp_b = cmds.group(empty=True, name="RZ_COLL_B")
+        # Resolve each path BEFORE the next cube exists -- once both are in
+        # the scene "RZ_COLL_GEO" matches two nodes and ``cmds.ls`` silently
+        # answers with the wrong one.
+        long_a = cmds.ls(
+            cmds.parent(cmds.polyCube(name="RZ_COLL_GEO")[0], grp_a)[0], long=True
+        )[0]
+        long_b = cmds.ls(
+            cmds.parent(cmds.polyCube(name="RZ_COLL_GEO")[0], grp_b)[0], long=True
+        )[0]
+
+        # Hand the loop the shortest-unique spellings, the way a resolver
+        # that ran before the duplicates existed would have.
+        self.bridge._export_objects([long_a, long_b])
+
+        self.assertEqual(
+            sorted(self.bridge._export_name_map.values()),
+            sorted([long_a, long_b]),
+            f"Both colliding meshes must export: {self.bridge._export_name_map}",
+        )
+
+
+class TestRizomBridgeLogic(MayaTkTestCase):
+    """Pure-logic regressions: no export, no RizomUV run."""
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="rizom_logic_test_"))
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        # Temp payloads the bridges allocate are scoped to this test.
+        self.addCleanup(self.bridge._release_temp_payloads)
+
+    def test_the_round_trip_payloads_live_under_the_one_temp_root(self):
+        """Even with a ``~/temp`` folder present: a second temp root is one
+        ``TempArtifacts.sweep_all`` never visits, and blendertk's twin never
+        had it. Added: 2026-10-13"""
+        import pythontk as ptk
+
+        (self.tmp_dir / "temp").mkdir()
+        with mock.patch.object(Path, "home", return_value=self.tmp_dir):
+            store = RizomUVBridge(rizom_path="not-used.exe")._temp_store
+        self.assertTrue(store.managed, store.dir)
+        self.assertEqual(
+            os.path.normcase(os.path.dirname(os.path.normpath(store.dir))),
+            os.path.normcase(os.path.normpath(ptk.TempArtifacts.root())),
+        )
+
+    def test_a_transfer_that_lands_nothing_is_reported(self):
+        """A round trip that leaves the UVs untouched must say so.
+
+        Regression (2026-08-26): live UV history around a deformer swallowed
+        the transferred UVs, and the run still signed off as "applied to 42
+        object(s)". The count reports what was ATTEMPTED per pair; only the
+        UVs themselves can report what LANDED.
+        """
+        src = cmds.polyCube(name="unchangedSrc", ch=False)[0]
+        dst = cmds.polyCube(name="unchangedDst", ch=False)[0]
+
+        with mock.patch.object(UvUtils, "transfer_uvs", return_value=[(src, dst)]):
+            with mock.patch.object(self.bridge.logger, "warning") as warned:
+                self.bridge._transfer_uvs([(src, dst)])
+
+        self.assertTrue(warned.called, "an unchanged target went unreported")
+        self.assertIn("UNCHANGED", warned.call_args[0][0])
+        self.assertIn("unchangedDst", warned.call_args[0][0])
+
+    def test_a_transfer_that_lands_is_not_reported(self):
+        """The tripwire must stay quiet when the UVs actually moved."""
+        src = cmds.polyCube(name="movedSrc", ch=False)[0]
+        dst = cmds.polyCube(name="movedDst", ch=False)[0]
+        cmds.polyEditUV(f"{src}.map[*]", u=0.25, v=0.25)
+
+        with mock.patch.object(self.bridge.logger, "warning") as warned:
+            self.bridge._transfer_uvs([(src, dst)])
+
+        self.assertFalse(
+            warned.called, f"false alarm on a landed transfer: {warned.call_args}"
+        )
+
+    def test_parse_rizom_version_handles_install_dir_variants(self):
+        """The parser must survive every real-world install-dir naming."""
+        cases = {
+            r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe": (2020, 1),
+            r"C:\Program Files\Rizom Lab\RizomUV VS RS 2022.2\rizomuv.exe": (2022, 2),
+            r"C:\Program Files\Rizom Lab\RizomUV_2024\rizomuv.exe": (2024, 0),
+            r"C:\Program Files\Rizom Lab\RizomUV VS RS 2023.10.1\rizomuv.exe": (
+                2023,
+                10,
+                1,
+            ),
+            r"C:\tools\bin\someapp.exe": (0, 0),
+        }
+        for path, expected in cases.items():
+            self.assertEqual(
+                RizomUVBridge._parse_rizom_version(path),
+                expected,
+                f"Version mis-parsed for {path}",
+            )
+
+    def test_script_path_property_after_raw_content(self):
+        """Setting raw Lua content must leave script_path readable.
+
+        Regression: _prepare_script_file stored a plain str, so the
+        script_path getter crashed on .as_posix().
+        """
+        self.bridge.script_path = 'ZomSelect({PrimType="Edge"})'
+        resolved = self.bridge.script_path
+        self.assertIsInstance(resolved, str)
+        self.assertTrue(resolved.endswith(".lua"), resolved)
+        self.assertTrue(Path(resolved).is_file(), resolved)
+
+    def test_export_path_rejects_non_fbx(self):
+        """OBJ was a trap -- the exporter always wrote FBX data."""
+        with self.assertRaises(ValueError):
+            self.bridge.export_path = "C:/temp/out.obj"
+
+    def test_roundtrip_temp_payloads_are_unique_per_bridge(self):
+        """Two bridges must never be handed the same FBX / Lua path.
+
+        Regression: both were fixed ``%TEMP%`` names (``rizomuv_exported.fbx``
+        / ``riz_uv_script.lua``) shared with the Blender twin, a second Maya,
+        and this very suite. RizomUV re-reads the ``-cfi`` script after
+        launch, so another process overwriting it mid-run made RizomUV exit 0
+        without reaching ZomSave -- reproduced, and the reported "exited
+        cleanly but did not modify the FBX". Lifecycle is now
+        ``ptk.TempArtifacts``, which mints a unique tag per allocation.
+        """
+        other = RizomUVBridge(rizom_path="not-used.exe")
+        self.addCleanup(other._release_temp_payloads)
+        for bridge in (self.bridge, other):
+            bridge.script_path = 'ZomSelect({PrimType="Edge"})'
+
+        self.assertNotEqual(self.bridge.export_path, other.export_path)
+        self.assertNotEqual(self.bridge.script_path, other.script_path)
+        # Prefix-scoped so the store's stale sweep can find them again.
+        for path in (self.bridge.export_path, self.bridge.script_path):
+            self.assertTrue(Path(path).name.startswith("rizom_roundtrip_"), path)
+
+    def test_second_run_through_one_bridge_still_tracks_its_payloads(self):
+        """A reused bridge must re-allocate, or run 2's files leak.
+
+        ``TempArtifacts.cleanup`` untracks what it removed, so caching the
+        paths across runs would leave the next run's payloads untracked --
+        and the panel keeps one bridge for the whole session.
+        """
+        first_fbx = self.bridge.export_path
+        self.bridge.script_path = "ZomPack({})"
+        first_lua = self.bridge.script_path
+        self.assertTrue(Path(first_lua).is_file())
+        Path(first_fbx).write_bytes(b"fbx")
+
+        self.bridge._release_temp_payloads()
+        self.assertFalse(Path(first_fbx).exists())
+        self.assertFalse(Path(first_lua).exists())
+
+        self.bridge.script_path = "ZomPack({})"
+        self.assertNotEqual(first_fbx, self.bridge.export_path)
+        self.assertNotEqual(first_lua, self.bridge.script_path)
+
+    def test_explicit_export_path_is_never_deleted(self):
+        """A caller-assigned export_path isn't ours to clean up."""
+        mine = Path(self.tmp_dir) / "keep_me.fbx"
+        mine.write_bytes(b"fbx")
+        self.bridge.export_path = str(mine)
+        self.bridge.script_path = "ZomPack({})"
+
+        self.bridge._release_temp_payloads()
+        self.assertTrue(mine.is_file(), "explicit export_path was deleted")
+        self.assertEqual(str(mine), str(Path(self.bridge.export_path)))
+
+    def test_no_save_diagnosis_flags_a_mid_run_overwrite(self):
+        """The no-save error must name the script and detect a clobber.
+
+        The old message told the user to "enable debug logging to see the Lua
+        traceback" -- RizomUV emits nothing on stdout/stderr in ``-cfi``
+        mode, so no log level could ever produce one.
+        """
+        self.bridge.script_path = "ZomPack({})"
+        script = Path(self.bridge.script_path)
+
+        intact = self.bridge._no_save_diagnosis(script.read_text(encoding="utf-8"))
+        self.assertIn(str(script), intact)
+        self.assertIn(str(Path(self.bridge.export_path)), intact)
+        self.assertNotIn("no longer matches", intact)
+        self.assertNotIn("enable debug logging", intact)
+
+        clobbered = self.bridge._no_save_diagnosis("ZomPack({}) -- what we wrote")
+        self.assertIn("no longer matches", clobbered)
+
+    def test_unmodified_fbx_raises_through_the_real_run_path(self):
+        """Drive ``_execute_uv_script``'s no-save branch, not just its message.
+
+        The formatter test above can't catch a name/scope error in the branch
+        that calls it -- and that branch only ever fires on failure, so a
+        mistake there would ship silently.
+        """
+        self.bridge.export_path = str(Path(self.tmp_dir) / "untouched.fbx")
+        Path(self.bridge.export_path).write_bytes(b"pre-run FBX")
+        self.bridge.script_path = "ZomPack({})"
+
+        calls = []
+
+        def fake_run(exe, args=None, timeout=None, **kwargs):  # RizomUV that does nothing
+            calls.append(args)
+            return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+        with mock.patch.object(AppLauncher, "run", staticmethod(fake_run)):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.bridge._execute_uv_script()
+
+        self.assertTrue(calls, "RizomUV was never invoked")
+        message = str(ctx.exception)
+        self.assertIn("never wrote the FBX", message)
+        self.assertIn(str(Path(self.bridge.script_path)), message)
+        # The script it ran is the one we wrote, so no clobber must be claimed.
+        self.assertNotIn("no longer matches", message)
+
+    def test_rizomuv_runs_hidden_unless_asked_to_show(self):
+        """RizomUV has no headless mode: a run goes where no one sees it
+        (``AppLauncher.run(hidden=True)``), and ``hidden=False`` shows it -- to
+        watch it work, or answer a dialog it waits on, which a timed-out hidden
+        run names -- only where it was hidden (``AppLauncher.can_hide``)."""
+        seen = []
+
+        def capture(exe, args=None, timeout=None, **kwargs):
+            seen.append(kwargs.get("hidden"))
+            raise subprocess.TimeoutExpired(exe, timeout)
+
+        shown = RizomUVBridge(rizom_path="not-used.exe", hidden=False)
+        self.addCleanup(shown._release_temp_payloads)
+        errors = []
+        # (bridge, whether this platform hides): hidden, shown, and hidden where
+        # it cannot be (it showed, so nothing waited unseen).
+        for bridge, hides in ((self.bridge, True), (shown, True), (self.bridge, False)):
+            bridge.export_path = str(Path(self.tmp_dir) / "hidden.fbx")
+            bridge.script_path = "ZomPack({})"
+            with mock.patch.object(
+                AppLauncher, "run", staticmethod(capture)
+            ), mock.patch.object(AppLauncher, "can_hide", staticmethod(lambda: hides)):
+                with self.assertRaises(RuntimeError) as ctx:
+                    bridge._execute_uv_script()
+            errors.append(str(ctx.exception))
+        self.assertEqual(seen, [True, False, True])
+        self.assertIn("hidden=False", errors[0])
+        self.assertNotIn("hidden", errors[1])
+        self.assertNotIn("hidden", errors[2])
+
+    def test_show_app_window_shows_rizomuv_for_the_run(self):
+        """The panel's Show App Window (``SHOW_APP_WINDOW``, off by default)
+        shows RizomUV for the run it rides in, as ``hidden=False`` does: a
+        hidden app waiting on a dialog can't be answered. Its row shows for
+        every round-trip preset and not for the one-way send, whose RizomUV
+        always shows; a timed-out hidden run names it. Added: 2026-10-19"""
+        spec = _params.PARAMS["SHOW_APP_WINDOW"]
+        self.assertEqual((spec.kind, spec.default), ("bool", False))
+        self.assertIn("dialog", spec.tooltip)
+        for path in sorted(_SCRIPT_DIR.glob("*.lua")):
+            keys = _params.Parameters.referenced_keys(path.read_text(encoding="utf-8"))
+            self.assertEqual("SHOW_APP_WINDOW" in keys, path.stem != "send", path.stem)
+
+        seen, errors = [], []
+
+        def capture(exe, args=None, timeout=None, **kwargs):
+            seen.append(kwargs.get("hidden"))
+            raise subprocess.TimeoutExpired(exe, timeout)
+
+        shown = RizomUVBridge(rizom_path="not-used.exe", hidden=False)
+        self.addCleanup(shown._release_temp_payloads)
+        for bridge, params in (
+            (self.bridge, {}),
+            (self.bridge, {"SHOW_APP_WINDOW": False}),
+            (self.bridge, {"SHOW_APP_WINDOW": True}),
+            (shown, {"SHOW_APP_WINDOW": False}),
+        ):
+            bridge._params = params
+            bridge.export_path = str(Path(self.tmp_dir) / "shown.fbx")
+            bridge.script_path = "ZomPack({})"
+            with mock.patch.object(
+                AppLauncher, "run", staticmethod(capture)
+            ), mock.patch.object(AppLauncher, "can_hide", staticmethod(lambda: True)):
+                with self.assertRaises(RuntimeError) as ctx:
+                    bridge._execute_uv_script()
+            errors.append(str(ctx.exception))
+        self.assertEqual(seen, [True, True, False, False])
+        self.assertIn("Show App Window", errors[0])
+        self.assertNotIn("Show App Window", errors[2])
+
+    def test_a_cancel_ends_the_run_and_says_so(self):
+        """Holding Esc during a hidden run (the ambient CancelScope a real run
+        polls) returns at once: the bridge logs that RizomUV was cancelled and
+        raises ``OperationCancelled`` -- never the ``RuntimeError`` a failure
+        becomes, which the panel would report as a crash. Added: 2026-10-19"""
+        import pythontk as ptk
+
+        def cancelled(exe, args=None, timeout=None, **kwargs):
+            ptk.CancelScope.check()  # the checkpoint a hidden run polls
+            raise AssertionError("the run never reached its checkpoint")
+
+        self.bridge.export_path = str(Path(self.tmp_dir) / "cancelled.fbx")
+        self.bridge.script_path = "ZomPack({})"
+        scope = ptk.CancelScope("RizomUV")
+        scope.cancel("escape")
+        with mock.patch.object(
+            AppLauncher, "run", staticmethod(cancelled)
+        ), mock.patch.object(self.bridge.logger, "warning") as warned:
+            with scope.activate(), self.assertRaises(ptk.OperationCancelled):
+                self.bridge._execute_uv_script()
+        logged = " ".join(str(call.args[0]) for call in warned.call_args_list)
+        self.assertIn("cancelled", logged)
+
+    def test_passthrough_script_still_substitutes_params(self):
+        """A script with its own ZomLoad/ZomSave skips the wrapper but must
+        still get version-stripping + placeholder substitution."""
+        self.bridge._params = {"ITERATIONS": 25}
+        raw = (
+            'ZomLoad({File={Path="x.fbx"}})\n'
+            "ZomUnfold({Iterations=__ITERATIONS__})\n"
+            'ZomSave({File={Path="x.fbx"}})\n'
+        )
+        rendered = self.bridge._construct_full_script(raw)
+        self.assertIn("Iterations=25", rendered)
+        self.assertNotIn("__ITERATIONS__", rendered)
+        # Not double-wrapped: exactly one ZomLoad.
+        self.assertEqual(rendered.count("ZomLoad"), 1)
+
+    def test_unwrap_presets_reference_expected_tokens(self):
+        """Panel visibility is driven by the tokens each preset references."""
+        hard = (_SCRIPT_DIR / "unwrap_hard.lua").read_text(encoding="utf-8")
+        organic = (_SCRIPT_DIR / "unwrap_organic.lua").read_text(encoding="utf-8")
+
+        hard_keys = _params.Parameters.referenced_keys(hard)
+        organic_keys = _params.Parameters.referenced_keys(organic)
+
+        self.assertIn("WELD_SEAMS", hard_keys)
+        self.assertIn("SHARP_ANGLE", hard_keys)
+        self.assertNotIn("DEVELOPABILITY", hard_keys)
+
+        self.assertIn("WELD_SEAMS", organic_keys)
+        self.assertIn("DEVELOPABILITY", organic_keys)
+        # Organic segmentation no longer keys off dihedral angle.
+        self.assertNotIn("SHARP_ANGLE", organic_keys)
+
+    def test_param_labels_are_unique(self):
+        """Two widgets with the same label are indistinguishable in the panel.
+
+        Regression: MIX was labeled 'Mutations', colliding with
+        PACK_MAX_MUTATIONS.
+        """
+        labels = [spec.label for spec in _params.PARAMS.values()]
+        self.assertEqual(
+            len(labels),
+            len(set(labels)),
+            f"Duplicate parameter labels: {[x for x in labels if labels.count(x) > 1]}",
+        )
+
+    def test_preset_min_version_parses_marker(self):
+        """The @min_rizom header gates a preset as a whole."""
+        self.assertEqual(
+            _params.Parameters.preset_min_version("-- @min_rizom: 2022.2\nZomPack({})"),
+            (2022, 2),
+        )
+        # Single-segment versions pad to (year, 0) for tuple comparison.
+        self.assertEqual(
+            _params.Parameters.preset_min_version("-- @min_rizom: 2024"),
+            (2024, 0),
+        )
+        self.assertIsNone(_params.Parameters.preset_min_version("ZomPack({})"))
+        # Shipped presets: pack and pack_into_existing are ungated (the
+        # latter since its 2026-09-27 rebuild), unwrap_hybrid needs 2022.
+        for preset, gate in (
+            ("pack", None),
+            ("pack_into_existing", None),
+            ("unwrap_hybrid", (2022, 0)),
+        ):
+            body = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            self.assertEqual(_params.Parameters.preset_min_version(body), gate, preset)
+
+    def test_pack_preset_references_placement_tokens(self):
+        """Every preset carrying the shared pack block exposes the post-pack
+        UDIM/coverage placement knobs -- optimize.lua included, now that it
+        shares that block instead of hand-rolling its own (no-op) pack."""
+        for preset in ("pack", "optimize", "unwrap_hard", "unwrap_organic"):
+            keys = _params.Parameters.referenced_keys(
+                (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            )
+            self.assertIn("TARGET_UDIM", keys, preset)
+            self.assertIn("UV_AREA", keys, preset)
+
+    def test_gated_preset_refused_below_min_version(self):
+        """unwrap_hybrid must fail loudly (not crash Rizom) on 2020.1."""
+        bridge = RizomUVBridge(
+            rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe"
+        )
+        # The refusal happens after the script file is written, and the
+        # scoped policy keeps payloads on failure -- so clean up ours.
+        self.addCleanup(bridge._release_temp_payloads)
+        cube = cmds.polyCube(name="gateCube")[0]
+        with self.assertRaisesRegex(RuntimeError, "requires RizomUV >= 2022.0"):
+            bridge.process_with_rizomuv([cube], preset="unwrap_hybrid")
+
+    def test_selection_preset_requires_select_objects(self):
+        """A script with the selection token refuses to run without
+        select_objects -- the raw token would be a Lua syntax error."""
+        cube = cmds.polyCube(name="selReqCube")[0]
+        script = "ZomSelect({Names=__PACK_SELECT_NAMES__, Select=true})\n"  # noqa: P103
+        with self.assertRaisesRegex(ValueError, "select_objects"):
+            self.bridge.process_with_rizomuv([cube], uv_script=script)
+
+    def test_expand_includes_expands_directive_not_comment(self):
+        """__PACK_BLOCK__ expands only as a standalone directive line -- an
+        in-comment mention stays literal (the expander is a blind replace
+        for everything else and must not clobber comments)."""
+        directive = _params.Parameters.expand_includes("x\n__PACK_BLOCK__\ny")
+        self.assertIn("ZomPack", directive)
+        self.assertNotIn("__PACK_BLOCK__", directive)
+
+        commented = _params.Parameters.expand_includes(
+            "-- see __PACK_BLOCK__ for details\ncode"
+        )
+        self.assertNotIn("ZomPack", commented)
+        self.assertIn("__PACK_BLOCK__", commented)  # untouched
+
+    def test_pack_block_shared_by_every_packing_preset(self):
+        """pack / optimize / unwrap_hard / unwrap_organic all pull the shared
+        block, so the pack knobs are defined in exactly one place.
+
+        optimize.lua hand-rolled a divergent copy until 2026-08-17; that copy
+        silently no-opped (no island selection -> empty RootGroup), which is
+        what let its ZomOptimize step blow the layout out of the tile
+        unchecked. See ``test_optimize_repacks_in_tile_instead_of_inflating``.
+        """
+        for preset in ("pack", "optimize", "unwrap_hard", "unwrap_organic"):
+            body = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            self.assertIn(
+                "__PACK_BLOCK__", body, f"{preset} should use the shared block"
+            )
+            code = _code_lines(body)
+            self.assertNotIn("ZomPack(", code, f"{preset} must not inline its own pack")
+            self.assertNotIn(
+                "ZomIslandGroups(", code, f"{preset} must not inline its own grouping"
+            )
+
+    def test_optimize_repacks_in_tile_instead_of_inflating(self):
+        """`optimize` must repack the incoming layout, not rescale it to the
+        mesh's 3D metric and then fail to pack at all.
+
+        Two independent defects made the preset destroy the layout its own
+        header promised to preserve. Measured 2026-08-17 against a real
+        RizomUV 2020.1 driven through the bridge's own render path (the
+        ``rizom_headless_probe.py`` recipe), on three projection-UV spheres
+        whose incoming UV area is 0.8100 inside the 0-1 tile:
+
+        - ``KeepMetric=true`` rescales the optimised result to the 3D metric:
+          area 0.8100 -> 29.0800 spanning u[0.004,5.686] v[0.004,6.835], i.e.
+          ~6x7 UDIM tiles (84x / ~9x9 tiles through the Maya path). It is a
+          PURE GLOBAL SCALE -- per-face UV/3D area spread lands at a
+          coefficient of variation of 0.4269 either way (0.9301 incoming), so
+          dropping it costs nothing in solver quality.
+        - The hand-rolled ``ZomIslandGroups`` + ``ZomPack`` tail no-opped:
+          with no island selection ``RootGroup`` stayed empty, so the
+          layout-scale invariants it hardcoded never reached the packer.
+
+        With pack.lua's selection opener + the shared block + KeepMetric=false
+        the same input lands at area 0.6142 inside u[0.002,0.828]
+        v[0.002,0.998], and the preserve-scale workflow (Pre-scale "Keep
+        current scale" + Layout Scale "Keep positions") measures 0.8100 ->
+        0.8100 -- preserved for real rather than by decoration.
+
+        Confirmed on the path users actually run (headless mayapy + the real
+        bridge: FBX export, island groups, UV transfer back), three
+        auto-projected spheres, identical input either side: 1.9238 ->
+        36.6722 spanning u[0.004,7.217] v[0.004,7.597] before the fix,
+        1.9238 -> 0.6251 inside u[0.002,0.968] v[0.002,0.998] after (`pack`
+        on the same scene lands at 0.6652).
+        """
+        body = (_SCRIPT_DIR / "optimize.lua").read_text(encoding="utf-8")
+        code = _code_lines(body)
+
+        # The metric rescale is what inflated the layout.
+        self.assertIn("KeepMetric=false", code)
+        self.assertNotIn("KeepMetric=true", code)
+
+        # 2020.1 ordering constraint: the selection must PRECEDE ZomOptimize
+        # (the identical line placed after it access-violates, rc 0xC00000FF,
+        # nothing saved), and the shared pack block comes last.
+        self.assertLess(code.index("ZomSelect("), code.index("ZomOptimize("))
+        self.assertLess(code.index("ZomOptimize("), code.index("__PACK_BLOCK__"))
+
+        # Nothing unresolved survives into the script Rizom actually runs --
+        # a stray token is a Lua syntax error -- and the preset now pulls its
+        # pack knobs through the include rather than hardcoding them.
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        script = bridge._construct_full_script(body)
+        self.assertEqual(re.findall(r"__[A-Z][A-Z0-9_]*__", script), [])
+        # The plain pack call carries the panel's Pre-scale + Layout Scale;
+        # the shared block's pack() sends them as Scaling.Mode and
+        # LayoutScalingMode.
+        self.assertIn(
+            "pack({}, {})".format(
+                _params.PARAMS["SCALING_MODE"].default,
+                _params.PARAMS["LAYOUT_SCALING_MODE"].default,
+            ),
+            script,
+        )
+        self.assertIn("Scaling={\n            Mode=scaling_mode,", script)
+        self.assertIn("LayoutScalingMode=layout_mode,", script)
+
+    def test_rizom_lua_is_byte_identical_across_the_dccs(self):
+        """The pack-side Lua is shared surface: mayatk and blendertk ship the
+        SAME bytes, so a preset fix cannot land on one DCC only."""
+        blendertk = (
+            _SCRIPT_DIR.parents[4]
+            / "blendertk"
+            / "blendertk"
+            / "uv_utils"
+            / "rizom_bridge"
+        )
+        if not blendertk.is_dir():  # standalone mayatk checkout
+            self.skipTest("blendertk not present in this workspace")
+        stale = [
+            rel
+            for rel in (
+                "scripts/optimize.lua",
+                "scripts/pack.lua",
+                "scripts/pack_into_existing.lua",
+                "templates/pack_block.lua",
+                "templates/keep_stacked_block.lua",
+            )
+            if not filecmp.cmp(_SCRIPT_DIR.parent / rel, blendertk / rel, shallow=False)
+        ]
+        self.assertEqual(stale, [], f"blendertk twin drifted: {stale}")
+
+    def test_every_preset_logs_a_concise_prose_summary(self):
+        """What the panel prints when you pick a preset, in BOTH DCC packages.
+
+        The panel logs a preset's leading comment block on every switch, and
+        uitk's extractor takes the first paragraph. That only stays readable
+        if the headers actually put a summary there -- an authoring
+        convention no unit test of the extractor can catch drifting. Lives
+        here rather than in uitk because uitk is upstream of the DCC packages
+        (same reason the twin check above lives here).
+
+        Three failure modes, all shipped at once (live report): a header
+        whose whole rationale block was one paragraph printed ~50 lines; one
+        that led with the ``scope=__SCOPE__`` machine directive printed half
+        a directive; and the second of those printed no description at all.
+        """
+        from uitk.bridge.tooltip import Tooltip
+
+        script_dirs = [_SCRIPT_DIR]
+        blendertk = (
+            _SCRIPT_DIR.parents[4]
+            / "blendertk"
+            / "blendertk"
+            / "uv_utils"
+            / "rizom_bridge"
+            / "scripts"
+        )
+        if blendertk.is_dir():
+            script_dirs.append(blendertk)
+
+        # Generous ceiling -- this catches a header dumping its rationale,
+        # not prose style.
+        max_lines = 8
+        for script_dir in script_dirs:
+            for script in sorted(script_dir.glob("*.lua")):
+                with self.subTest(script=str(script)):
+                    desc = Tooltip.template_description(script)
+                    self.assertTrue(desc, f"{script.name} logs no description.")
+                    lines = desc.splitlines()
+                    self.assertLessEqual(
+                        len(lines),
+                        max_lines,
+                        f"{script.name}'s summary is {len(lines)} lines -- move "
+                        "the rationale below an empty '--' separator.",
+                    )
+                    self.assertNotIn(
+                        "__",
+                        desc,
+                        f"{script.name}'s summary leaks a machine directive.",
+                    )
+                    # The description must be the FIRST thing in the file.
+                    # Dropping placeholder-bearing lines keeps a directive's
+                    # TOKEN out of the log but not its prose: send.lua opened
+                    # with the two-line scope echo and only the second line
+                    # carried the token, so the panel showed half a directive
+                    # where the description belonged. Only authoring order
+                    # fixes that, so pin it.
+                    first = next(
+                        ln.strip()
+                        for ln in script.read_text(encoding="utf-8").splitlines()
+                        if ln.strip()
+                    )
+                    self.assertEqual(
+                        first.lstrip("-").strip(),
+                        lines[0],
+                        f"{script.name} does not open with its description -- "
+                        "the panel logs whatever comes first.",
+                    )
+
+    def test_padding_field_name_gated_by_rizom_version(self):
+        """Island spacing renders as SpacingSize on <= 2021 (2020.1-safe) and
+        PaddingSize on >= 2022 (the probed rename); MarginSize always survives."""
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        old = _params.Parameters.strip_unsupported(pack, (2020, 1))
+        new = _params.Parameters.strip_unsupported(pack, (2022, 0))
+        self.assertIn("SpacingSize=", old)
+        self.assertNotIn("PaddingSize=", old)
+        self.assertIn("PaddingSize=", new)
+        self.assertNotIn("SpacingSize=", new)
+        self.assertIn("MarginSize=", old)
+        self.assertIn("MarginSize=", new)
+
+    def test_pack_resolution_survives_on_2020(self):
+        """ZomPack Resolution is NOT version-gated: it is probe-verified safe on
+        2020.1 and is what makes a single send converge.
+
+        Stripping it there was the cause of "pack has to be sent twice before it
+        fills the UV space". Measured in mayapy against the real bridge, two
+        sends per config: with Resolution stripped, 4 DAG instances pack to
+        0.5766 of the tile on send 1 and only reach 0.6655 on send 2; with it
+        sent, send 1 lands at 0.6777 -- better than the old two-send result --
+        and send 2 changes nothing. MaxMutations, Scaling.Mix and Rotate.Enable
+        stay gated: none changed the result on 2020.1 at any tested value.
+        """
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        old = _params.Parameters.strip_unsupported(pack, (2020, 1))
+        self.assertIn("Resolution=", old)
+        self.assertNotIn("PACK_RESOLUTION", _params.MIN_VERSIONS)
+        # The ones that stay gated must still be stripped on 2020.1.
+        self.assertNotIn("MaxMutations=", old)
+        self.assertNotIn("Enable=", old)
+        self.assertNotIn("Mix=", old)
+
+    def test_dead_pack_knobs_are_not_shown(self):
+        """A pack row the panel shows must change the result (live report
+        2026-09-23: "the pack params seem to have no effect").
+
+        Measured through the real Maya bridge on 2020.1: Recursion Depth 1/2/5
+        and Mix Scale on/off each saved a byte-identical layout (the bridge's
+        group hierarchy has nothing nested to recurse into; 2020.1 ignores
+        Scaling.Mix). Recursion Depth is pinned in the Lua, so no bundled
+        preset shows it; Mix Scale is version-gated like its dead siblings.
+        Rotate is the reverse: 2020.1 has no Rotate.Enable, but Mode 0 + Step 0
+        keeps every angle, so the row is live on every version now.
+        """
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+
+        def shown(version):
+            return _params.Parameters.referenced_keys(
+                _params.Parameters.strip_unsupported(pack, version)
+            )
+
+        old, new = shown((2020, 1)), shown((2022, 0))
+        self.assertNotIn("SCALING_MIX", old)
+        self.assertIn("SCALING_MIX", new)
+        self.assertIn("PACK_ROTATE_ENABLE", old)
+        self.assertIn("ROTATE_STEP", old)
+        for script in sorted(_SCRIPT_DIR.glob("*.lua")):
+            keys = _params.Parameters.referenced_keys(
+                script.read_text(encoding="utf-8")
+            )
+            self.assertNotIn("RECURSION_DEPTH", keys, script.name)
+
+    def test_rotate_off_sends_mode_and_step_zero(self):
+        """Rizom pre-orients every island BEFORE the Rotate.Step search, so
+        keeping the incoming angles takes both halves off: Mode=0 (no
+        pre-orient) and Step=0 (no search) -- probe-verified, 30-degree strips
+        stay at 30 degrees only with both. On keeps Rizom's default pre-orient
+        (the Mode field is omitted) so a plain pack is unchanged. Enable is
+        only sent where it exists (>= 2022)."""
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        old = RizomUVBridge(
+            rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe"
+        )
+        new = RizomUVBridge(
+            rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2022.2\rizomuv.exe"
+        )
+        for bridge in (old, new):
+            bridge._params = {"PACK_ROTATE_ENABLE": False, "ROTATE_STEP": 45}
+            code = _code_lines(bridge._construct_full_script(pack))
+            self.assertIn("local rotate = false", code)
+            self.assertIn("Step=rotate and 45 or 0,", code)
+            self.assertIn("Mode=(not rotate) and 0 or nil,", code)
+        self.assertNotIn("Enable=", _code_lines(old._construct_full_script(pack)))
+        self.assertIn("Enable=rotate,", _code_lines(new._construct_full_script(pack)))
+
+    def test_only_pack_opts_into_the_shell_subset(self):
+        """The subset token renders ``nil`` unless the host sets it, and only
+        pack.lua references it -- the unwrap presets re-cut every island, so a
+        subset pack at their end would strand the rest (see pack_block.lua)."""
+        self.assertEqual(_params.Parameters.render_context({})["PACK_SUBSET"], "nil")
+        opted = [
+            p.stem
+            for p in sorted(_SCRIPT_DIR.glob("*.lua"))
+            if "__PACK_SUBSET__" in p.read_text(encoding="utf-8")  # noqa: P103
+        ]
+        self.assertEqual(opted, ["pack"])
+        script = self.bridge._construct_full_script(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        self.assertIn("PACK_SUBSET = nil", script)
+        self.assertEqual(re.findall(r"__[A-Z][A-Z0-9_]*__", script), [])
+
+    def test_hard_reweld_unoverlap_gated_2022(self):
+        """ReWeld / BooleanUnoverlap access-violate 2020.1 (probed) -- stripped
+        below 2022, present at/above it."""
+        hard = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "unwrap_hard.lua").read_text(encoding="utf-8")
+        )
+        old = _params.Parameters.strip_unsupported(hard, (2020, 1))
+        new = _params.Parameters.strip_unsupported(hard, (2022, 0))
+        for field in ("ReWeld=", "BooleanUnoverlap="):
+            self.assertNotIn(field, old)
+            self.assertIn(field, new)
+
+    def test_new_params_registered(self):
+        """Phase 1/2 knobs exist with the expected kinds; the scaling enums
+        now offer the scale-preservation values."""
+        self.assertEqual(_params.PARAMS["FIT_CONES"].kind, "bool")
+        scale_labels = [c[0] for c in _params.PARAMS["SCALING_MODE"].choices]
+        self.assertTrue(any("Keep current scale" in x for x in scale_labels))
+        layout_vals = [c[1] for c in _params.PARAMS["LAYOUT_SCALING_MODE"].choices]
+        self.assertIn(0, layout_vals)  # "Keep positions" for scale preservation
+
+    def test_pack_gutter_is_derived_not_exposed(self):
+        """Island spacing / tile margin are computed from the shared UV-padding
+        rule instead of being user knobs -- so a Rizom round-trip and an in-Maya
+        u3dLayout repack land on the same gutter."""
+        for key in _params.DERIVED_KEYS:
+            self.assertNotIn(key, _params.PARAMS, f"{key} must not be a UI knob")
+            self.assertNotIn(key, _params.Parameters.defaults())
+        # The pack block still references both, so they must be substituted.
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        for key in _params.DERIVED_KEYS:
+            self.assertIn(f"__{key}__", pack)  # noqa: P103
+
+        pad = UvUtils.calculate_uv_padding(1024, normalize=True)
+        derived = _params.Parameters.derived_values({"PACK_RESOLUTION": 1024})
+        self.assertAlmostEqual(derived["PACK_SPACING"], pad)
+        self.assertAlmostEqual(derived["PACK_MARGIN"], pad / 2)
+        # Normalized padding is map-size-invariant: same UV-unit gutter at 4096.
+        self.assertAlmostEqual(
+            _params.Parameters.derived_values({"PACK_RESOLUTION": 4096})[
+                "PACK_SPACING"
+            ],
+            pad,
+        )
+        # A stale value from a saved preset must not win over the derived one.
+        ctx = _params.Parameters.render_context(
+            {"PACK_RESOLUTION": 1024, "PACK_SPACING": 0.5, "PACK_MARGIN": 0.5}
+        )
+        self.assertEqual(float(ctx["PACK_SPACING"]), pad)
+        self.assertEqual(float(ctx["PACK_MARGIN"]), pad / 2)
+
+    def test_pack_script_substitutes_derived_gutter(self):
+        """The constructed script carries real numbers, not leftover tokens."""
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        script = bridge._construct_full_script(pack)
+        pad = UvUtils.calculate_uv_padding(1024, normalize=True)
+        for key in _params.DERIVED_KEYS:
+            self.assertNotIn(f"__{key}__", script)  # noqa: P103
+        self.assertIn(f"MarginSize={pad / 2}", script)
+        # Which spelling survives is Rizom-version-dependent (SpacingSize <= 2021,
+        # PaddingSize >= 2022) -- either is correct here, the NUMBER is the point.
+        self.assertRegex(script, rf"(Spacing|Padding)Size={re.escape(str(pad))}")
+
+    def test_organic_exposes_fitcones_hybrid_gated(self):
+        """FIT_CONES is a live organic knob; unwrap_hybrid is preset-gated 2022."""
+        organic_keys = _params.Parameters.referenced_keys(
+            (_SCRIPT_DIR / "unwrap_organic.lua").read_text(encoding="utf-8")
+        )
+        self.assertIn("FIT_CONES", organic_keys)
+        hybrid = (_SCRIPT_DIR / "unwrap_hybrid.lua").read_text(encoding="utf-8")
+        self.assertEqual(_params.Parameters.preset_min_version(hybrid), (2022, 0))
+
+    def test_keep_stacked_is_a_pack_only_opt_in(self):
+        """PACK_KEEP_STACKED (off by default) shows for the pack-type presets
+        that carry the shared keep-stacked partial -- pack + optimize -- and
+        NOT for the unwrap presets, whose freshly flattened islands overlap by
+        accident (grouping those would freeze the whole layout)."""
+        spec = _params.PARAMS["PACK_KEEP_STACKED"]
+        self.assertEqual(spec.kind, "bool")
+        self.assertFalse(spec.default)
+
+        def keys(preset):
+            return _params.Parameters.referenced_keys(
+                (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            )
+
+        for preset in ("pack", "optimize"):
+            self.assertIn("PACK_KEEP_STACKED", keys(preset), preset)
+        for preset in ("unwrap_hard", "unwrap_organic", "unwrap_hybrid"):
+            self.assertNotIn("PACK_KEEP_STACKED", keys(preset), preset)
+        # The token lives ONLY in the include -- the presets reference the
+        # directive, so the block is defined once (same rule as pack_block).
+        for preset in ("pack", "optimize"):
+            body = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
+            self.assertIn("__KEEP_STACKED_BLOCK__", body)
+            self.assertNotIn("__PACK_KEEP_STACKED__", body)
+
+    def test_keep_stacked_renders_overlap_grouping_gated_by_the_knob(self):
+        """The rendered pack script carries the shrink -> DefineGroupsByOverlapness
+        Group-Stack -> unshrink step behind a Lua literal that follows the knob,
+        and the step precedes the pack itself (probe-verified mechanism on
+        2020.1; the shrink is what keeps mere overlaps from being welded)."""
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        for value, literal in ((True, "if true then"), (False, "if false then")):
+            bridge._params = {"PACK_KEEP_STACKED": value}
+            script = bridge._construct_full_script(pack)
+            self.assertNotIn("__KEEP_STACKED_BLOCK__", script)
+            self.assertNotIn("__PACK_KEEP_STACKED__", script)
+            block = script.index('Mode="DefineGroupsByOverlapness"')
+            self.assertLess(script.rindex(literal, 0, block), block)
+            self.assertIn("Properties={Pack={Stacked=true}}", script)
+            self.assertLess(block, script.index("ZomPack("))
+            # The per-island shrink that isolates real stacks (shared centre)
+            # from mere overlaps brackets the grouping: MultiCOG deform before
+            # AND after it, inverse factors.
+            shrink = script.index('CenterMode="MultiCOG"')
+            unshrink = script.index('CenterMode="MultiCOG"', block)
+            self.assertLess(shrink, block)
+            self.assertLess(block, unshrink)
+            self.assertIn("Transform={0.001, 0, 0, 0, 0.001, 0, 0, 0, 1}", script)
+            self.assertIn("Transform={1000, 0, 0, 0, 1000, 0, 0, 0, 1}", script)
+
+
+class _SubsetPayloadCase(MayaTkTestCase):
+    """Runs the bridge against a RizomUV stand-in that keeps the payload as-is,
+    and reads back which faces that payload tagged with the subset material --
+    the host half of every subset pack (``pack``'s shell selection,
+    ``pack_into_existing``'s select_objects)."""
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.tmp = Path(tempfile.mkdtemp(prefix="rizom_subset_test_"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(self.bridge._release_temp_payloads)
+
+    def _cube(self, name):
+        """A cube whose six faces are six one-face UV shells."""
+        cube = cmds.polyCube(name=name)[0]
+        cmds.polyAutoProjection(f"{cube}.f[*]", constructionHistory=False)
+        cmds.delete(cube, constructionHistory=True)
+        return cube
+
+    def _run(self, objects, preset="pack", **kwargs):
+        """Round-trip through a RizomUV stand-in that keeps the payload as-is,
+        returning what the run handed it: ``(script text, copy of the FBX)``."""
+        seen = {}
+
+        def passthrough(exe, args=None, timeout=None, **kwargs):
+            seen["script"] = Path(args[1]).read_text(encoding="utf-8")
+            shutil.copy(self.bridge.export_path, self.tmp / "payload.fbx")
+            stamp = os.path.getmtime(self.bridge.export_path) + 2
+            os.utime(self.bridge.export_path, (stamp, stamp))
+            return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+        with mock.patch.object(AppLauncher, "run", staticmethod(passthrough)):
+            self.bridge.process_with_rizomuv(objects, preset=preset, **kwargs)
+        return seen["script"], self.tmp / "payload.fbx"
+
+    def _tagged(self, fbx):
+        """``{exported mesh leaf: face ids | "all"}`` carrying the subset tag."""
+        new = cmds.file(
+            str(fbx), i=True, type="FBX", namespace="rzProbe", returnNewNodes=True
+        )
+        try:
+            mats = cmds.ls("rzProbe:rizomSubset*", materials=True)
+            if not mats:
+                return {}
+            sg = cmds.listConnections(mats[0], type="shadingEngine")[0]
+            out = {}
+            for member in cmds.ls(cmds.sets(sg, query=True) or [], flatten=True):
+                node, _, index = member.partition(".f[")
+                mesh = CoreUtils.short_name(node)
+                if mesh.endswith("Shape"):  # whole-mesh membership names the shape
+                    out[mesh[: -len("Shape")]] = "all"
+                else:
+                    out.setdefault(mesh, []).append(int(index.rstrip("]")))
+            return {k: v if v == "all" else sorted(v) for k, v in out.items()}
+        finally:
+            cmds.delete(cmds.ls(new or []))
+            if cmds.namespace(exists="rzProbe"):
+                cmds.namespace(removeNamespace="rzProbe", deleteNamespaceContent=True)
+
+    @staticmethod
+    def _by_mesh(tagged):
+        """*tagged* keyed by source mesh: the export's ``_<index>`` suffix
+        follows the resolver's order, not the selection's."""
+        return {name.split("_")[0]: faces for name, faces in tagged.items()}
+
+
+class TestRizomBridgePackIntoExisting(_SubsetPayloadCase):
+    """``pack_into_existing`` packs select_objects' shells into the free space
+    of the layout the other objects form, at that layout's texel density.
+
+    It used to select the new objects' island GROUPS by name -- a silent no-op
+    on 2020.1 with or without ``List=true`` (measured 2026-09-27: 0 of 19
+    islands moved, new ones left overlapping fixed ones) -- and shipped gated
+    to >= 2022.2 so no 2020.1 user could reach it. It now rides the shell-subset
+    path: select_objects' faces carry the subset tag. The Lua half (tagged
+    islands land in the free space at the layout's density, fixed islands come
+    back bit-identical) is probe-verified in ``rizom_headless_probe.py``
+    (``pack_into_existing*``); these pin the host half.
+    """
+
+    def test_select_objects_faces_carry_the_tag(self):
+        """Only select_objects' faces are tagged -- the rest of the layout is
+        what stays put -- and the preset receives the tag."""
+        existing = self._cube("pieExisting")
+        new = self._cube("pieNew")
+        script, fbx = self._run(
+            [existing, new], preset="pack_into_existing", select_objects=[new]
+        )
+        self.assertRegex(script, r'PACK_SUBSET = \{"rizomSubset[^"]*"\}')
+        self.assertIn("PACK_MATCH_DENSITY = true", script)
+        self.assertEqual(self._by_mesh(self._tagged(fbx)), {"pieNew": "all"})
+        self.assertEqual(cmds.ls("rizomSubset*"), [], "the subset tag leaked")
+
+    def test_selected_shells_pack_into_the_rest(self):
+        """A component selection names shells: only those move, and the
+        mesh's other shells join the fixed layout."""
+        mesh = self._cube("pieShells")
+        other = self._cube("pieOther")
+        _script, fbx = self._run(
+            [mesh, other],
+            preset="pack_into_existing",
+            select_objects=[f"{mesh}.f[1:2]"],
+        )
+        self.assertEqual(self._by_mesh(self._tagged(fbx)), {"pieShells": [1, 2]})
+
+    def test_nothing_left_to_pack_into_is_refused(self):
+        """Every shell selected = no existing layout: refused before RizomUV
+        runs, rather than packing the lot at an undefined density."""
+        cube = self._cube("pieAll")
+        with self.assertRaisesRegex(ValueError, "no existing layout"):
+            self._run([cube], preset="pack_into_existing", select_objects=[cube])
+
+    def test_select_objects_outside_the_export_are_refused(self):
+        """select_objects must name shells of the objects sent."""
+        sent = self._cube("pieSent")
+        other = self._cube("pieElsewhere")
+        with self.assertRaisesRegex(ValueError, "select_objects"):
+            self._run([sent], preset="pack_into_existing", select_objects=[other])
+
+    def test_runs_on_2020_and_hides_the_knobs_it_ignores(self):
+        """No version gate; the script resolves fully on 2020.1 with the tag
+        and the margin-aware fit; the shared block's knobs the preset
+        overrides are not offered in the panel."""
+        body = (_SCRIPT_DIR / "pack_into_existing.lua").read_text(encoding="utf-8")
+        self.assertIsNone(_params.Parameters.preset_min_version(body))
+        keys = _params.Parameters.referenced_keys(body)
+        for key in ("SCALING_MODE", "LAYOUT_SCALING_MODE", "UV_AREA", "PACK_TRANSLATE"):
+            self.assertNotIn(key, keys)
+        for key in (
+            "TARGET_UDIM",
+            "PACK_ROTATE_ENABLE",
+            "ROTATE_STEP",
+            "PACK_RESOLUTION",
+            "PACK_KEEP_STACKED",
+        ):
+            self.assertIn(key, keys)
+        bridge = RizomUVBridge(
+            rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe"
+        )
+        bridge._params = {"PACK_SELECT_NAMES": '{"tag"}'}
+        script = bridge._construct_full_script(body)
+        self.assertEqual(re.findall(r"__[A-Z][A-Z0-9_]*__", script), [])
+        self.assertIn('PACK_SUBSET = {"tag"}', script)
+        margin = _params.Parameters.derived_values({"PACK_RESOLUTION": 1024})[
+            "PACK_MARGIN"
+        ]
+        self.assertIn(f"local fit = 1.0 - {margin}", script)
+
+    def test_expand_by_materials_pulls_material_sharers(self):
+        """Expansion = every mesh sharing the selection's material(s)."""
+        a = cmds.polyCube(name="expandNew")[0]
+        b = cmds.polyCube(name="expandExisting")[0]
+        cmds.polyCube(name="expandUnrelated")  # present, must stay untouched
+
+        mat = cmds.shadingNode("lambert", asShader=True, name="expandMat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="expandMatSG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets([a, b], edit=True, forceElement=sg)
+
+        all_objs, selected = RizomUVBridge.expand_by_materials([a])
+        all_leaves = {n.rsplit("|", 1)[-1] for n in all_objs}
+        sel_leaves = {n.rsplit("|", 1)[-1] for n in selected}
+
+        self.assertEqual(sel_leaves, {"expandNew"})
+        self.assertIn("expandExisting", all_leaves)
+        self.assertIn("expandNew", all_leaves)
+        self.assertNotIn("expandUnrelated", all_leaves)
+
+    def test_skip_instances_exports_one_rep_per_shared_shape(self):
+        """True DAG instances (shared shape) collapse to one exported rep;
+        the non-instance sibling still exports."""
+        base = cmds.polyCube(name="instBase")[0]
+        # cmds.instance makes a second transform over the SAME shape.
+        inst = cmds.instance(base, name="instCopy")[0]
+        solo = cmds.polyCube(name="instSolo")[0]
+
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        bridge.export_path = str(Path(tempfile.gettempdir()) / "riz_inst_test.fbx")
+
+        # filter_duplicate_instances (the dedupe the bridge applies) keeps one
+        # of the shared-shape pair plus the solo cube.
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        kept = NodeUtils.filter_duplicate_instances([base, inst, solo])
+        kept_leaves = {str(k).rsplit("|", 1)[-1] for k in kept}
+        self.assertEqual(len(kept), 2, kept)
+        self.assertIn("instSolo", kept_leaves)
+        self.assertTrue({"instBase", "instCopy"} & kept_leaves)
+
+
+class TestRizomBridgeShellSubset(_SubsetPayloadCase):
+    """A component selection names UV SHELLS, and ``pack`` moves only those.
+
+    Live report 2026-09-23: shells deliberately left out of the selection
+    were packed anyway -- the export resolved every component to its whole
+    object. The Lua half (tagged islands move, the rest stay bit-identical and
+    are packed around) is probe-verified in ``rizom_headless_probe.py``
+    (``pack_subset*``) and was confirmed through the real bridge; these pin the
+    host half: which faces the payload tags, the token the preset receives,
+    and that the tag never outlives the run.
+    """
+
+    def test_only_the_selected_shells_are_tagged(self):
+        """Two of a cube's six shells plus a whole second mesh: the payload
+        tags exactly those faces, the preset receives the tag, and the tag
+        material is gone from the scene afterwards."""
+        partly = self._cube("subsetPartly")
+        whole = self._cube("subsetWhole")
+        script, fbx = self._run([f"{partly}.f[1:2]", whole])
+
+        tag = re.search(r'PACK_SUBSET = \{"([^"]+)"\}', script)
+        self.assertIsNotNone(tag, "the preset was not handed the subset tag")
+        tagged = self._tagged(fbx)
+        # Keyed by source mesh: the export's ``_<index>`` suffix follows the
+        # resolver's order, not the selection's.
+        by_mesh = {name.split("_")[0]: faces for name, faces in tagged.items()}
+        self.assertEqual(by_mesh.get("subsetPartly"), [1, 2], tagged)
+        self.assertEqual(by_mesh.get("subsetWhole"), "all", tagged)
+        self.assertEqual(cmds.ls("rizomSubset*"), [], "the subset tag leaked")
+
+    def test_a_component_names_its_whole_shell(self):
+        """One face of a cylinder's side shell picks the whole side shell --
+        a pack cannot move part of a shell -- and none of the caps."""
+        cyl = cmds.polyCylinder(name="subsetCyl", subdivisionsAxis=8)[0]
+        cmds.delete(cyl, constructionHistory=True)
+        subset, picked, total = RizomUVBridge._shell_subset([f"{cyl}.f[3]"])
+        faces = subset[RizomUVBridge._shape_uuid(cyl)]
+        side = set(UvUtils.get_uv_shell_sets([f"{cyl}.f[3]"], whole_shells=True)[0])
+        self.assertEqual(faces, {int(f.rsplit("[", 1)[1][:-1]) for f in side})
+        self.assertEqual((picked, total), (1, 3))
+
+    def test_uv_components_name_shells_too(self):
+        """A UV-editor selection (``.map[]``) names the shells it touches."""
+        cube = self._cube("subsetUvs")
+        uvs = cmds.polyListComponentConversion(f"{cube}.f[4]", toUV=True)
+        subset, picked, _ = RizomUVBridge._shell_subset(uvs)
+        self.assertEqual(subset[RizomUVBridge._shape_uuid(cube)], {4})
+        self.assertEqual(picked, 1)
+
+    def test_whole_objects_are_a_plain_pack(self):
+        """An object selection, an object that is ALSO selected by component,
+        and a component selection covering every shell all pack whole: no
+        subset, no tag."""
+        cube = self._cube("subsetPlain")
+        for objects in ([cube], [cube, f"{cube}.f[0]"], [f"{cube}.f[*]"]):
+            with self.subTest(objects=objects):
+                self.assertEqual(RizomUVBridge._shell_subset(objects)[0], {})
+        script, fbx = self._run([cube])
+        self.assertIn("PACK_SUBSET = nil", script)
+        self.assertEqual(self._tagged(fbx), {})
+
+    def test_instances_share_one_subset(self):
+        """DAG instances share one shape, so a subset picked through either
+        instance keys the same entry -- whichever the instance filter keeps."""
+        cube = self._cube("subsetInst")
+        twin = cmds.instance(cube, name="subsetInstTwin")[0]
+        subset, _, _ = RizomUVBridge._shell_subset([f"{twin}.f[0]"])
+        self.assertEqual(list(subset), [RizomUVBridge._shape_uuid(cube)])
+
+    def test_presets_that_cannot_take_a_subset_say_so(self):
+        """Every other preset processes the whole object and warns rather
+        than widening the selection silently -- that silence was the report."""
+        cube = self._cube("subsetOptimize")
+        with mock.patch.object(self.bridge.logger, "warning") as warned:
+            script, fbx = self._run([f"{cube}.f[0]"], preset="optimize")
+        messages = [c.args[0] for c in warned.call_args_list]
+        self.assertTrue(any("works on whole objects" in m for m in messages), messages)
+        # The shared block reads the global on every preset; only pack.lua
+        # assigns it.
+        self.assertNotIn("PACK_SUBSET = ", script)
+        self.assertEqual(self._tagged(fbx), {})
+
+
+class TestRizomBridgeUndo(MayaTkTestCase):
+    """A round-trip must leave the scene clean and revert in ONE Ctrl+Z.
+
+    Reproduces two shipped defects (user report: "the rizom bridge operation
+    was not fully undoable (in this case pack)"):
+
+    1. The FBX import dragged its shading network in and only the imported
+       *transforms* were deleted, so a ``*__RZTMPSG`` shading group leaked
+       into the scene on every run.
+    2. ``file -import`` is not undoable but the ``cmds.delete`` that removed
+       the imported nodes was, so undoing the run resurrected the imported
+       ``*__RZTMP`` meshes plus an empty ``RizomUVImport`` namespace and
+       nothing ever removed them again.
+
+    Fixing (2) naively -- transferring from the imported mesh while deleting
+    it undo-disabled -- turns the resurrection into a hard CRASH (access
+    violation in ``TdeleteCmd::undoIt``: undo rebuilds the transfer history
+    and reconnects it to freed memory). So this also stands guard over the
+    detach-then-duplicate ordering that makes the recorded chain
+    self-contained; a regression there takes Maya down rather than failing.
+
+    RizomUV itself is mocked: the fake rewrites the exported FBX with shifted
+    UVs, which is the only thing the real executable contributes.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.bridge.export_path = str(Path(tempfile.gettempdir()) / "riz_undo_test.fbx")
+        # Batch Maya starts with undo recording off -- the whole point of this
+        # test is the undo queue, so turn it on and put it back afterwards.
+        self._undo_was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True, infinity=True)
+
+    def tearDown(self):
+        # getattr-guarded: a setUp that dies part-way would otherwise raise
+        # AttributeError here and bury the real failure.
+        was = getattr(self, "_undo_was", None)
+        if was is not None:
+            cmds.undoInfo(stateWithoutFlush=was)
+        bridge = getattr(self, "bridge", None)
+        if bridge is not None:
+            Path(bridge.export_path).unlink(missing_ok=True)
+        super().tearDown()
+
+    # -- helpers --------------------------------------------------------
+
+    def _build_scene(self):
+        """A root mesh with its own material + a mesh under a group.
+
+        The material is what makes the FBX carry a shading network (defect 1),
+        the group is what gives the imported source a parent to inherit --
+        both are links the undo-proxy must not be born holding.
+        """
+        flat = cmds.polyCube(name="undoFlat")[0]
+        group = cmds.group(empty=True, name="undoGrp")
+        nested = cmds.polyCube(name="undoNested")[0]
+        nested = cmds.parent(nested, group)[0]
+        cmds.delete([flat, nested], constructionHistory=True)
+
+        mat = cmds.shadingNode("lambert", asShader=True, name="undoMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="undoSG")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets([flat, nested], edit=True, forceElement=sg)
+        return flat, nested
+
+    def _uvs(self, node):
+        return [
+            round(v, 4) for v in (cmds.polyEditUV(f"{node}.map[*]", query=True) or [])
+        ]
+
+    def _fake_rizom(self, exe, args=None, timeout=None, **kwargs):
+        """Stand-in for the executable: rewrite the FBX with shifted UVs.
+
+        Undo recording is toggled off by hand rather than through
+        ``CoreUtils.undo_disabled`` -- the harness must not depend on the
+        production primitive it exists to validate. It only creates and
+        destroys its own nodes and never touches a recorded one, which is the
+        rule the bridge itself has to follow.
+        """
+        prev = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+        try:
+            made = []
+            for dup_name, orig in self.bridge._export_name_map.items():
+                dup = cmds.duplicate(orig, returnRootsOnly=True)[0]
+                dup = cmds.rename(dup, dup_name)
+                cmds.polyEditUV(f"{dup}.map[*]", uValue=0.25, vValue=0.25)
+                made.append(dup)
+            cmds.select(made, replace=True)
+            # RizomUV writes this file, not a Maya export pipeline: the
+            # session's export preparers have no business here either.
+            with FbxUtils.scratch_export():
+                cmds.file(
+                    self.bridge.export_path,
+                    exportSelected=True,
+                    type="FBX export",
+                    force=True,
+                )
+            cmds.delete(made)
+        finally:
+            cmds.undoInfo(stateWithoutFlush=prev)
+        return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+    def _run_roundtrip(self, objects):
+        with mock.patch.object(AppLauncher, "run", staticmethod(self._fake_rizom)):
+            self.bridge.process_with_rizomuv(objects, uv_script="-- undo test")
+
+    def _passthrough_rizom(self, exe, args=None, timeout=None, **kwargs):
+        """Stand-in that leaves the bridge's OWN payload untouched.
+
+        ``_fake_rizom`` re-exports a clean copy of the originals, which hides
+        anything the bridge's export put into the FBX. The rig test needs the
+        payload exactly as ``_export_objects`` wrote it -- only its mtime is
+        bumped, which is how the bridge tells a save from a silent no-op.
+        """
+        import os
+
+        path = self.bridge.export_path
+        stamp = os.path.getmtime(path) + 2
+        os.utime(path, (stamp, stamp))
+        return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+    def _run_roundtrip_passthrough(self, objects):
+        with mock.patch.object(
+            AppLauncher, "run", staticmethod(self._passthrough_rizom)
+        ):
+            self.bridge.process_with_rizomuv(objects, uv_script="-- passthrough")
+
+    def test_roundtrip_ignores_an_armed_export_hook(self):
+        """With a session subsystem armed (a Shots or Audio panel open), the
+        round-trip's scratch FBX writes must not stamp the ``data_export``
+        carrier into the user's scene. Reproduces the 2026-09-04 GUI-pass
+        failure: the round-trip passes alone and fails once any producer is
+        registered. Added: 2026-09-05."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        flat, nested = self._build_scene()
+        FbxUtils.register_export_stager("probe", prepare=DataNodes.ensure_export)
+        self.addCleanup(FbxUtils.unregister_export_stager, "probe")
+        before = set(cmds.ls(long=True))
+        self._run_roundtrip_passthrough([flat, nested])
+        self.assertFalse(
+            cmds.objExists(DataNodes.EXPORT), "a scratch export stamped the carrier"
+        )
+        self.assertEqual(
+            set(cmds.ls(long=True)) - before,
+            set(),
+            "the round-trip left new nodes behind",
+        )
+
+    def test_a_cancelled_run_leaves_the_scene_as_it_was(self):
+        """Esc held during the hidden RizomUV run (the CancelScope the panel's
+        ``@Cancelable`` Process activates) ends the round trip before its
+        import: ``OperationCancelled`` reaches the caller, and the scene keeps
+        its nodes and its UVs. Added: 2026-10-19"""
+        import pythontk as ptk
+
+        flat, nested = self._build_scene()
+        uvs = (self._uvs(flat), self._uvs(nested))
+        before = set(cmds.ls(long=True))
+
+        def cancelled(exe, args=None, timeout=None, **kwargs):
+            ptk.CancelScope.check()  # the checkpoint a hidden run polls
+            raise AssertionError("the run never reached its checkpoint")
+
+        scope = ptk.CancelScope("RizomUV")
+        scope.cancel("escape")
+        with mock.patch.object(AppLauncher, "run", staticmethod(cancelled)):
+            with scope.activate(), self.assertRaises(ptk.OperationCancelled):
+                self.bridge.process_with_rizomuv(
+                    [flat, nested], uv_script="-- cancel test"
+                )
+        self.assertEqual(
+            set(cmds.ls(long=True)) - before,
+            set(),
+            "the cancelled run left new nodes behind",
+        )
+        self.assertEqual((self._uvs(flat), self._uvs(nested)), uvs)
+
+    # -- tests ----------------------------------------------------------
+
+    def _build_tube_rig(self):
+        """A spline tube rig with a posed reference: the asset class the
+        round-trip broke in production (PROPS wire looms)."""
+        from mayatk.rig_utils.tube_rig import TubeRig
+
+        tube = cmds.polyCylinder(
+            name="rzHose", r=1, h=12, sx=16, sy=20, ax=(0, 1, 0), ch=False
+        )[0]
+        rig = TubeRig(tube, rig_name="rzHose")
+        rig.build(strategy="spline", num_joints=8, num_controls=3)
+        ctrl = rig.bundle.controls[1]
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        reference = cmds.xform(f"{tube}.vtx[*]", query=True, ws=True, t=True)
+        cmds.setAttr(f"{ctrl}.translateX", 0)
+        return tube, ctrl, reference
+
+    def test_roundtrip_on_a_rigged_tube_keeps_the_rig_live(self):
+        """The FIRST control move after Pack must deform the tube correctly.
+
+        Regression (2026-08-26): the export duplicate was made with
+        ``inputConnections=True``, which wires the copy in as a second output
+        of the tube's skinCluster, so the payload carried the SKIN; importing
+        a skin-carrying FBX beside the rig it names leaves the rig's joints
+        with a stale evaluation (measured: export alone is fine, export +
+        import is not, undo state irrelevant). Symptom in the viewport: the
+        tube sits fine at rest, then does not follow the next control move
+        (off by 2.0 units here) until an undo or a scene-wide dirty.
+
+        Two things make this test discriminate: the payload is the bridge's
+        own (``_fake_rizom`` would re-export a clean copy and hide the skin),
+        and the posed mesh is read IMMEDIATELY after the run -- a rest-pose
+        read in between clears the stale state and hides the bug.
+        """
+        tube, ctrl, reference = self._build_tube_rig()
+
+        self._run_roundtrip_passthrough([tube])
+
+        cmds.setAttr(f"{ctrl}.translateX", 3)
+        posed = cmds.xform(f"{tube}.vtx[*]", query=True, ws=True, t=True)
+        cmds.setAttr(f"{ctrl}.translateX", 0)
+        self.assertEqual(len(posed), len(reference))
+        self.assertLess(
+            max(abs(a - b) for a, b in zip(posed, reference)),
+            1e-4,
+            "the rig's first pose after the round-trip is wrong (stale joints)",
+        )
+        self.assertSkinIntact(tube)
+        self.assertEqual([], cmds.ls("*__RZTMP*") or [])
+
+    def test_export_copy_is_not_wired_into_the_skin(self):
+        """At export time the tube's skinCluster must drive ONE geometry.
+
+        Observed at the moment of export (the copy is deleted right after,
+        so an after-the-fact count would pass vacuously).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.rig_utils.skinning import SkinUtils
+
+        tube, _ctrl, _reference = self._build_tube_rig()
+        skin = SkinUtils.get_skin_cluster(tube)
+        seen = []
+        real_load = FbxUtils.load_plugin
+
+        def spy():
+            seen.append(cmds.skinCluster(skin, query=True, geometry=True) or [])
+            return real_load()
+
+        with mock.patch.object(FbxUtils, "load_plugin", staticmethod(spy)):
+            self.bridge._export_objects([tube])
+
+        self.assertTrue(seen, "export never reached the FBX writer")
+        self.assertEqual(
+            len(seen[0]), 1, f"export copy became a deformer output: {seen[0]}"
+        )
+
+    def test_import_mode_is_pinned_to_add(self):
+        """A sticky 'merge' import mode must not survive into the run.
+
+        ``merge`` ("add and update animation") retargets an FBX's animation
+        onto same-named nodes already in the scene -- the rig's own joints,
+        when a skin-carrying payload names them. The import baseline is
+        ``FbxUtils.reset_import`` + mode ``add``, as every other importer here.
+        """
+        import maya.mel as mel
+
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        mel.eval(
+            "FBXImportMode -v merge"
+        )  # poison, as a prior interactive import would
+        flat, nested = self._build_scene()
+
+        self._run_roundtrip([flat, nested])
+
+        self.assertEqual(mel.eval("FBXImportMode -q"), "add")
+
+    def test_roundtrip_leaves_no_import_leftovers(self):
+        """The import's shading network must not survive the run."""
+        flat, nested = self._build_scene()
+        before = set(cmds.ls())
+
+        self._run_roundtrip([flat, nested])
+
+        self.assertEqual(
+            [], cmds.ls("*__RZTMP*") or [], "Temp import nodes leaked into the scene."
+        )
+        self.assertFalse(
+            cmds.namespace(exists=RizomUVBridge._IMPORT_NAMESPACE),
+            "The import namespace outlived the run.",
+        )
+        self.assertEqual(
+            set(), set(cmds.ls()) - before, "The round-trip left new nodes behind."
+        )
+
+    def test_undo_proxy_is_born_free_of_the_import(self):
+        """The transfer source must hold nothing that cleanup will delete.
+
+        The invariant behind the crash: a proxy still parented under an
+        imported group, or still assigned to the imported shading group,
+        makes undo reconnect to freed memory and takes Maya down. Asserting
+        it directly turns a regression in the detach-then-duplicate ordering
+        into a failed assertion instead of a dead test process.
+        """
+        group = cmds.group(empty=True, name="fauxImportGrp")
+        imported = cmds.polyCube(name="fauxImport")[0]
+        imported = cmds.parent(imported, group)[0]
+        mat = cmds.shadingNode("lambert", asShader=True, name="fauxImportMat")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="fauxImportSG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(imported, edit=True, forceElement=sg)
+        original = cmds.polyCube(name="fauxOriginal")[0]
+
+        pairs = self.bridge._detach_sources([(imported, original)])
+        ((proxy, paired_original),) = self.bridge._make_undo_proxies(pairs)
+
+        self.assertEqual(original, paired_original)
+        self.assertIsNone(
+            cmds.listRelatives(proxy, parent=True),
+            "The proxy inherited the import's parent, which cleanup deletes.",
+        )
+        proxy_sets = set()
+        for shape in cmds.listRelatives(proxy, shapes=True, fullPath=True) or []:
+            proxy_sets.update(
+                s
+                for s in (cmds.listSets(object=shape) or [])
+                if cmds.nodeType(s) == "shadingEngine"
+            )
+        self.assertEqual(
+            {"initialShadingGroup"},
+            proxy_sets,
+            "The proxy is still wired to the import's shading group.",
+        )
+
+    def test_roundtrip_delivers_uvs_through_a_locator_rig(self):
+        """End-to-end on the scene shape that broke "pack" in production.
+
+        Meshes hanging off locators, with a mesh leaf name repeated under two
+        parents. Every symptom in the user's log traces to the locators being
+        exported as if they were geometry -- duplicating one cloned its whole
+        mesh subtree, and the clones' leaf names then shadowed the entries the
+        loop had not reached yet ("More than one object matches name"), so
+        those meshes never went to RizomUV at all. What came back aimed
+        ``transferAttributes`` at a locatorShape ("not deformable"), and the
+        run finished announcing success with no UVs moved.
+        """
+        rig = cmds.group(empty=True, name="rigRoot")
+        loc_a = cmds.parent(cmds.spaceLocator(name="rigLocA")[0], rig)[0]
+        loc_b = cmds.parent(cmds.spaceLocator(name="rigLocB")[0], rig)[0]
+        # Same leaf under two parents -- unambiguous only until the run starts
+        # adding nodes of its own.
+        mesh_a = cmds.ls(
+            cmds.parent(cmds.polyCube(name="rigGeo")[0], loc_a)[0], long=True
+        )[0]
+        mesh_b = cmds.ls(
+            cmds.parent(cmds.polyCube(name="rigGeo")[0], loc_b)[0], long=True
+        )[0]
+        cmds.delete([mesh_a, mesh_b], constructionHistory=True)
+
+        before = {n: self._uvs(n) for n in (mesh_a, mesh_b)}
+
+        # The locators alone -- the way an artist selects a rigged asset.
+        self._run_roundtrip([loc_a, loc_b])
+
+        self.assertEqual(
+            sorted(self.bridge._export_name_map.values()),
+            sorted([mesh_a, mesh_b]),
+            "Both meshes under the locators must reach RizomUV.",
+        )
+        for mesh in (mesh_a, mesh_b):
+            self.assertNotEqual(
+                before[mesh],
+                self._uvs(mesh),
+                f"{mesh} came back with its UVs untouched.",
+            )
+        self.assertEqual(
+            [], cmds.ls("*__RZTMP*") or [], "Temp import nodes leaked into the scene."
+        )
+
+    def test_summary_reports_what_landed_not_what_was_asked_for(self):
+        """A run whose transfers all fail must not sign off as a success.
+
+        The live log closed with "RizomUV 'pack' applied to 4 object(s)" under
+        four ``[ERROR] Pairwise UV transfer failed`` lines -- the count was the
+        REQUESTED one. Every step in the round-trip degrades rather than
+        raises, so the only honest number is the one the transfer returns.
+        """
+        flat, nested = self._build_scene()
+        with (
+            mock.patch.object(RizomUVBridge, "_transfer_uvs", return_value=0),
+            self.assertLogs(self.bridge.logger, level="WARNING") as caught,
+        ):
+            self._run_roundtrip([flat, nested])
+
+        self.assertTrue(
+            any("0 of 2 object(s)" in line for line in caught.output),
+            f"The summary hid the failed transfers: {caught.output}",
+        )
+
+    def test_roundtrip_reverts_in_one_undo(self):
+        """One Ctrl+Z restores the UVs and adds nothing to the scene."""
+        flat, nested = self._build_scene()
+        before_nodes = set(cmds.ls())
+        before_uvs = {n: self._uvs(n) for n in (flat, nested)}
+
+        self._run_roundtrip([flat, nested])
+
+        after_uvs = {n: self._uvs(n) for n in (flat, nested)}
+        self.assertNotEqual(
+            before_uvs, after_uvs, "The mocked round-trip never changed any UVs."
+        )
+
+        cmds.undo()
+
+        self.assertEqual(
+            before_uvs,
+            {n: self._uvs(n) for n in (flat, nested)},
+            "One undo did not restore the original UVs.",
+        )
+        self.assertEqual(
+            set(),
+            set(cmds.ls()) - before_nodes,
+            "Undo resurrected the round-trip's temp nodes.",
+        )
+        self.assertFalse(
+            cmds.namespace(exists=RizomUVBridge._IMPORT_NAMESPACE),
+            "Undo resurrected the import namespace.",
+        )
+
+
+class TestRizomBridgeUvIds(MayaTkTestCase):
+    """The round-trip leaves a mesh's UV ids alone wherever its UV layout survives.
+
+    The UVs came back through ``transferAttributes``, which renumbers the
+    target's ``map[]`` ids to the FBX import's order -- on every mesh sent,
+    including the fixed side of a subset pack that RizomUV never moved
+    (measured 2026-09-27: a fixed cube's per-id table shifted by 0.4 while
+    every face kept its UVs), so anything keyed on UV ids broke. A mesh that
+    comes back unchanged per face-vertex is now not written at all; a mesh
+    whose UVs only MOVED gets new values on its own ids; a new UV layout
+    (seams cut or welded) is still transferred.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.addCleanup(self.bridge._release_temp_payloads)
+        self._undo_was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True, infinity=True)
+
+    def tearDown(self):
+        was = getattr(self, "_undo_was", None)
+        if was is not None:
+            cmds.undoInfo(stateWithoutFlush=was)
+        super().tearDown()
+
+    @staticmethod
+    def _cube(name, **kwargs):
+        """A cube whose six faces are six one-face UV shells, laid out small."""
+        cube = cmds.polyCube(name=name, **kwargs)[0]
+        cmds.polyAutoProjection(f"{cube}.f[*]", constructionHistory=False)
+        cmds.polyEditUV(f"{cube}.map[*]", pivotU=0, pivotV=0, scaleU=0.5, scaleV=0.5)
+        cmds.delete(cube, constructionHistory=True)
+        return cube
+
+    @staticmethod
+    def _by_id(mesh):
+        """The UV table by id: ``[(u, v), ...]``."""
+        flat = cmds.polyEditUV(f"{mesh}.map[*]", query=True) or []
+        return list(zip(flat[0::2], flat[1::2]))
+
+    @staticmethod
+    def _by_face_vertex(mesh):
+        """Each face-vertex's UV, in face order."""
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(mesh)
+        fn = om.MFnMesh(sel.getDagPath(0))
+        us, vs = fn.getUVs()
+        _counts, ids = fn.getAssignedUVs()
+        return [(us[i], vs[i]) for i in ids]
+
+    def _run(self, objects, edit=None, **kwargs):
+        """Round-trip through a RizomUV stand-in that rewrites the payload with
+        *edit* applied to each export copy (``None``: payload kept as-is)."""
+
+        def fake(exe, args=None, timeout=None, **kwargs):
+            path = self.bridge.export_path
+            if edit is not None:
+                prev = cmds.undoInfo(query=True, state=True)
+                cmds.undoInfo(stateWithoutFlush=False)
+                try:
+                    new = cmds.file(
+                        path,
+                        i=True,
+                        type="FBX",
+                        namespace="rzFake",
+                        returnNewNodes=True,
+                    )
+                    meshes = cmds.listRelatives(
+                        cmds.ls(new, type="mesh"), parent=True, fullPath=True
+                    )
+                    for mesh in meshes:
+                        edit(mesh)
+                    roots = cmds.ls(cmds.ls(new, assemblies=True, long=True) or meshes)
+                    cmds.select(roots, replace=True)
+                    with FbxUtils.scratch_export():
+                        cmds.file(
+                            path, exportSelected=True, type="FBX export", force=True
+                        )
+                    cmds.delete(cmds.ls(new))
+                    if cmds.namespace(exists="rzFake"):
+                        cmds.namespace(
+                            removeNamespace="rzFake", deleteNamespaceContent=True
+                        )
+                finally:
+                    cmds.undoInfo(stateWithoutFlush=prev)
+            stamp = os.path.getmtime(path) + 2
+            os.utime(path, (stamp, stamp))
+            return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+        with mock.patch.object(AppLauncher, "run", staticmethod(fake)):
+            self.bridge.process_with_rizomuv(objects, **kwargs)
+
+    @staticmethod
+    def _renumber(mesh):
+        """Reverse *mesh*'s UV ids, every face keeping its UVs -- what RizomUV's FBX
+        writer does to the ids (measured: a fixed cube's table came back reordered)."""
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(mesh)
+        fn = om.MFnMesh(sel.getDagPath(0))
+        us, vs = fn.getUVs()
+        counts, ids = fn.getAssignedUVs()
+        last = len(us) - 1
+        fn.clearUVs()
+        fn.setUVs(list(reversed(us)), list(reversed(vs)))
+        fn.assignUVs(counts, [last - i for i in ids])
+        fn.updateSurface()
+
+    @classmethod
+    def _shift(cls, mesh):
+        cmds.polyEditUV(f"{mesh}.map[*]", uValue=0.25, vValue=0.125)
+        cls._renumber(mesh)
+
+    def test_a_mesh_rizom_left_alone_keeps_its_uv_ids(self):
+        """The fixed side of a subset pack: no write, same ids, no warning."""
+        fixed = self._cube("idsFixed")
+        moved = self._cube("idsMoved", width=0.5, height=0.5, depth=0.5)
+        before = self._by_id(fixed)
+        with mock.patch.object(self.bridge.logger, "warning") as warned:
+            self._run(
+                [fixed, moved],
+                edit=self._renumber,
+                preset="pack_into_existing",
+                select_objects=[moved],
+            )
+        self.assertEqual(self._by_id(fixed), before, "the fixed mesh's UV ids moved")
+        messages = [c.args[0] for c in warned.call_args_list]
+        self.assertFalse(
+            any("UNCHANGED" in m and "idsFixed" in m for m in messages), messages
+        )
+
+    def test_a_pack_that_changed_nothing_is_still_reported(self):
+        """A mesh the preset should have moved, back untouched: named."""
+        cube = self._cube("idsIgnored")
+        with mock.patch.object(self.bridge.logger, "warning") as warned:
+            self._run([cube], preset="pack")
+        messages = [c.args[0] for c in warned.call_args_list]
+        self.assertTrue(
+            any("UNCHANGED" in m and "idsIgnored" in m for m in messages), messages
+        )
+
+    def test_moved_uvs_land_on_their_own_ids(self):
+        """A pack moves UVs without re-cutting them: each id gets its new value."""
+        cube = self._cube("idsShifted")
+        before = self._by_id(cube)
+        self._run([cube], edit=self._shift, preset="pack")
+        after = self._by_id(cube)
+        self.assertEqual(len(after), len(before))
+        drift = max(
+            max(abs(u1 - u0 - 0.25), abs(v1 - v0 - 0.125))
+            for (u0, v0), (u1, v1) in zip(before, after)
+        )
+        self.assertLess(drift, 1e-5, "UV ids were renumbered")
+        cmds.undo()
+        self.assertEqual(self._by_id(cube), before, "one undo did not restore them")
+
+    def test_moved_uvs_keep_their_ids_through_a_rig(self):
+        """The same on a skinned mesh: the write goes to its input shape."""
+        from mayatk.rig_utils.tube_rig import TubeRig
+
+        tube = cmds.polyCylinder(
+            name="idsHose", r=1, h=12, sx=12, sy=10, ax=(0, 1, 0), ch=False
+        )[0]
+        TubeRig(tube, rig_name="idsHose").build(
+            strategy="spline", num_joints=6, num_controls=3
+        )
+        before = self._by_id(tube)
+        self._run([tube], edit=self._shift, preset="pack")
+        after = self._by_id(tube)
+        self.assertEqual(len(after), len(before))
+        drift = max(
+            max(abs(u1 - u0 - 0.25), abs(v1 - v0 - 0.125))
+            for (u0, v0), (u1, v1) in zip(before, after)
+        )
+        self.assertLess(drift, 1e-5, "UV ids were renumbered on the rigged mesh")
+        self.assertSkinIntact(tube)
+
+    def test_a_new_uv_layout_is_still_transferred(self):
+        """Seams RizomUV cut are real: the target takes the new layout."""
+        cube = self._cube("idsRecut")
+        count = len(self._by_id(cube))
+        expected = {}
+
+        def recut(mesh):
+            cmds.polyMapSewMove(f"{mesh}.e[0:3]")  # weld four shells into one
+            cmds.delete(mesh, constructionHistory=True)
+            expected["uvs"] = self._by_face_vertex(mesh)
+
+        self._run([cube], edit=recut, preset="pack")
+        got = self._by_face_vertex(cube)
+        self.assertLess(len(self._by_id(cube)), count, "the weld did not arrive")
+        self.assertEqual(len(got), len(expected["uvs"]))
+        drift = max(
+            max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+            for a, b in zip(got, expected["uvs"])
+        )
+        self.assertLess(drift, 1e-5)
+
+
+class TestRizomBridgeNonAsciiPaths(MayaTkTestCase):
+    """RizomUV opens its payloads from a folder whose name is not plain ASCII.
+
+    RizomUV 2020.1 reads the ``-cfi`` argument in the ANSI code page and the UTF-8
+    bytes of the paths INSIDE its Lua as ANSI (serial runs, 2026-09-27): a ``-cfi``
+    script under a Cyrillic folder hangs to the timeout, and ``ZomLoad`` /
+    ``ZomSave`` under an accented folder cp1252 holds ("é") time out as well; the
+    8.3 forms of the same folders pass. A user whose profile (so %TEMP%) has such
+    a name had every round-trip hang. The bridge hands RizomUV
+    ``AppLauncher.ansi_safe_path`` spellings: plain ASCII inside the Lua, the
+    code page's reach on the command line.
+    """
+
+    FOLDERS = ("Zo\u00eb", "\u2605")  # inside cp1252 / outside it
+
+    def setUp(self):
+        super().setUp()
+        root = Path(__file__).parent / "temp_tests" / f"rizom_paths_{os.getpid()}"
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        self.dirs = {}
+        for name in self.FOLDERS:
+            folder = root / f"{name} payloads"
+            folder.mkdir(parents=True)
+            self.dirs[name] = folder
+        # A volume with 8.3 names off answers the LONG name, not None.
+        short = AppLauncher._short_name(str(self.dirs[self.FOLDERS[1]]))
+        if not (short or "").isascii():
+            self.skipTest("no 8.3 short names on this volume")
+
+    def _bridge(self, name, **kwargs):
+        """A bridge whose round-trip payloads live in the *name* folder."""
+        import pythontk as ptk
+
+        bridge = RizomUVBridge(**kwargs)
+        bridge._temp = ptk.TempArtifacts(
+            "rizom_roundtrip", policy="scoped", dir=str(self.dirs[name])
+        )
+        self.addCleanup(bridge._release_temp_payloads)
+        return bridge
+
+    def _assert_ascii_in(self, path, folder):
+        self.assertTrue(path.isascii(), ascii(path))
+        self.assertTrue(os.path.samefile(os.path.dirname(path), folder), path)
+
+    def test_the_lua_names_its_payload_in_ascii(self):
+        """ZomLoad / ZomSave name the FBX by its folder's 8.3 form."""
+        for name in self.FOLDERS:
+            with self.subTest(folder=ascii(name)):
+                bridge = self._bridge(name, rizom_path="not-used.exe")
+                script = bridge._construct_full_script("-- probe")
+                paths = re.findall(r'Path="([^"]+)"', script)
+                self.assertEqual(len(paths), 2, paths)  # ZomLoad + ZomSave
+                for path in paths:
+                    self._assert_ascii_in(path, self.dirs[name])
+
+    def test_the_command_line_names_the_script_in_the_code_page(self):
+        """``-cfi`` gets a spelling the ANSI code page holds."""
+        seen = {}
+
+        def capture(exe, args=None, timeout=None, **kwargs):
+            seen["args"] = args
+            raise RuntimeError("stop before RizomUV")
+
+        bridge = self._bridge(self.FOLDERS[1], rizom_path="not-used.exe")
+        bridge.script_path = "-- probe"
+        with mock.patch.object(AppLauncher, "run", staticmethod(capture)):
+            with self.assertRaisesRegex(RuntimeError, "stop before RizomUV"):
+                bridge._execute_uv_script()
+        arg = seen["args"][1]
+        arg.encode(AppLauncher._ansi_codec())  # raises when the code page can't
+        self.assertTrue(os.path.samefile(arg, bridge.script_path), arg)
+
+    def test_a_send_names_its_fbx_and_textures_in_ascii(self):
+        """The send script's ZomLoad and every ZomLoadTexture."""
+        folder = self.dirs[self.FOLDERS[0]]
+        texture = folder / "albedo.png"
+        texture.write_bytes(b"png")
+        cube = cmds.polyCube(name="sendNonAscii")[0]
+        mat = cmds.shadingNode("lambert", asShader=True, name="sendNonAsciiMat")
+        node = cmds.shadingNode("file", asTexture=True, name="sendNonAsciiTex")
+        cmds.setAttr(f"{node}.fileTextureName", str(texture), type="string")
+        cmds.connectAttr(f"{node}.outColor", f"{mat}.color", force=True)
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        bridge._params = {"LOAD_TEXTURES": True}
+        script = bridge._construct_send_script(
+            [cube], str(self.dirs[self.FOLDERS[1]] / "send.fbx")
+        )
+        paths = re.findall(r'Path="([^"]+)"', script)
+        self.assertEqual(len(paths), 2, paths)  # ZomLoad + one ZomLoadTexture
+        self._assert_ascii_in(paths[0], self.dirs[self.FOLDERS[1]])
+        self._assert_ascii_in(paths[1], folder)
+
+    @unittest.skipUnless(RizomUVBridge.APP.path, "RizomUV is not installed")
+    def test_a_real_round_trip_runs_from_either_folder(self):
+        """End to end through RizomUV itself: the pack lands, no hang."""
+        for i, name in enumerate(self.FOLDERS):
+            with self.subTest(folder=ascii(name)):
+                cube = cmds.polyCube(name=f"nonAsciiRoundTrip{i}")[0]
+                cmds.polyAutoProjection(f"{cube}.f[*]", constructionHistory=False)
+                cmds.polyEditUV(f"{cube}.map[*]", uValue=1.5, vValue=0.25)
+                cmds.delete(cube, constructionHistory=True)
+                self._bridge(name, timeout=120).process_with_rizomuv(
+                    [cube], preset="pack"
+                )
+                us = cmds.polyEditUV(f"{cube}.map[*]", query=True)[0::2]
+                self.assertLessEqual(max(us), 1.0, "the pack never landed")
+
+
+class TestRizomBridgePanelSurface(MayaTkTestCase):
+    """What tentacle's RizomUV Bridge reads off the engine: the preset folder, the
+    registry, the presets and rows the installed version runs, and what Process
+    runs for a preset. Nothing launches RizomUV (those calls are stood in for)."""
+
+    V2020 = r"C:/Program Files/Rizom Lab/RizomUV VS RS 2020.1/Rizomuv_VS.exe"
+    V2022 = r"C:/Program Files/Rizom Lab/RizomUV 2022.2/Rizomuv_VS.exe"
+
+    def test_the_folder_and_registry_are_the_engines(self):
+        self.assertEqual(RizomUVBridge.SCRIPT_DIR, _SCRIPT_DIR)
+        self.assertIs(RizomUVBridge.params_registry(), _params.Parameters)
+
+    def test_a_preset_gated_above_the_installed_version_is_not_listed(self):
+        old = dict(RizomUVBridge(rizom_path=self.V2020).list_template_modes())
+        new = dict(RizomUVBridge(rizom_path=self.V2022).list_template_modes())
+        self.assertNotIn("unwrap_hybrid", old)
+        self.assertIn("unwrap_hybrid", new)
+        self.assertEqual(set(new), {p.stem for p in _SCRIPT_DIR.glob("*.lua")})
+        self.assertTrue(all(mode == "" for mode in new.values()))
+
+    def test_the_rows_are_what_the_installed_version_keeps(self):
+        """Includes expand before the strip: a gated token living only in an
+        include must not re-surface as a row the send would drop."""
+        P = _params.Parameters
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        for path in (self.V2020, self.V2022):
+            bridge = RizomUVBridge(rizom_path=path)
+            expected = P.referenced_keys(
+                P.strip_unsupported(P.expand_includes(pack), bridge.rizom_version)
+            )
+            self.assertEqual(bridge.referenced_keys(pack), expected, path)
+        old = RizomUVBridge(rizom_path=self.V2020).referenced_keys(pack)
+        self.assertNotIn("SCALING_MIX", old)  # no effect on 2020.1
+        self.assertIn("PACK_ROTATE_ENABLE", old)  # works there via Mode/Step
+
+    def test_process_round_trips_a_preset(self):
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "process_with_rizomuv") as run:
+            bridge.run_preset(["|a"], "pack", params={"ITERATIONS": 5})
+        run.assert_called_once_with(["|a"], preset="pack", params={"ITERATIONS": 5})
+
+    def test_send_opens_the_selection_one_way(self):
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "send_to_rizomuv") as send:
+            with mock.patch.object(bridge, "process_with_rizomuv") as run:
+                bridge.run_preset(["|a"], bridge.SEND_PRESET, params={})
+        send.assert_called_once_with(["|a"], params={})
+        run.assert_not_called()
+
+    def test_the_header_counts_objects_not_component_entries(self):
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        selection = ["|cube.map[0:3]", "|cube.map[8:11]", "|sphere"]
+        with mock.patch.object(bridge, "process_with_rizomuv"):
+            with mock.patch.object(bridge.logger, "info") as said:
+                bridge.run_preset(selection, "pack")
+        lines = [str(call.args[0]) for call in said.call_args_list]
+        self.assertIn("--- pack on 2 object(s) ---", lines)
+
+    def test_pack_into_existing_needs_a_layout_to_pack_into(self):
+        """A mesh whose material no other mesh shares: warned, nothing runs."""
+        cube = cmds.polyCube(name="lonePackCube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="lonePackMat")
+        group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=group)
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "process_with_rizomuv") as run:
+            with mock.patch.object(bridge.logger, "warning") as warned:
+                bridge.pack_into_existing([cube])
+        run.assert_not_called()
+        self.assertIn("no existing layout", str(warned.call_args))
+
+    def test_pack_into_existing_packs_into_the_shared_materials_layout(self):
+        """The processed set is every mesh on the material; only the selection
+        moves (``select_objects``)."""
+        layout = cmds.polyCube(name="layoutPackCube")[0]
+        new = cmds.polyCube(name="newPackCube")[0]
+        cmds.polyCube(name="unrelatedPackCube")  # on another material: stays out
+        shader = cmds.shadingNode("lambert", asShader=True, name="layoutPackMat")
+        group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader", force=True)
+        cmds.sets([layout, new], edit=True, forceElement=group)
+        bridge = RizomUVBridge(rizom_path="not-used.exe")
+        with mock.patch.object(bridge, "process_with_rizomuv") as run:
+            bridge.pack_into_existing([new], params={"PACK_SPACING": 2})
+        (processed,), kwargs = run.call_args
+        self.assertEqual(
+            sorted(cmds.ls(processed, long=True)),
+            sorted(cmds.ls([layout, new], long=True)),
+        )
+        self.assertEqual(kwargs["preset"], "pack_into_existing")
+        self.assertEqual(kwargs["select_objects"], [new])
+        self.assertEqual(kwargs["params"], {"PACK_SPACING": 2})
+
+
+class TestRizomBridgeSendFlow(MayaTkTestCase):
+    """One-way ``send_to_rizomuv`` flow: export + Lua render + detached launch.
+
+    Stubs out the actual RizomUV launch so the test exercises the bridge
+    end-to-end (selection, export, script render, texture collection,
+    launch invocation) without needing the external executable.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # The bridge resolves rizom_path via AppLauncher; pass an explicit
+        # bogus value so the .rizom_path property short-circuits.
+        self.bridge = RizomUVBridge(rizom_path="rizom-stub.exe")
+
+        # Force a temp export dir each test so the unique-per-send paths
+        # land in a known sandbox and we can assert on them.
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="rizom_send_test_"))
+        # The export_path property is used to derive the per-send FBX dir;
+        # setting a stem here biases the per-send filename for visibility
+        # in failure messages.
+        self.bridge.export_path = str(self.tmp_dir / "scene.fbx")
+
+        # Capture every AppLauncher.launch call so the test can assert on
+        # the args without spawning a real process.
+        self._launch_calls = []
+
+        def _fake_launch(app_identifier, args=None, cwd=None, detached=True, env=None):
+            self._launch_calls.append(
+                {
+                    "app": app_identifier,
+                    "args": list(args or []),
+                    "detached": detached,
+                }
+            )
+
+            class _Proc:
+                pid = 0
+
+            return _Proc()
+
+        self._real_launch = AppLauncher.launch
+        AppLauncher.launch = staticmethod(_fake_launch)
+
+    def tearDown(self):
+        AppLauncher.launch = self._real_launch
+        # Best-effort: drop the test sandbox; ignore stragglers because
+        # Rizom's mtime watch can hold a handle briefly on real hardware.
+        import shutil
+
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        super().tearDown()
+
+    def test_send_writes_unique_fbx_and_script_per_call(self):
+        """Two consecutive sends must land on distinct FBX + Lua paths.
+
+        Regression: Rizom 2020.1's ``-cfi`` flag watches the script file's
+        mtime and re-executes whenever it changes. If both sends wrote to
+        the same Lua path, the first send's still-open Rizom session
+        would reload the second send's mesh, clobbering any unsaved UV
+        work. Each send must land on its own files.
+        """
+        cube = cmds.polyCube(name="rizom_send_unique_cube")[0]
+
+        self.bridge.send_to_rizomuv([cube])
+        first = self._launch_calls[-1]["args"]
+        # Args shape: ['-cfi', '<script-path>']
+        self.assertEqual(first[0], "-cfi", f"unexpected launch args: {first}")
+        first_script = first[1]
+        # Discover the FBX path the first send wrote (the only *.fbx
+        # under the sandbox so far).
+        first_fbxs = list(self.tmp_dir.glob("*.fbx"))
+        self.assertEqual(
+            len(first_fbxs), 1, f"expected 1 fbx after first send, got {first_fbxs}"
+        )
+
+        self.bridge.send_to_rizomuv([cube])
+        second = self._launch_calls[-1]["args"]
+        second_script = second[1]
+        second_fbxs = sorted(self.tmp_dir.glob("*.fbx"))
+
+        self.assertNotEqual(
+            first_script,
+            second_script,
+            "Lua script path must differ between sends so prior Rizom "
+            "sessions aren't re-triggered via the -cfi mtime watch.",
+        )
+        self.assertEqual(
+            len(second_fbxs),
+            2,
+            f"expected 2 fbx files after 2 sends (one per send), got {second_fbxs}",
+        )
+
+    def test_send_script_inlines_load_options_and_texture(self):
+        """Param overrides + textures from the shading network reach the Lua."""
+        cube = cmds.polyCube(name="rizom_send_inline_cube")[0]
+
+        # Build a minimal shading network with a file texture so
+        # MatUtils.get_texture_paths finds something.
+        shader = cmds.shadingNode("lambert", asShader=True, name="rizom_send_lam_t")
+        sg = cmds.sets(
+            renderable=True,
+            noSurfaceShader=True,
+            empty=True,
+            name="rizom_send_lamSG_t",
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        fn = cmds.shadingNode("file", asTexture=True, name="rizom_send_file_t")
+
+        # The texture file must EXIST on disk -- _collect_texture_loads
+        # filters out missing paths (Fix #5 in this commit batch).
+        tex_path = self.tmp_dir / "diffuse.png"
+        # Minimum-valid 1x1 PNG so we don't need PIL in the test env.
+        import base64
+
+        tex_path.write_bytes(
+            base64.b64decode(
+                b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADklEQVR42mP8z8BQDwAEhQGAh"
+                b"KmMIQAAAABJRU5ErkJggg=="
+            )
+        )
+        cmds.setAttr(f"{fn}.fileTextureName", str(tex_path), type="string")
+        cmds.connectAttr(f"{fn}.outColor", f"{shader}.color", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+
+        self.bridge.send_to_rizomuv(
+            [cube],
+            params={
+                "LOAD_UVS": False,
+                "LOAD_UVW_PROPS": True,
+                "IMPORT_GROUPS": False,
+                "LOAD_TEXTURES": True,
+            },
+        )
+
+        script_path = self._launch_calls[-1]["args"][1]
+        body = Path(script_path).read_text(encoding="utf-8")
+
+        self.assertIn("XYZUVW=false", body, "LOAD_UVS=False did not propagate.")
+        self.assertIn("UVWProps=true", body, "LOAD_UVW_PROPS=True did not propagate.")
+        self.assertIn(
+            "ImportGroups=false", body, "IMPORT_GROUPS=False did not propagate."
+        )
+        self.assertIn(
+            "ZomLoadTexture",
+            body,
+            "Texture from shading network did not reach the Lua script.",
+        )
+        # No ZomSave / ZomQuit *calls*: send is one-way, Rizom must stay
+        # open. The wrapper's leading comment block mentions these names
+        # as documentation -- strip comments first so the substring check
+        # only looks at executable Lua.
+        executable = "\n".join(
+            line for line in body.splitlines() if not line.lstrip().startswith("--")
+        )
+        self.assertNotIn(
+            "ZomSave(", executable, f"send body must not save: {executable}"
+        )
+        self.assertNotIn(
+            "ZomQuit(", executable, f"send body must not quit: {executable}"
+        )
+
+    def test_send_skips_missing_texture_files(self):
+        """A ``fileTextureName`` pointing at a non-existent file is dropped.
+
+        Regression for the silent-pcall failure: if we emit
+        ``ZomLoadTexture`` for a missing file, Rizom's pcall catches it
+        and the user sees no texture on the model with no explanation.
+        Filter at the bridge level instead.
+        """
+        cube = cmds.polyCube(name="rizom_send_skip_cube")[0]
+        shader = cmds.shadingNode("lambert", asShader=True, name="rizom_send_lam_s")
+        sg = cmds.sets(
+            renderable=True,
+            noSurfaceShader=True,
+            empty=True,
+            name="rizom_send_lamSG_s",
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        fn = cmds.shadingNode("file", asTexture=True, name="rizom_send_file_s")
+        cmds.setAttr(
+            f"{fn}.fileTextureName",
+            str(self.tmp_dir / "does_not_exist.png"),
+            type="string",
+        )
+        cmds.connectAttr(f"{fn}.outColor", f"{shader}.color", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+
+        self.bridge.send_to_rizomuv([cube], params={"LOAD_TEXTURES": True})
+
+        script_path = self._launch_calls[-1]["args"][1]
+        body = Path(script_path).read_text(encoding="utf-8")
+        self.assertNotIn(
+            "ZomLoadTexture",
+            body,
+            "Missing texture file should be filtered out, not passed to Rizom.",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

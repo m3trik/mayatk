@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-8836%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-8872%20passed-brightgreen.svg)](../tests/)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2C%20Linux-lightgrey.svg)
 
 # mayatk
@@ -173,7 +173,7 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 
 ## Session safety
 
-`MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` — every call launches a fresh Maya on an unused port. The user's open session is never touched. The test runner (`test/run_tests.py`) defaults the same way; `--reuse` keeps a mayapy it launched between runs, never one a person opened. See [AGENTS.md](../AGENTS.md) for the full rule.
+`MayaConnection.connect()` defaults to `launch=True, force_new_instance=True` — every call launches a fresh Maya on an unused port. The user's open session is never touched. The test runner (`tests/run_tests.py`) defaults the same way; `--reuse` keeps a mayapy it launched between runs, never one a person opened. See [AGENTS.md](../AGENTS.md) for the full rule.
 
 ---
 
@@ -200,7 +200,7 @@ Format specs (co-located with the code that consumes them):
 
 - **Full API:** `python -m pythontk ops run api.search "query=<words>"` (the installed source, searched)
 - **Blender parity:** [blendertk](https://github.com/m3trik/blendertk) mirrors this package's public API (`btk.X` ↔ `mtk.X`); the subpackage/class correspondence map — including what is deliberately absent on each side — is [blendertk/docs/STRUCTURE.md](https://github.com/m3trik/blendertk/blob/main/docs/STRUCTURE.md). Consult it before adding, moving, or renaming a public symbol here.
-- **Test suite:** [`test/README.md`](../test/README.md) — suite layout, base classes, runner invocations
+- **Test suite:** [`tests/README.md`](../tests/README.md) — suite layout, base classes, runner invocations
 - **Changelog:** [`CHANGELOG.md`](../CHANGELOG.md)
 - **Contributor / AI-agent guide:** [`AGENTS.md`](../AGENTS.md)
 - **PyPI:** https://pypi.org/project/mayatk/

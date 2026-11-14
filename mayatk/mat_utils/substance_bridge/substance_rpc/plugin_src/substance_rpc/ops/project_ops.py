@@ -178,7 +178,7 @@ def mesh_reload(mesh_path="", preserve_strokes=True, import_cameras=False):
     return {"started": True, "mesh_path": mesh_path}
 
 
-@register("mesh.reload_status")
+@register("mesh.reload_status", main_thread=False)  # the plugin's own note: answers while Painter reloads
 def mesh_reload_status():
     """Outcome of the last ``mesh.reload``: pending / success / failure.
 

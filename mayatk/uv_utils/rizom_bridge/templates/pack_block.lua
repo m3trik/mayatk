@@ -15,7 +15,7 @@
 -- (StrUtils.replace_delimited is blind to comments) -- describe fields by
 -- their Lua name instead.
 --
--- Probe every change: test/rizom_headless_probe.py. Field safety on 2020.1
+-- Probe every change: tests/rizom_headless_probe.py. Field safety on 2020.1
 -- (probed): MarginSize + SpacingSize safe; PaddingSize + MapResolution
 -- access-violate (gated >= 2022 below). Resolution (distinct from the
 -- crashing MapResolution) is safe there and is sent -- omitting it was why a

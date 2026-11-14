@@ -13,7 +13,7 @@
 -- QuadLoopCutter is OFF -- organic topology often lacks clean quad loops,
 -- and forcing loop-based cuts produces ragged seams on sculpts.
 -- Verify any Lua change against a live run:
--- test/rizom_headless_probe.py (2020.1 access-violates on
+-- tests/rizom_headless_probe.py (2020.1 access-violates on
 -- fields it doesn't know).
 
 -- 0. Weld First (default on): weld ALL existing seams so the auto-seam

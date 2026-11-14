@@ -761,7 +761,7 @@ cost was measured against one: a three.js page (the viewer's three 0.169) at
 one 2048-pixel Quest-class eye on an Intel Iris Xe, a room of 16 chairs
 (shadow planes on 16-19 % of the screen) and one shadow filling a third of it,
 against a `DirectionalLight` with a 2048 PCF-soft shadow map
-(`pythontk/test/temp_tests/_shadow_gpu_bench.py`, scratch; same-page A/B, the
+(`pythontk/tests/temp_tests/_shadow_gpu_bench.py`, scratch; same-page A/B, the
 median of interleaved rounds, ms a frame over no shadows):
 
 | | room | one shadow up close |
@@ -862,7 +862,7 @@ turn the cache off.
 is no second implementation of it: the WebXR viewer's GLSL and Unity's HLSL
 are generated mirrors of that one file, spliced between markers by
 `m3trik/scripts/sync_shadow_shaders.py` (`--check` is the drift gate,
-`pythontk/test/test_sync_shadow_shaders.py` the suite pin), and Maya and
+`pythontk/tests/test_sync_shadow_shaders.py` the suite pin), and Maya and
 Blender assemble it at run time from `ShadowHorizon.shader_source(language)`.
 
 The split is by capability, not by taste: a consumer that **is** a Python
@@ -914,8 +914,8 @@ behaviour, a different mechanism where the DCCs leave no choice:
 | What it borrows | the plane's shading-group *membership* only -- the real network stays wired and `_plane_shading_groups` reads the snapshot, so the silhouette's file node, the opacity chain and the export record are the same with it on | the plane's viewport visibility only; nothing the record reads |
 | The frame | `O` / `A` / `B` / `Up` driven live by `decomposeMatrix` + `vectorProduct` nodes off the contact's world matrix; up is the contact's `+Y` | the contact's **local** frame (`X`, `Y`, up `Z` -- not the record's exporter-axes `HORIZON_FRAME`) through `matrix_world`, refilled per draw |
 | Export | the `"shadow_preview"` stager (`FbxUtils.register_export_stager`) detaches every preview before any producer runs and re-attaches it after the write; the `shadows` producer publishes the record from the real materials | the same `"shadow_preview"` stager (blendertk's `FbxUtils.register_export_stager`) stands the overlay down for the write and back up after it; the same producer publishes |
-| Verified, drawn | `test/shadow_preview_device_check.py`: one **fresh** GUI Maya per device via `MAYA_VP2_DEVICE_OVERRIDE`, playblast alpha vs `HorizonMap.alpha` on 8474 pixels -- **DirectX 11 and OpenGL Core Profile: mean \|d\| 0.0000, p98 0.000, 0.00 % over 0.05**, 33 of 33 checks each -- the traversal and the reference agree to the pixel (before the 16-bit texture, OpenGL sRGB-decoded the 8-bit map and drew only part of it) | `test/shadow_preview_gui_check.py` (windowed): 16132 pixels in display space (overlays blend in linear light, the viewport encodes) -- **mean \|d\| 0.0012, p98 0.004, 0.00 % over 0.05**, umbra 1.016 x the reference's |
-| Verified, headless | `test/test_shadow_preview.py` (19): the device classifier, both effect texts, the accessor guard, the export stager, the 16-bit promotion, delete / rebuild / recalculate carrying a standing preview | `test/test_shadow_preview.py` (12): the frame math, the uniform block, the refusal, the export stager |
+| Verified, drawn | `tests/shadow_preview_device_check.py`: one **fresh** GUI Maya per device via `MAYA_VP2_DEVICE_OVERRIDE`, playblast alpha vs `HorizonMap.alpha` on 8474 pixels -- **DirectX 11 and OpenGL Core Profile: mean \|d\| 0.0000, p98 0.000, 0.00 % over 0.05**, 33 of 33 checks each -- the traversal and the reference agree to the pixel (before the 16-bit texture, OpenGL sRGB-decoded the 8-bit map and drew only part of it) | `tests/shadow_preview_gui_check.py` (windowed): 16132 pixels in display space (overlays blend in linear light, the viewport encodes) -- **mean \|d\| 0.0012, p98 0.004, 0.00 % over 0.05**, umbra 1.016 x the reference's |
+| Verified, headless | `tests/test_shadow_preview.py` (19): the device classifier, both effect texts, the accessor guard, the export stager, the 16-bit promotion, delete / rebuild / recalculate carrying a standing preview | `tests/test_shadow_preview.py` (12): the frame math, the uniform block, the refusal, the export stager |
 
 Facts each of these cost a launch to learn: Maya's `texelFetch` / `Load`
 reads the PNG **top-down** on both devices (Unity's `Load` is the other way
@@ -930,9 +930,9 @@ Blender overlay is read back through the viewport's display transform.
 
   | Engine | Harness | Measured against `HorizonMap.alpha` |
   |:--|:--|:--|
-  | GLSL, positional | headless Edge through Playwright, the real `viewer.html` (`pythontk/test/test_shadow_web.py`) | 48 ground points — 22 in shadow, 18 in the penumbra — worst \|shader − reference\| **0.0138** |
+  | GLSL, positional | headless Edge through Playwright, the real `viewer.html` (`pythontk/tests/test_shadow_web.py`) | 48 ground points — 22 in shadow, 18 in the penumbra — worst \|shader − reference\| **0.0138** |
   | GLSL, directional | same | 54 points — 34 in shadow, 29 in the penumbra — worst **0.0189** |
-  | HLSL (Unity) | Unity batch-mode render (`unitytk/test/test_shadow_plane_runtime_integration.py`) | 7143 rendered pixels, 1306 in shadow: mean \|d\| **0.0008** (point source) / **0.0002** (disc), p98 0.002 |
+  | HLSL (Unity) | Unity batch-mode render (`unitytk/tests/test_shadow_plane_runtime_integration.py`) | 7143 rendered pixels, 1306 in shadow: mean \|d\| **0.0008** (point source) / **0.0002** (disc), p98 0.002 |
 
   A directional source is its own row because it is its own evaluation: one
   bearing and one elevation for the whole plane instead of a per-fragment
@@ -973,7 +973,7 @@ Source queues one pass per set, an ancestor's move too, distance-only moves
 re-render), Maya GUI 33 (`test_shadow_rig_panel`: the boxes, the commit
 attaches the preview), Blender 268 (`test_shadow_rig`, the same checks over
 the depsgraph event), and live in a fresh GUI Maya
-(`test/temp_tests/_follow_source_gui_probe.py`, two command-port round trips
+(`tests/temp_tests/_follow_source_gui_probe.py`, two command-port round trips
 so the deferred pass gets a real idle): a 90 deg source move restamped the
 bearing and rewrote the PNG on its own, Softness 1.5 landed on the plane, the
 record and the preview's live uniform, and the committed Horizon plane's
@@ -1003,7 +1003,7 @@ lowers; a target's move and turn fire and re-render), Maya GUI
 `test_shadow_rig_panel` 35 (the option-box actions, Reproject, the settling
 Softness box), Blender `test_shadow_rig` 276, uitk `test_switchboard` /
 `test_double_spin_box` (the hold, the `.ui` property, `adjusting`), and a
-live probe in a fresh GUI Maya (`test/temp_tests/_follow_source_gui_probe.py`):
+live probe in a fresh GUI Maya (`tests/temp_tests/_follow_source_gui_probe.py`):
 a target carried and turned under the light re-projects through the real
 idle loop, and the drawn feet sit on the contact afterwards.
 

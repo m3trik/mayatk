@@ -16,13 +16,23 @@ FBX_OPTIONS = {
 # Rows: __PAINTER_TEXTURE_AFFIX__ __PAINTER_SPLIT_BY_UDIM__ __BAKE_SOURCE_SET__
 # Rows: __PAINTER_PROJECT__ __PAINTER_SAVE__ __PAINTER__
 
+import os  # noqa: E402
+
 import substance_painter.project as project  # noqa: E402
 import substance_painter.textureset as textureset  # noqa: E402
 
 from substance_rpc.ops import project_ops, setup_ops  # noqa: E402
 
-if args.get("PAINTER_SAVE") and not args.get("PROJECT"):
-    raise RuntimeError("Save When Done needs a Project path to save the new project as.")
+if args.get("PAINTER_SAVE"):
+    if not args.get("PROJECT"):
+        raise RuntimeError("Save When Done needs a Project path to save the new project as.")
+    if os.path.exists(args["PROJECT"]):
+        # Painter's save_as replaces a file without asking: the Project row
+        # may still name the project the last script ran on.
+        raise RuntimeError(
+            f"{args['PROJECT']} already exists, and saving the new project there would replace it: "
+            "name another Project, or move that one away first."
+        )
 if project.is_open():
     raise RuntimeError(
         f"Painter has {project.name() or 'a project'} open: a new project needs a Painter "
@@ -51,8 +61,13 @@ def _set_up():
         setup_ops.set_high_poly(mesh_path=args["HIGH_POLY"])
         args.report(f"Baking's high poly: {args['HIGH_POLY']}.")
     if args.get("MANIFEST") and args.get("MESH_MAPS"):
-        setup_ops.apply_mesh_maps(manifest_path=args["MANIFEST"])
-        args.report(f"Mesh maps wired for {len(args['MESH_MAPS'])} material(s).")
+        wired = setup_ops.apply_mesh_maps(manifest_path=args["MANIFEST"]).get("texture_sets") or {}
+        args.report(f"Mesh maps wired for {len(wired)} of {len(args['MESH_MAPS'])} material(s).")
+        missed = sorted(set(args["MESH_MAPS"]) - set(wired))
+        if missed:
+            # A texture set is named for its material: one with no set of its
+            # name (or whose maps are gone from disk) got none.
+            args.report(f"Note: no mesh maps reached {', '.join(missed)} (no texture set of that name, or its files are missing).")
 
 
 def _save():

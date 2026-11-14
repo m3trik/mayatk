@@ -13,7 +13,7 @@
 -- must still be unstacked and packed -- grouping any overlap welded whole
 -- layouts into one frozen clump (user report 2026-08-16).
 --
--- Mechanism (all probed on 2020.1, test/rizom_headless_probe.py):
+-- Mechanism (all probed on 2020.1, tests/rizom_headless_probe.py):
 --  1. ZomDeform CenterMode="MultiCOG" scales every island about its OWN
 --     centre by 1/1000: islands sharing a centre still coincide, islands
 --     that only overlapped no longer touch (their centres differ).

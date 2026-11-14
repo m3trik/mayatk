@@ -1,4 +1,4 @@
-"""Bake Lighting to Diffuse: bake Iray AO (and curvature) per texture set and add a lighting layer over Base Color (not yet driven by the AO map: see its report)."""
+"""Bake Lighting to Diffuse: bake AO (and curvature) per texture set and lay it over Base Color, as a Multiply layer on top of the stack."""
 
 # Runs inside Painter (the substance_rpc plugin's ``script.start``) on the
 # project named in Project, else the one open in Painter. Its settings are its
@@ -12,8 +12,8 @@ WORKS_ON = "project"
 # Row: __AO_MIN_DISTANCE__ float 0.0 "AO Min Distance" min=0 max=1 decimals=4 tooltip="Nearest occluder: a bias against self-shadow noise."
 # Row: __AO_SPREAD__ float 162 "AO Spread" min=0 max=180 decimals=1 tooltip="Spread angle of the occlusion rays, in degrees."
 # Row: __AO_SUBSAMPLE__ choice 1 "Antialiasing" choices=1|2|4|8 tooltip="Supersampling: 1 is none."
-# Row: __AO_INTENSITY__ float 1.0 "AO Intensity" min=0 max=1 decimals=2 tooltip="The lighting layer's opacity."
-# Row: __INCLUDE_CURVATURE__ bool off "Curvature" tooltip="Also bake curvature, laid over as an overlay layer."
+# Row: __AO_INTENSITY__ float 1.0 "AO Intensity" min=0 max=1 decimals=2 tooltip="The lighting layer's opacity: 1 darkens Base Color by the full occlusion."
+# Row: __INCLUDE_CURVATURE__ bool off "Curvature" tooltip="Also bake curvature, laid over as an Overlay layer above the lighting (edges lighten, creases darken)."
 # Row: __SKIP_EXISTING__ bool off "Skip Existing Bakes" tooltip="Bake only texture sets missing the maps; the rest still composite."
 
 from substance_rpc.ops import bake_ops  # noqa: E402
@@ -32,11 +32,14 @@ result = bake_ops.lighting_to_diffuse(
     cancelled=args.cancelled,  # a cancel stops the bake under way
 )
 for entry in result["baked_maps"]:
-    args.report(f"Baked: {entry}")
+    for name, maps in entry.items():
+        if maps == "skipped":
+            args.report(f"{name}: kept the maps it has (Skip Existing Bakes).")
+        else:
+            args.report(f"{name}: baked {', '.join(maps)}.")
 for entry in result["layers_created"]:
-    args.report(f"Lighting layer: {entry}")
-for warning in result["warnings"]:
-    args.report(f"Note: {warning}.")
+    for name in entry:
+        args.report(f"{name}: lighting laid over Base Color (the layer on top of its stack).")
 if result["errors"]:
     raise RuntimeError("; ".join(result["errors"]))
 

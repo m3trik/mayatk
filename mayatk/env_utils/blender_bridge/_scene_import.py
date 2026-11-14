@@ -1123,7 +1123,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 ns, n = "_usd_pull", 1
                 while cmds.namespace(exists=ns):
                     ns, n = f"_usd_pull{n}", n + 1
-                new_nodes = UsdUtils.import_scene(maya_path, namespace=ns)
+                # mayaUsd's own shading names: the replay below keys each
+                # material on its shading GROUP (the Material prim's name).
+                new_nodes = UsdUtils.import_scene(
+                    maya_path, namespace=ns, material_names="shading_group"
+                )
                 # Empties -> correct node types, the USD way round: every
                 # Empty arrives SHAPELESS (Xform prims), so the point markers
                 # get their locator shapes back from the manifest's ``empties``

@@ -172,6 +172,10 @@ class SubstanceEngine(ptk.HandoffBridge):
     #: Seconds a launched Painter has to start serving.
     LAUNCH_TIMEOUT = 180.0
 
+    #: Said when a Painter that serves does not answer a question put to its
+    #: main thread (it is mid-save, mid-export, mid-load).
+    BUSY = "{painter} is busy and did not answer: run this again once it is idle."
+
     def __init__(self, painter_path: Optional[str] = None):
         super().__init__()
         self._painter_path = painter_path
@@ -712,7 +716,11 @@ class SubstanceEngine(ptk.HandoffBridge):
         else:
             started = picked
             if works_on != WORKS_NEW:
-                held = picked.project()
+                try:
+                    held = picked.project()
+                except ConnectionError:
+                    self.logger.error(self.BUSY.format(painter=self.painter_label(picked.record or {})))
+                    return result
                 if project and held and not PainterRpcClient._same_file(held.get("file_path"), project):
                     # Opening would close the person's project (unsaved edits and all).
                     self.logger.error(
@@ -756,7 +764,11 @@ class SubstanceEngine(ptk.HandoffBridge):
             result["connection"], result["painter"] = started, started.record
             expect = None
             if works_on != WORKS_NEW:
-                held = started.project()
+                try:
+                    held = started.project()
+                except ConnectionError:
+                    self.logger.error(self.BUSY.format(painter=self.painter_label(started.record or {})))
+                    return result
                 if held is None:
                     self.logger.error("Painter has no project open to run this script on.")
                     return result
@@ -785,7 +797,18 @@ class SubstanceEngine(ptk.HandoffBridge):
         if background is None or not (launched or to_open):
             return queue(bring_up())
         on_queued = request.get("on_queued") or (lambda _result: None)
-        background(bring_up, lambda error: on_queued(queue(error)))
+
+        def queued(error: str) -> None:
+            """``on_queued`` hears how it went whatever happened: a panel
+            waiting on it would otherwise refuse every later run."""
+            try:
+                answer = queue(error)
+            except Exception as e:  # noqa: BLE001 -- said; the run stops here
+                self.logger.error(f"{label} was not queued: {e}")
+                answer = result
+            on_queued(answer)
+
+        background(bring_up, queued)
         return dict(result, pending=True)
 
     def wait(self, result: Dict[str, Any], timeout: float = 3600.0, on_status=None) -> Dict[str, Any]:
@@ -817,7 +840,7 @@ class SubstanceEngine(ptk.HandoffBridge):
         *on_status* gets each status on the way (a panel's progress)."""
         connection, job = result.get("connection"), result.get("job")
         if connection is None or not job:
-            return {"state": "failed", "error": "Nothing was queued."}
+            return {"state": "failed", "error": "it was never queued in Painter (see above)."}
         try:
             return connection.rpc.wait(job, timeout=timeout, on_status=on_status)
         except (TimeoutError, ConnectionError) as e:
@@ -847,18 +870,37 @@ class SubstanceEngine(ptk.HandoffBridge):
         ]
 
     def report(self, status: Dict[str, Any]) -> bool:
-        """Log a finished job: its report lines, then how it ended. True when it ran."""
+        """Log a finished job: what it printed and reported, then how it ended
+        (a failure with the script's own traceback, a cancel with its reason).
+        True when it ran."""
+        for line in status.get("console") or ():
+            self.logger.info(line)
         for line in status.get("report") or ():
             self.logger.info(line)
         name = status.get("label") or "The script"
+        error = status.get("error")
         if status.get("state") == "done":
             self.logger.info(f"{name} finished in Painter.")
             return True
         if status.get("state") == "cancelled":
-            self.logger.warning(f"{name} was cancelled.")
+            self.logger.warning(f"{name} was cancelled{': ' + error if error else '.'}")
+        elif not status.get("job"):
+            self.logger.error(f"{name} did not run: {error}")
         else:
-            self.logger.error(f"{name} failed in Painter: {status.get('error')}")
+            self.logger.error(f"{name} failed in Painter: {error}")
+            where = self._script_traceback(status)
+            if where:
+                self.logger.error(where)
         return False
+
+    @staticmethod
+    def _script_traceback(status: Dict[str, Any]) -> str:
+        """A failed job's traceback from the script's own first frame on (the
+        runner's frames above it say nothing a person can act on); ``""`` when
+        it failed outside the script (a refusal) or has no frame of it."""
+        text, path = status.get("traceback") or "", status.get("path") or ""
+        at = text.find(f'File "{path}"') if path else -1
+        return "" if at < 0 else "  " + text[at:].rstrip()
 
     @staticmethod
     def label(script: str) -> str:

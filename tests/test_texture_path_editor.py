@@ -1,0 +1,2761 @@
+# !/usr/bin/python
+# coding=utf-8
+"""Regression and behavioral tests for mayatk.mat_utils.texture_path_editor --
+``TexturePathEditor``, the Texture Path Editor's engine.
+
+Covers:
+- ``MatUtils.to_absolute`` (regression: 2026-08-04 sourceimages-doubling fix;
+  promoted from the panel 2026-08-20 when Normalize Paths and the Scene
+  Exporter's relative-path task were unified on one engine).
+- ``MatUtils.to_project_relative`` round-trip guarantees (same promotion).
+- ``_strategies_for_modes`` cascade/dedup logic.
+- ``resolve_missing_textures`` input validation.
+- ``normalize_paths`` semantics across path categories (a driver over
+  ``MatUtils.stage_textures_relative(scope="project")`` since 2026-08-20).
+- ``make_paths_absolute`` semantics (inverse of Normalize Paths).
+- Find & Copy, lightmap dependencies, delete consequences and the renames
+  (Keep Names In Sync) through the engine. The panel over it is tentacle's
+  shared Texture Path Editor (``tests/test_texture_path_editor_panel.py``).
+"""
+
+import os
+import shutil
+import tempfile
+import unittest
+
+import maya.cmds as cmds
+import pythontk as ptk
+
+from base_test import MayaTkTestCase
+from mayatk.mat_utils.texture_path_editor import TexturePathEditor
+from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.mat_utils._mat_utils import MatUtils
+
+
+class TestToAbsolute(unittest.TestCase):
+    """Pure-string tests for ``MatUtils.to_absolute`` (no scene needed).
+
+    Replaces the tests for the caller-less ``_resolve_absolute_texture_path``,
+    whose relative branch was never exercised and joined against *sourceimages*
+    instead of the workspace root — reproduced 2026-08-04 as
+    ``C:/proj/sourceimages/sourceimages/foo.png``. (The helper lived on this
+    panel as ``_to_absolute`` until 2026-08-20.)
+    """
+
+    def test_absolute_input_passes_through(self):
+        abs_path = os.path.abspath(__file__)
+        result = MatUtils.to_absolute(abs_path, "C:/proj")
+        self.assertEqual(os.path.normcase(result), os.path.normcase(abs_path))
+
+    def test_empty_returns_empty(self):
+        self.assertEqual(MatUtils.to_absolute("", "C:/proj"), "")
+
+    def test_relative_resolves_against_workspace_not_sourceimages(self):
+        """Regression: sourceimages must not be doubled."""
+        result = MatUtils.to_absolute("sourceimages/foo.png", "C:/proj")
+        self.assertEqual(result, "C:/proj/sourceimages/foo.png")
+        self.assertNotIn("sourceimages/sourceimages", result)
+
+    def test_relative_without_workspace_is_left_alone(self):
+        # Explicit "" workspace — don't fabricate a root (and don't fall back
+        # to the live project either; "" is an answer, None means "look it
+        # up"). The caller's exists() check then simply fails, which is the
+        # honest answer.
+        self.assertEqual(
+            MatUtils.to_absolute("sourceimages/foo.png", ""), "sourceimages/foo.png"
+        )
+
+    def test_result_is_forward_slashed(self):
+        result = MatUtils.to_absolute("sub\\tex.png", "C:\\proj")
+        self.assertNotIn("\\", result)
+        self.assertEqual(result, "C:/proj/sub/tex.png")
+
+    def test_environment_variable_is_expanded(self):
+        """Maya resolves ``$VAR`` in a ``.ftn``; so must the one primitive that
+        turns a stored value into the path on disk.
+
+        Unexpanded, the value fails ``os.path.isabs`` and gets the workspace
+        pasted in front (``<proj>/$TEXDIR/foo.png``) -- a path that exists
+        nowhere. The panel then painted the row red, Select Broken Paths
+        collected it, and Make Paths Absolute WROTE that value back. The
+        engine has always expanded (``stage_textures_relative``); this is the
+        display half agreeing with it.
+
+        Added: 2026-08-25
+        """
+        os.environ["MTK_TEST_TEXDIR"] = "C:/lib/textures"
+        self.addCleanup(os.environ.pop, "MTK_TEST_TEXDIR", None)
+
+        result = MatUtils.to_absolute("$MTK_TEST_TEXDIR/foo.png", "C:/proj")
+
+        self.assertEqual(result, "C:/lib/textures/foo.png")
+        self.assertNotIn("$", result)
+
+    def test_undefined_environment_variable_is_left_intact(self):
+        """``expandvars`` leaves an unknown name alone, and so must this -- the
+        stored value is still the honest thing to show the user."""
+        os.environ.pop("MTK_NO_SUCH_VAR", None)
+        self.assertIn(
+            "$MTK_NO_SUCH_VAR",
+            MatUtils.to_absolute("$MTK_NO_SUCH_VAR/foo.png", "C:/proj"),
+        )
+
+    def test_udim_token_survives_the_join(self):
+        result = MatUtils.to_absolute("sourceimages/tile_<UDIM>.png", "C:/proj")
+        self.assertIn("<UDIM>", result)
+
+
+class TestProjectRelativeConverter(unittest.TestCase):
+    """``MatUtils.to_project_relative`` emits the ROOT-relative form.
+
+    ``sourceimages/foo.png`` — how Maya spells a relative texture path, the
+    first thing its loader tries, and the only relative form the FBX
+    plug-in locates at write time. The round trip through ``to_absolute`` is
+    the guard, and it passes for a texture not yet ON DISK (``to_absolute``
+    falls back to the root form): Set Directory plans the relative form in
+    phase 1 and only copies in phase 2, so a strict existence gate would
+    store an absolute path for every texture about to land in sourceimages.
+    (Find & Copy relativizes AFTER its copy, so it always has the file.)
+
+    The RULE-relative fallback (a bare ``foo.png``) is emitted only for an
+    out-of-root ``sourceImages`` rule, where no root-relative form finds the
+    file — and there it keeps its shadow guard, since Maya answers the root
+    first.
+
+    (Promoted from this panel's ``_project_relative_converter`` closure
+    2026-08-20; the roots now resolve per call unless passed in.)
+    """
+
+    def setUp(self):
+        self._original_get_env_info = EnvUtils.get_env_info
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+
+    def _patch_env(self, workspace, sourceimages):
+        EnvUtils.get_env_info = staticmethod(
+            lambda k: {"workspace": workspace, "sourceimages": sourceimages}.get(k, "")
+        )
+
+    def test_sourceimages_under_root_relativizes(self):
+        self._patch_env("C:/proj", "C:/proj/sourceimages")
+        result = MatUtils.to_project_relative("C:/proj/sourceimages/foo.png")
+        self.assertEqual(result, "sourceimages/foo.png")
+
+    def test_out_of_project_sourceimages_is_relative_to_the_rule(self):
+        """An out-of-project rule USED to have no relative form; now it does.
+
+        The 2026-08-04 regression was the root-relative spelling
+        ``shared/foo.png`` — i.e. ``<proj>/shared/foo.png``, resolving to
+        nothing. The rule-relative form carries no such prefix, and Maya
+        resolves it through the rule wherever the rule points: measured
+        loading the right image and surviving two save/open generations with
+        an absolute out-of-project rule (``probe_ftn_reopen.py``).
+        """
+        self._patch_env("C:/proj", "D:/shared")
+        self.assertEqual(MatUtils.to_project_relative("D:/shared/foo.png"), "foo.png")
+
+    def test_relative_form_round_trips_through_to_absolute(self):
+        """Resolution reads the DISK now, so the round trip needs real files."""
+        root = tempfile.mkdtemp(prefix="ftn_roundtrip_")
+        try:
+            si_dir = os.path.join(root, "sourceimages")
+            os.makedirs(os.path.join(si_dir, "a"))
+            texture = os.path.join(si_dir, "a", "b.png").replace("\\", "/")
+            with open(texture, "w"):
+                pass
+            self._patch_env(root, si_dir)
+
+            rel = MatUtils.to_project_relative(texture)
+
+            self.assertEqual(rel, "sourceimages/a/b.png")
+            self.assertEqual(
+                MatUtils.to_absolute(rel, root, si_dir).lower(),
+                os.path.normpath(texture).replace("\\", "/").lower(),
+            )
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_explicit_arguments_win_over_the_env(self):
+        """The loop-caller form: no per-call env lookup, no drift."""
+        self._patch_env("C:/other", "C:/other/sourceimages")
+        result = MatUtils.to_project_relative(
+            "C:/proj/sourceimages/foo.png", "C:/proj", "C:/proj/sourceimages"
+        )
+        self.assertEqual(result, "sourceimages/foo.png")
+
+    def test_path_outside_sourceimages_stays_absolute(self):
+        self._patch_env("C:/proj", "C:/proj/sourceimages")
+        result = MatUtils.to_project_relative("C:/elsewhere/foo.png")
+        self.assertEqual(result, "C:/elsewhere/foo.png")
+
+
+class TestStrategiesForModes(unittest.TestCase):
+    """Pure-logic tests for the cascade strategy pipeline."""
+
+    def setUp(self):
+        self.editor = TexturePathEditor()
+
+    def test_single_mode_stem(self):
+        result = self.editor._strategies_for_modes(["stem"], index_stems=[])
+        self.assertEqual(result, ["exact"])
+
+    def test_single_mode_fuzzy(self):
+        result = self.editor._strategies_for_modes(["fuzzy"], index_stems=[])
+        self.assertEqual(result, ["exact", "substring", "ratio"])
+
+    def test_texture_strategy_includes_callable(self):
+        result = self.editor._strategies_for_modes(["texture"], index_stems=[])
+        self.assertEqual(result[0], "exact")
+        self.assertTrue(callable(result[1]))
+        self.assertEqual(result[2:], ["substring", "ratio"])
+
+    def test_cascade_dedups_exact_first_tier(self):
+        # All three modes start with "exact"; pipeline must contain it once.
+        result = self.editor._strategies_for_modes(
+            ["stem", "texture", "fuzzy"], index_stems=[]
+        )
+        self.assertEqual(result.count("exact"), 1)
+
+    def test_cascade_preserves_safest_first_order(self):
+        # stem → fuzzy: stem contributes "exact"; fuzzy adds substring+ratio.
+        result = self.editor._strategies_for_modes(["stem", "fuzzy"], index_stems=[])
+        self.assertEqual(result, ["exact", "substring", "ratio"])
+
+
+class TestResolveMissingValidation(MayaTkTestCase):
+    """Input validation contract of resolve_missing_textures."""
+
+    def setUp(self):
+        super().setUp()
+        self.editor = TexturePathEditor()
+
+    def test_empty_modes_raises(self):
+        with self.assertRaises(ValueError):
+            self.editor.resolve_missing_textures(modes=[])
+
+    def test_unknown_mode_raises(self):
+        with self.assertRaises(ValueError):
+            self.editor.resolve_missing_textures(modes=["bogus"])
+
+
+class TestResolveMissingSkipsStaleCopies(MayaTkTestCase):
+    """Resolve Missing Textures indexes sourceimages through
+    ``ptk.FileDependencies.walk``: it walked everything, so a texture whose
+    only same-named file sat in a sync cache, the Recycle Bin or a
+    ``_superseded`` folder was bound to that stale copy (2026-09-27)."""
+
+    def setUp(self):
+        super().setUp()
+        tmp = ptk.TempArtifacts("tpe_stale", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.tmp_root = tmp.dir_path()
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        os.makedirs(self.si_dir)
+        original = EnvUtils.get_env_info
+        self.addCleanup(setattr, EnvUtils, "get_env_info", staticmethod(original))
+        roots = {"sourceimages": self.si_dir, "workspace": self.tmp_root}
+        EnvUtils.get_env_info = staticmethod(lambda k: roots.get(k) or original(k))
+        self.editor = TexturePathEditor()
+
+    def _write(self, *parts):
+        path = os.path.join(self.si_dir, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+        return path
+
+    def _missing_node(self):
+        node = cmds.shadingNode("file", asTexture=True, name="stale_file")
+        missing = os.path.join(self.tmp_root, "gone", "wood.png").replace("\\", "/")
+        cmds.setAttr(f"{node}.fileTextureName", missing, type="string")
+        return node, missing
+
+    def test_a_stale_copy_alone_leaves_the_texture_missing(self):
+        """One copy at a time: several would read as ambiguous and hide it."""
+        for folder in (".dropbox.cache", "$Recycle.Bin", "_superseded", ".git"):
+            with self.subTest(folder=folder):
+                copy = self._write(folder, "wood.png")
+                node, missing = self._missing_node()
+                try:
+                    self.editor.resolve_missing_textures(
+                        modes=["stem"], file_nodes=[node]
+                    )
+                    got = cmds.getAttr(f"{node}.fileTextureName")
+                finally:
+                    os.remove(copy)
+                    cmds.delete(node)
+                self.assertEqual(got, missing)
+
+    def test_a_live_copy_beside_them_resolves(self):
+        for folder in (".dropbox.cache", "_superseded"):
+            self._write(folder, "wood.png")
+        self._write("maps", "wood.png")
+        node, _missing = self._missing_node()
+        self.editor.resolve_missing_textures(modes=["stem"], file_nodes=[node])
+        self.assertTrue(
+            cmds.getAttr(f"{node}.fileTextureName").endswith("maps/wood.png"),
+            cmds.getAttr(f"{node}.fileTextureName"),
+        )
+
+
+class TestNormalizeToRelative(MayaTkTestCase):
+    """Behavioral tests for normalize_paths across path categories."""
+
+    def setUp(self):
+        super().setUp()
+        # Sandbox sourceimages under a temp dir. Patch EnvUtils.get_env_info
+        # directly rather than fight Maya's workspace state in tests.
+        self.tmp_root = tempfile.mkdtemp(prefix="texture_path_editor_test_")
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        os.makedirs(self.si_dir, exist_ok=True)
+
+        self._original_get_env_info = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return self._original_get_env_info(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+
+        self.editor = TexturePathEditor()
+
+    def tearDown(self):
+        # Restore staticmethod wrapping so the class attribute descriptor type
+        # matches what was there before the patch.
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+        super().tearDown()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def _make_file_node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def test_udim_path_relativizes_with_its_token_intact(self):
+        """The engine relativizes a token path in place (the old local pass
+        skipped UDIM paths entirely — they were the one category Normalize
+        could not make portable).
+
+        The tile on disk is the premise, not decoration: since 2026-08-25 a
+        rewrite whose result names no file is refused, and a token path is
+        checked through its tiles rather than by literal name.
+        """
+        for tile in ("1001", "1002"):
+            with open(os.path.join(self.si_dir, f"tile_{tile}.png"), "w"):
+                pass
+        path = os.path.join(self.si_dir, "tile_<UDIM>.png").replace("\\", "/")
+        node = self._make_file_node("tex_udim", path)
+        self.editor.normalize_paths([node], external_mode="rewrite")
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertEqual(result, "sourceimages/tile_<UDIM>.png")
+
+    def test_in_project_path_with_no_file_behind_it_is_left_alone(self):
+        """Normalize must not hand back a relative path that names nothing.
+
+        The external branch has always refused this case
+        (``skipped:missing-source`` — Resolve Missing Textures is the command
+        for it); the in-project branch rewrote it anyway and counted it as
+        ``rewritten``, so the panel reported a batch of successes over rows
+        that stayed red. Reported 2026-08-25.
+        """
+        abs_path = os.path.join(self.si_dir, "ghost.png").replace("\\", "/")
+        node = self._make_file_node("tex_ghost", abs_path)
+
+        self.editor.normalize_paths([node], external_mode="rewrite")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+
+    def test_udim_set_not_starting_at_1001_still_relativizes(self):
+        """The missing-source guard asks the TILES, never the 1001 probe.
+
+        ``_texture_exists`` deliberately probes tile 1001 (the exporter's
+        representative must name the same file), so a set running 1002-1005 --
+        routine -- reads as missing through it. Guarding on that would refuse
+        to normalize a perfectly good set.
+        """
+        for tile in ("1002", "1003"):
+            with open(os.path.join(self.si_dir, f"late_{tile}.png"), "w"):
+                pass
+        path = os.path.join(self.si_dir, "late_<UDIM>.png").replace("\\", "/")
+        node = self._make_file_node("tex_late_udim", path)
+
+        self.editor.normalize_paths([node], external_mode="rewrite")
+
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"),
+            "sourceimages/late_<UDIM>.png",
+        )
+
+    def test_udim_set_with_no_tiles_on_disk_is_left_alone(self):
+        """Same rule, checked through the tiles — not the literal token name."""
+        abs_path = os.path.join(self.si_dir, "ghost_<UDIM>.png").replace("\\", "/")
+        node = self._make_file_node("tex_ghost_udim", abs_path)
+
+        self.editor.normalize_paths([node], external_mode="rewrite")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+
+    def test_already_relative_is_noop(self):
+        node = self._make_file_node("tex_rel", "foo.png")
+        self.editor.normalize_paths([node], external_mode="rewrite")
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "foo.png")
+
+    def test_the_legacy_rule_relative_form_is_upgraded_in_place(self):
+        """A bare ``foo.png`` resolves in Maya but names no folder.
+
+        It is the form this panel emitted between 2026-08-18 and 2026-08-25,
+        so it is what production scenes normalized in that window carry. The
+        FBX plug-in cannot locate it at write time (it resolves against the
+        process CWD, which the exporter aligns with the project ROOT), and
+        the exporter's own gate read it as a MISSING texture and rebound the
+        node by basename. Normalize upgrades it in place, which is how such a
+        scene repairs itself.
+        """
+        with open(os.path.join(self.si_dir, "legacy.png"), "w"):
+            pass
+        node = self._make_file_node("tex_legacy", "legacy.png")
+
+        self.editor.normalize_paths([node], external_mode="rewrite")
+
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/legacy.png"
+        )
+
+    def test_a_path_already_in_the_stored_form_is_left_alone(self):
+        """``sourceimages/foo.png`` is the emitted form — nothing to upgrade."""
+        with open(os.path.join(self.si_dir, "settled_rel.png"), "w"):
+            pass
+        node = self._make_file_node("tex_settled_rel", "sourceimages/settled_rel.png")
+
+        self.editor.normalize_paths([node], external_mode="rewrite")
+
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/settled_rel.png"
+        )
+
+    def test_a_relative_path_naming_nothing_is_left_alone(self):
+        """Resolve Missing Textures' job, not Normalize's."""
+        node = self._make_file_node("tex_ghost_rel", "sourceimages/ghost.png")
+        self.editor.normalize_paths([node], external_mode="rewrite")
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/ghost.png"
+        )
+
+    def test_absolute_under_sourceimages_becomes_relative(self):
+        src_file = os.path.join(self.si_dir, "bar.png")
+        with open(src_file, "w"):
+            pass
+        abs_path = src_file.replace("\\", "/")
+        node = self._make_file_node("tex_abs_in", abs_path)
+        self.editor.normalize_paths([node], external_mode="rewrite")
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertFalse(
+            os.path.isabs(result), f"Expected relative path, got {result!r}"
+        )
+        self.assertIn("bar.png", result)
+
+    def test_external_absolute_left_alone_in_rewrite_mode(self):
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "external.png")
+            with open(ext_file, "w"):
+                pass
+            abs_path = ext_file.replace("\\", "/")
+            node = self._make_file_node("tex_ext_off", abs_path)
+            self.editor.normalize_paths([node], external_mode="rewrite")
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_external_absolute_copied_in_copy_mode(self):
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "external2.png")
+            with open(ext_file, "w") as fh:
+                fh.write("payload")
+            abs_path = ext_file.replace("\\", "/")
+            node = self._make_file_node("tex_ext_on", abs_path)
+            self.editor.normalize_paths([node], external_mode="copy")
+            result = cmds.getAttr(f"{node}.fileTextureName")
+            self.assertFalse(
+                os.path.isabs(result), f"Expected relative, got {result!r}"
+            )
+            self.assertIn("external2.png", result)
+            # Copied into sourceimages.
+            self.assertTrue(os.path.exists(os.path.join(self.si_dir, "external2.png")))
+            # Original still exists at external source.
+            self.assertTrue(os.path.exists(ext_file))
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_external_absolute_moved_in_move_mode(self):
+        """external_mode='move' relocates the file and removes the original."""
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "external3.png")
+            with open(ext_file, "w") as fh:
+                fh.write("moveme")
+            abs_path = ext_file.replace("\\", "/")
+            node = self._make_file_node("tex_ext_move", abs_path)
+            self.editor.normalize_paths([node], external_mode="move")
+            result = cmds.getAttr(f"{node}.fileTextureName")
+            self.assertFalse(
+                os.path.isabs(result), f"Expected relative, got {result!r}"
+            )
+            self.assertIn("external3.png", result)
+            # File is in sourceimages.
+            self.assertTrue(os.path.exists(os.path.join(self.si_dir, "external3.png")))
+            # Original is gone (moved).
+            self.assertFalse(os.path.exists(ext_file))
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_move_rebinds_every_node_sharing_the_external_path(self):
+        """Two file nodes storing the SAME external path (duplicated file
+        nodes are routine): the first node's move stages the file and removes
+        the original, so the second finds no source on disk. It must rebind
+        to the same staged twin — before the 2026-08-20 fix it read "shared"
+        as "missing" and stayed absolute on a deleted file (the old editor
+        pass failed the same case through its collision skip)."""
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "shared_move.png")
+            with open(ext_file, "w") as fh:
+                fh.write("SHARED")
+            abs_path = ext_file.replace("\\", "/")
+            node_a = self._make_file_node("tex_share_a", abs_path)
+            node_b = self._make_file_node("tex_share_b", abs_path)
+
+            self.editor.normalize_paths([node_a, node_b], external_mode="move")
+
+            for node in (node_a, node_b):
+                self.assertEqual(
+                    cmds.getAttr(f"{node}.fileTextureName"),
+                    "sourceimages/shared_move.png",
+                    f"{node} must rebind to the staged twin",
+                )
+            self.assertFalse(os.path.exists(ext_file), "moved, not copied")
+            with open(os.path.join(self.si_dir, "shared_move.png")) as fh:
+                self.assertEqual(fh.read(), "SHARED")
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_move_through_an_alias_of_sourceimages_keeps_the_only_copy(self):
+        """An "external" path that is a junction (a subst, a mapped drive)
+        naming sourceimages itself: the resident "twin" is the file, the
+        spellings differ, and Move removed the external original -- the only
+        copy -- before rebinding the node to it."""
+        resident = os.path.join(self.si_dir, "aliased.png")
+        with open(resident, "wb") as fh:
+            fh.write(b"ONLY COPY")
+        outside = tempfile.mkdtemp(prefix="external_alias_")
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        alias = os.path.join(outside, "si_alias")
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(os.path.normpath(self.si_dir), alias)
+        except (ImportError, AttributeError, OSError) as error:
+            self.skipTest(f"no directory junction can be made here: {error}")
+        self.addCleanup(lambda: os.path.lexists(alias) and os.rmdir(alias))
+        node = self._make_file_node(
+            "tex_alias_move", os.path.join(alias, "aliased.png").replace("\\", "/")
+        )
+
+        self.editor.normalize_paths([node], external_mode="move")
+
+        with open(resident, "rb") as fh:
+            self.assertEqual(fh.read(), b"ONLY COPY", "Move deleted the only copy")
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/aliased.png")
+
+    def test_move_never_takes_a_resident_differing_mid_file_for_the_external(self):
+        """Size plus a hash of the first and last 64 KB called two bakes of one
+        map the same file when only their middle differs; Move then removed
+        the external (the new bake) and bound the node to the stale resident."""
+        head, tail = b"H" * 65536, b"T" * 65536
+        with open(os.path.join(self.si_dir, "wall.tga"), "wb") as fh:
+            fh.write(head + b"OLD PAINT" + tail)
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        self.addCleanup(shutil.rmtree, ext_dir, ignore_errors=True)
+        ext_file = os.path.join(ext_dir, "wall.tga")
+        with open(ext_file, "wb") as fh:
+            fh.write(head + b"NEW PAINT" + tail)
+        node = self._make_file_node("tex_mid_move", ext_file.replace("\\", "/"))
+
+        self.editor.normalize_paths([node], external_mode="move")
+
+        stored = cmds.getAttr(f"{node}.fileTextureName")
+        with open(MatUtils.to_absolute(stored, self.tmp_root, self.si_dir), "rb") as fh:
+            self.assertIn(b"NEW PAINT", fh.read(), f"{stored} is the stale bake")
+        with open(os.path.join(self.si_dir, "wall.tga"), "rb") as fh:
+            self.assertIn(b"OLD PAINT", fh.read(), "the resident was overwritten")
+
+    def test_move_leaves_a_file_a_node_outside_the_batch_reads(self):
+        """A node outside the batch (an unselected row) reading the same
+        external file was left on a deleted path: the move removed the
+        original as soon as the batch's node was staged. Set Directory and
+        Find & Copy already kept it; Normalize Paths' move keeps it too."""
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        self.addCleanup(shutil.rmtree, ext_dir, ignore_errors=True)
+        ext_file = os.path.join(ext_dir, "shared_out.png").replace("\\", "/")
+        with open(ext_file, "wb") as fh:
+            fh.write(b"SHARED")
+        moved = self._make_file_node("tex_norm_in", ext_file)
+        self._make_file_node("tex_norm_out", ext_file)
+
+        self.editor.normalize_paths([moved], external_mode="move")
+
+        self.assertTrue(os.path.isfile(ext_file), "the outside node was stranded")
+        self.assertEqual(
+            cmds.getAttr(f"{moved}.fileTextureName"), "sourceimages/shared_out.png"
+        )
+        with open(os.path.join(self.si_dir, "shared_out.png"), "rb") as fh:
+            self.assertEqual(fh.read(), b"SHARED")
+
+    def test_move_leaves_a_file_a_node_whose_repath_failed_reads(self):
+        """A node the engine staged but could not repoint (a locked plug) still
+        reads the external file: the move removed it under that node."""
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        self.addCleanup(shutil.rmtree, ext_dir, ignore_errors=True)
+        ext_file = os.path.join(ext_dir, "locked.png").replace("\\", "/")
+        with open(ext_file, "wb") as fh:
+            fh.write(b"LOCKED")
+        node = self._make_file_node("tex_norm_locked", ext_file)
+        cmds.setAttr(f"{node}.fileTextureName", lock=True)
+        self.addCleanup(
+            lambda: cmds.objExists(node)
+            and cmds.setAttr(f"{node}.fileTextureName", lock=False)
+        )
+
+        self.editor.normalize_paths([node], external_mode="move")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), ext_file)
+        self.assertTrue(os.path.isfile(ext_file), "the locked node was stranded")
+
+    def test_move_collision_with_different_content_stages_a_variant(self):
+        """Move + same-name-same-SIZE collision: the engine hashes content, so
+        the different file lands as an ``_1`` variant and the external is
+        removed (move semantics) — the resident is never overwritten and the
+        node is never rebound to it.
+
+        (The old size-proxy called these two files "the same" and rebound the
+        node to the resident — a wrong-file rebind this fixture literally
+        constructed. Engine policy since 2026-08-20.)
+        """
+        existing = os.path.join(self.si_dir, "match_move.png")
+        with open(existing, "w") as fh:
+            fh.write("AAAAA")
+
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "match_move.png")
+            with open(ext_file, "w") as fh:
+                fh.write("BBBBB")  # different content, same length
+            abs_path = ext_file.replace("\\", "/")
+            node = self._make_file_node("tex_match_move", abs_path)
+
+            self.editor.normalize_paths([node], external_mode="move")
+
+            # Rebound to the staged variant, not the same-named resident.
+            result = cmds.getAttr(f"{node}.fileTextureName")
+            self.assertEqual(result, "sourceimages/match_move_1.png")
+            staged = os.path.join(self.si_dir, "match_move_1.png")
+            with open(staged) as fh:
+                self.assertEqual(fh.read(), "BBBBB")
+            # Pre-existing file kept (no overwrite).
+            with open(existing) as fh:
+                self.assertEqual(fh.read(), "AAAAA")
+            # External removed (move semantics — its content is staged).
+            self.assertFalse(os.path.exists(ext_file))
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_copy_collision_with_different_content_stages_a_variant(self):
+        """Same basename in sourceimages with different content: staged as an
+        ``_1`` variant and rebound to it — never silently rebound to the
+        resident, never abandoned on the absolute path (the old policy's
+        skip leaked the external path into every export)."""
+        existing = os.path.join(self.si_dir, "collide.png")
+        with open(existing, "w") as fh:
+            fh.write("X")
+
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "collide.png")
+            with open(ext_file, "w") as fh:
+                fh.write("DIFFERENT CONTENT")
+            abs_path = ext_file.replace("\\", "/")
+            node = self._make_file_node("tex_collide", abs_path)
+
+            self.editor.normalize_paths([node], external_mode="copy")
+
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"),
+                "sourceimages/collide_1.png",
+            )
+            with open(os.path.join(self.si_dir, "collide_1.png")) as fh:
+                self.assertEqual(fh.read(), "DIFFERENT CONTENT")
+            # Pre-existing sourceimages file untouched.
+            with open(existing) as fh:
+                self.assertEqual(fh.read(), "X")
+            # Source still on disk (copy semantics).
+            self.assertTrue(os.path.exists(ext_file))
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_copy_collision_with_identical_content_reuses_without_copying(self):
+        """A resident that provably IS the same texture (size + hash) is
+        reused: no disk write, node rebound to it — repeat runs converge
+        instead of stacking variants."""
+        existing = os.path.join(self.si_dir, "match.png")
+        with open(existing, "w") as fh:
+            fh.write("ABCDE")
+        existing_mtime = os.path.getmtime(existing)
+
+        ext_dir = tempfile.mkdtemp(prefix="external_textures_")
+        try:
+            ext_file = os.path.join(ext_dir, "match.png")
+            with open(ext_file, "w") as fh:
+                fh.write("ABCDE")  # identical content
+            abs_path = ext_file.replace("\\", "/")
+            node = self._make_file_node("tex_match", abs_path)
+
+            self.editor.normalize_paths([node], external_mode="copy")
+
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/match.png"
+            )
+            with open(existing) as fh:
+                self.assertEqual(fh.read(), "ABCDE")
+            self.assertEqual(os.path.getmtime(existing), existing_mtime)
+            # External preserved (copy semantics).
+            self.assertTrue(os.path.exists(ext_file))
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_invalid_external_mode_raises(self):
+        with self.assertRaises(ValueError):
+            self.editor.normalize_paths([], external_mode="bogus")
+
+    def _repoint_sourceimages(self, si_dir):
+        """Point the fake env's sourceimages rule at *si_dir* (workspace unchanged)."""
+        os.makedirs(si_dir, exist_ok=True)
+        self.si_dir = si_dir
+
+    def test_nested_sourceimages_rule_still_becomes_relative(self):
+        """Regression: a rule below the root left every path absolute.
+
+        The relative form used to be built against sourceimages and re-prefixed
+        with only its *basename*, so ``<proj>/assets/sourceimages/x.png`` became
+        ``sourceimages/x.png`` — resolving to nothing. The round-trip guard then
+        refused it and handed back the absolute path: Normalize did nothing.
+        """
+        self._repoint_sourceimages(
+            os.path.join(self.tmp_root, "assets", "sourceimages")
+        )
+        src_file = os.path.join(self.si_dir, "nested.png")
+        with open(src_file, "w"):
+            pass
+        node = self._make_file_node("tex_nested", src_file.replace("\\", "/"))
+
+        self.editor.normalize_paths([node], external_mode="rewrite")
+
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertEqual(result, "assets/sourceimages/nested.png")
+        # The relative form has to resolve back to the file Maya was given —
+        # against the ROOT, which is where Maya looks first and what the
+        # emitted form spells in full (a nested rule is why the prefix cannot
+        # be a hardcoded 'sourceimages/').
+        self.assertTrue(os.path.exists(os.path.join(self.tmp_root, result)))
+        self.assertEqual(
+            MatUtils.to_absolute(result, self.tmp_root, self.si_dir).lower(),
+            src_file.replace("\\", "/").lower(),
+        )
+
+    def test_in_project_outside_sourceimages_becomes_relative(self):
+        """Under the project root is the set of paths that HAVE a relative form."""
+        other = os.path.join(self.tmp_root, "renders")
+        os.makedirs(other, exist_ok=True)
+        src_file = os.path.join(other, "plate.png")
+        with open(src_file, "w"):
+            pass
+        node = self._make_file_node("tex_in_proj", src_file.replace("\\", "/"))
+
+        self.editor.normalize_paths([node], external_mode="rewrite")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "renders/plate.png")
+
+    def test_in_project_file_is_never_relocated(self):
+        """copy/move act on *external* textures; an in-project one just repaths."""
+        other = os.path.join(self.tmp_root, "renders")
+        os.makedirs(other, exist_ok=True)
+        src_file = os.path.join(other, "keep.png")
+        with open(src_file, "w"):
+            pass
+        node = self._make_file_node("tex_keep", src_file.replace("\\", "/"))
+
+        self.editor.normalize_paths([node], external_mode="move")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "renders/keep.png")
+        self.assertTrue(os.path.exists(src_file))
+
+    def test_sibling_root_prefix_is_not_inside_the_project(self):
+        """``<root>2/x.png`` shares the root's prefix but is not under it."""
+        sibling = self.tmp_root + "2"
+        os.makedirs(sibling, exist_ok=True)
+        try:
+            src_file = os.path.join(sibling, "outside.png")
+            with open(src_file, "w"):
+                pass
+            abs_path = src_file.replace("\\", "/")
+            node = self._make_file_node("tex_sibling", abs_path)
+
+            self.editor.normalize_paths([node], external_mode="rewrite")
+
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+        finally:
+            shutil.rmtree(sibling, ignore_errors=True)
+
+    def test_out_of_project_sourceimages_never_moves_a_file_onto_itself(self):
+        """An absolute rule outside the root makes dst == src; move must not delete."""
+        outside_si = tempfile.mkdtemp(prefix="external_sourceimages_")
+        try:
+            self._repoint_sourceimages(outside_si)
+            src_file = os.path.join(outside_si, "self.png")
+            with open(src_file, "w") as fh:
+                fh.write("DATA")
+            abs_path = src_file.replace("\\", "/")
+            node = self._make_file_node("tex_self", abs_path)
+
+            self.editor.normalize_paths([node], external_mode="move")
+
+            self.assertTrue(os.path.exists(src_file), "move deleted the source file")
+            # Rebound to the rule-relative form: Maya resolves it through the
+            # rule wherever the rule points, so it still names this file.
+            stored = cmds.getAttr(f"{node}.fileTextureName")
+            self.assertEqual(stored, "self.png")
+            self.assertEqual(
+                MatUtils.to_absolute(stored, self.tmp_root, outside_si).lower(),
+                abs_path.lower(),
+            )
+        finally:
+            shutil.rmtree(outside_si, ignore_errors=True)
+
+
+class TestMakePathsAbsolute(MayaTkTestCase):
+    """Behavioral tests for make_paths_absolute (inverse of Normalize Paths)."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_root = tempfile.mkdtemp(prefix="make_abs_test_")
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        os.makedirs(self.si_dir, exist_ok=True)
+
+        self._original_get_env_info = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return self._original_get_env_info(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+        self.editor = TexturePathEditor()
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+        super().tearDown()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def _make_file_node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def test_relative_becomes_absolute_under_workspace(self):
+        node = self._make_file_node("tex_mabs_rel", "sourceimages/foo.png")
+        self.editor.make_paths_absolute([node])
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertTrue(os.path.isabs(result), f"Expected absolute, got {result!r}")
+        expected = os.path.normpath(os.path.join(self.tmp_root, "sourceimages/foo.png"))
+        self.assertEqual(os.path.normpath(result), expected)
+
+    def test_absolute_path_untouched(self):
+        abs_path = os.path.join(self.si_dir, "bar.png").replace("\\", "/")
+        node = self._make_file_node("tex_mabs_abs", abs_path)
+        self.editor.make_paths_absolute([node])
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), abs_path)
+
+    def test_empty_path_skipped(self):
+        node = cmds.shadingNode("file", asTexture=True, name="tex_mabs_empty")
+        self.editor.make_paths_absolute([node])
+        self.assertFalse(cmds.getAttr(f"{node}.fileTextureName"))
+
+    def test_udim_token_preserved(self):
+        node = self._make_file_node("tex_mabs_udim", "sourceimages/tile_<UDIM>.png")
+        self.editor.make_paths_absolute([node])
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertTrue(os.path.isabs(result))
+        self.assertIn("<udim>", result.lower())
+
+    def test_missing_file_still_rewritten(self):
+        # A relative path whose file doesn't exist is still absolutized —
+        # the absolute form points where Maya would have looked.
+        node = self._make_file_node("tex_mabs_missing", "sourceimages/gone.png")
+        self.editor.make_paths_absolute([node])
+        self.assertTrue(os.path.isabs(cmds.getAttr(f"{node}.fileTextureName")))
+
+    def test_env_var_path_is_not_rewritten(self):
+        """It already resolves absolutely, so there is nothing to absolutize.
+
+        The command tested ``os.path.isabs`` on the RAW value, so a
+        ``$VAR/foo.png`` read as relative and was rewritten to
+        ``<proj>/$VAR/foo.png`` -- the variable pasted under the project, a
+        path that resolves nowhere and cannot be undone by re-running.
+        """
+        os.environ["MTK_TEST_TEXDIR"] = self.tmp_root.replace("\\", "/")
+        self.addCleanup(os.environ.pop, "MTK_TEST_TEXDIR", None)
+        stored = "$MTK_TEST_TEXDIR/sourceimages/env.png"
+        node = self._make_file_node("tex_mabs_env", stored)
+
+        self.editor.make_paths_absolute([node])
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), stored)
+
+    def test_previous_path_recorded(self):
+        node = self._make_file_node("tex_mabs_prev", "sourceimages/baz.png")
+        self.editor.make_paths_absolute([node])
+        self.assertEqual(self.editor.previous_paths.get(node), "sourceimages/baz.png")
+
+    def test_round_trip_with_normalize(self):
+        """The two commands are inverses -- over a texture that is THERE.
+
+        The file on disk is the premise: since 2026-08-25 Normalize refuses to
+        relativize a path naming no file, while ``make_paths_absolute`` still
+        rewrites one (``test_missing_file_still_rewritten``). The asymmetry is
+        deliberate -- absolutizing a missing texture spells out where Maya
+        looked for it, which is the diagnostic; relativizing one only claims a
+        portability it cannot deliver.
+        """
+        with open(os.path.join(self.si_dir, "round.png"), "w"):
+            pass
+        node = self._make_file_node("tex_mabs_round", "sourceimages/round.png")
+        self.editor.make_paths_absolute([node])
+        self.assertTrue(os.path.isabs(cmds.getAttr(f"{node}.fileTextureName")))
+        self.editor.normalize_paths([node], external_mode="rewrite")
+        result = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertFalse(os.path.isabs(result), f"Expected relative, got {result!r}")
+        self.assertIn("round.png", result)
+
+
+class TestSetTextureDirRelocate(MayaTkTestCase):
+    """Behavioral tests for ``set_texture_directory`` relocate modes."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_root = tempfile.mkdtemp(prefix="set_dir_test_")
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        os.makedirs(self.si_dir, exist_ok=True)
+
+        self._original_get_env_info = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return self._original_get_env_info(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+        self.editor = TexturePathEditor()
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+        super().tearDown()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def _make_file_node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def test_rewrite_mode_is_path_only(self):
+        """rewrite: no file movement, only path updates."""
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            src_file = os.path.join(ext_dir, "tex.png")
+            with open(src_file, "w") as fh:
+                fh.write("payload")
+            node = self._make_file_node("tex_rw", src_file.replace("\\", "/"))
+
+            target = os.path.join(self.tmp_root, "newdir")
+            os.makedirs(target, exist_ok=True)
+            # The file the node is being pointed AT. Rewrite moves nothing, so
+            # the target has to already hold it -- see
+            # test_rewrite_mode_will_not_point_a_node_at_a_file_that_is_not_there.
+            with open(os.path.join(target, "tex.png"), "w") as fh:
+                fh.write("payload")
+
+            self.editor.set_texture_directory([node], target, relocate_mode="rewrite")
+
+            # Path points at the new dir; SOURCE file untouched (nothing moved).
+            self.assertIn(
+                "newdir/tex.png",
+                cmds.getAttr(f"{node}.fileTextureName").replace("\\", "/"),
+            )
+            self.assertTrue(os.path.exists(src_file))
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_rewrite_mode_will_not_point_a_node_at_a_file_that_is_not_there(self):
+        """The default must not manufacture a broken path.
+
+        Reported 2026-08-25: picking sourceimages in rewrite mode repointed
+        every row at ``sourceimages/<basename>`` whether or not that file was
+        there, so the table filled with red rows naming files that never
+        existed at the destination.
+        """
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            src_file = os.path.join(ext_dir, "lonely.png")
+            with open(src_file, "w") as fh:
+                fh.write("payload")
+            stored = src_file.replace("\\", "/")
+            node = self._make_file_node("tex_rw_missing", stored)
+
+            target = os.path.join(self.tmp_root, "emptydir")
+            os.makedirs(target, exist_ok=True)
+            count = self.editor.set_texture_directory(
+                [node], target, relocate_mode="rewrite"
+            )
+
+            self.assertEqual(count, 0)
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), stored)
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_allow_missing_restores_the_blind_path_only_rewrite(self):
+        """The deliberate case: point a batch at a folder about to be filled."""
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            src_file = os.path.join(ext_dir, "lonely.png")
+            with open(src_file, "w") as fh:
+                fh.write("payload")
+            node = self._make_file_node("tex_rw_allow", src_file.replace("\\", "/"))
+
+            target = os.path.join(self.tmp_root, "emptydir2")
+            os.makedirs(target, exist_ok=True)
+            count = self.editor.set_texture_directory(
+                [node], target, relocate_mode="rewrite", allow_missing=True
+            )
+
+            self.assertEqual(count, 1)
+            self.assertIn(
+                "emptydir2/lonely.png",
+                cmds.getAttr(f"{node}.fileTextureName").replace("\\", "/"),
+            )
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_copy_mode_duplicates_file(self):
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            src_file = os.path.join(ext_dir, "tex_copy.png")
+            with open(src_file, "w") as fh:
+                fh.write("payload")
+            node = self._make_file_node("tex_copy", src_file.replace("\\", "/"))
+
+            target = os.path.join(self.tmp_root, "copydir")
+            os.makedirs(target, exist_ok=True)
+            self.editor.set_texture_directory([node], target, relocate_mode="copy")
+
+            self.assertTrue(os.path.exists(os.path.join(target, "tex_copy.png")))
+            self.assertTrue(os.path.exists(src_file))  # original preserved
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_move_mode_relocates_file(self):
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            src_file = os.path.join(ext_dir, "tex_move.png")
+            with open(src_file, "w") as fh:
+                fh.write("payload")
+            node = self._make_file_node("tex_move", src_file.replace("\\", "/"))
+
+            target = os.path.join(self.tmp_root, "movedir")
+            os.makedirs(target, exist_ok=True)
+            self.editor.set_texture_directory([node], target, relocate_mode="move")
+
+            self.assertTrue(os.path.exists(os.path.join(target, "tex_move.png")))
+            self.assertFalse(os.path.exists(src_file))  # original gone
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_move_does_not_delete_a_texture_already_in_the_target_dir(self):
+        """Regression: absolute backslash path already at the destination.
+
+        ``set_texture_directory`` used to return an absolute ``old_path``
+        verbatim while ``new_abs`` was forward-slashed, so the "already
+        there?" guard never matched. The node became a relocation source,
+        the destination "collision" was itself, the sizes matched — and move
+        mode ran ``os.remove`` on the very file it was repathing to.
+        Verified 2026-08-04: ``os.path.samefile(src, dst)`` was True.
+        """
+        target = os.path.join(self.tmp_root, "already")
+        os.makedirs(target, exist_ok=True)
+        tex = os.path.join(target, "there.png")
+        with open(tex, "w") as fh:
+            fh.write("payload")
+
+        # Stored the way Maya hands back a Windows path: absolute, backslashes.
+        node = self._make_file_node("tex_already", tex.replace("/", "\\"))
+        self.editor.set_texture_directory([node], target, relocate_mode="move")
+
+        self.assertTrue(
+            os.path.exists(tex), "move deleted the texture already at the destination"
+        )
+        with open(tex) as fh:
+            self.assertEqual(fh.read(), "payload")
+
+    def test_copy_collision_with_different_size_skips_rebind(self):
+        target = os.path.join(self.tmp_root, "destdir")
+        os.makedirs(target, exist_ok=True)
+        # Pre-existing same-name file with different content/size at destination.
+        existing = os.path.join(target, "collide.png")
+        with open(existing, "w") as fh:
+            fh.write("X")
+
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            src_file = os.path.join(ext_dir, "collide.png")
+            with open(src_file, "w") as fh:
+                fh.write("DIFFERENT CONTENT")
+            node = self._make_file_node("tex_collide", src_file.replace("\\", "/"))
+
+            self.editor.set_texture_directory([node], target, relocate_mode="copy")
+
+            # File node should NOT have been rebound (collision skipped).
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"),
+                src_file.replace("\\", "/"),
+            )
+            # Pre-existing file untouched; src preserved.
+            with open(existing) as fh:
+                self.assertEqual(fh.read(), "X")
+            self.assertTrue(os.path.exists(src_file))
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def _make_tiles(self, directory, stem, tiles=("1001", "1002")):
+        for tile in tiles:
+            with open(os.path.join(directory, f"{stem}.{tile}.png"), "w") as fh:
+                fh.write(f"payload {tile}")
+
+    def test_copy_mode_relocates_every_tile_of_a_udim_set(self):
+        """Regression (2026-08-25): a token path satisfied no ``os.path.exists``,
+        so NOTHING was copied -- and the node was repathed to the destination
+        anyway, landing on a folder holding no tile of that name."""
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            self._make_tiles(ext_dir, "rock")
+            stored = os.path.join(ext_dir, "rock.<UDIM>.png").replace("\\", "/")
+            node = self._make_file_node("tex_udim_copy", stored)
+
+            target = os.path.join(self.tmp_root, "udimdir")
+            os.makedirs(target, exist_ok=True)
+            self.editor.set_texture_directory([node], target, relocate_mode="copy")
+
+            for tile in ("1001", "1002"):
+                self.assertTrue(
+                    os.path.exists(os.path.join(target, f"rock.{tile}.png")),
+                    f"tile {tile} was not copied",
+                )
+            new_path = cmds.getAttr(f"{node}.fileTextureName")
+            self.assertIn("<UDIM>", new_path, "the token must survive the repath")
+            self.assertTrue(
+                MatUtils.texture_tiles(MatUtils.to_absolute(new_path, self.tmp_root)),
+                f"{new_path!r} names no file on disk",
+            )
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_copy_mode_repaths_a_set_that_does_not_start_at_1001(self):
+        """The tiles travel, so the node must follow them.
+
+        The repath gate has to ask the same question the relocation did. Asked
+        through the 1001 probe instead, a 1002-1005 set copied cleanly and was
+        then left on its old path -- files moved, node did not.
+        """
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            self._make_tiles(ext_dir, "late", tiles=("1002", "1003"))
+            stored = os.path.join(ext_dir, "late.<UDIM>.png").replace("\\", "/")
+            node = self._make_file_node("tex_late_copy", stored)
+
+            target = os.path.join(self.tmp_root, "latedir")
+            os.makedirs(target, exist_ok=True)
+            count = self.editor.set_texture_directory(
+                [node], target, relocate_mode="copy"
+            )
+
+            self.assertEqual(count, 1, "the node was not repathed onto its own tiles")
+            self.assertIn(
+                "latedir/late.<UDIM>.png",
+                cmds.getAttr(f"{node}.fileTextureName").replace("\\", "/"),
+            )
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_move_mode_relocates_every_tile_of_a_udim_set(self):
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            self._make_tiles(ext_dir, "moss")
+            stored = os.path.join(ext_dir, "moss.<UDIM>.png").replace("\\", "/")
+            node = self._make_file_node("tex_udim_move", stored)
+
+            target = os.path.join(self.tmp_root, "udimmove")
+            os.makedirs(target, exist_ok=True)
+            self.editor.set_texture_directory([node], target, relocate_mode="move")
+
+            for tile in ("1001", "1002"):
+                self.assertTrue(
+                    os.path.exists(os.path.join(target, f"moss.{tile}.png"))
+                )
+                self.assertFalse(
+                    os.path.exists(os.path.join(ext_dir, f"moss.{tile}.png"))
+                )
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_a_node_whose_texture_never_landed_is_not_repathed(self):
+        """Copy mode with a source that is not on disk: nothing to copy, so
+        nothing to point at -- the node keeps the path it had."""
+        ext_dir = tempfile.mkdtemp(prefix="src_")
+        try:
+            stored = os.path.join(ext_dir, "never_existed.png").replace("\\", "/")
+            node = self._make_file_node("tex_absent", stored)
+
+            target = os.path.join(self.tmp_root, "destdir2")
+            os.makedirs(target, exist_ok=True)
+            count = self.editor.set_texture_directory(
+                [node], target, relocate_mode="copy"
+            )
+
+            self.assertEqual(count, 0)
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), stored)
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+
+    def test_a_texture_already_at_the_target_is_still_repathed(self):
+        """The skip is "no file there", never "no copy happened" -- a texture
+        already sitting in the target needs no file op and must still be
+        rebound to the shorter (relative) form."""
+        target = os.path.join(self.tmp_root, "sourceimages")
+        src_file = os.path.join(target, "resident.png")
+        with open(src_file, "w") as fh:
+            fh.write("payload")
+        node = self._make_file_node("tex_resident", src_file.replace("\\", "/"))
+
+        count = self.editor.set_texture_directory([node], target, relocate_mode="copy")
+
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/resident.png"
+        )
+
+    def test_invalid_relocate_mode_raises(self):
+        with self.assertRaises(ValueError):
+            self.editor.set_texture_directory([], "/anywhere", relocate_mode="bogus")
+
+    # Move's guards: Set Directory's copy / move is a flat ``ptk.FileCollect``
+    # (BACKLOG 2026-10-23, S1; measured 2026-10-31 in a fresh mayapy).
+
+    @staticmethod
+    def _write(path, data):
+        """Write *data* to *path*; returns it forward-slashed, as stored."""
+        path = path.replace("\\", "/")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+
+    @staticmethod
+    def _read(path):
+        with open(path, "rb") as fh:
+            return fh.read()
+
+    def _reads(self, node):
+        """The bytes *node* reads now (its stored path resolved)."""
+        stored = cmds.getAttr(f"{node}.fileTextureName")
+        return self._read(MatUtils.to_absolute(stored, self.tmp_root, self.si_dir))
+
+    def _junction(self, link, target):
+        """A directory junction *link* naming *target* (no elevation needed;
+        ``test_mat_utils``' way), removed -- never its target -- by the
+        cleanups; skipped where none can be made."""
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(os.path.normpath(target), os.path.normpath(link))
+        except (ImportError, AttributeError, OSError) as error:
+            self.skipTest(f"no directory junction can be made here: {error}")
+        self.addCleanup(lambda: os.path.lexists(link) and os.rmdir(link))
+        return link
+
+    def test_move_never_takes_a_same_size_different_file_for_its_copy(self):
+        """A DIFFERENT file of the name and size at the destination passed the
+        old ``getsize`` test, so Move deleted the source -- the artist's only
+        copy -- and rebound the node to the other image (uncompressed maps of
+        one resolution always share a size)."""
+        theirs = self._write(f"{self.tmp_root}/same_size/wood.tga", b"THEIRS!!")
+        src = self._write(f"{self.tmp_root}/ext/wood.tga", b"OURS!!!!")
+        node = self._make_file_node("tex_same_size", src)
+
+        count = self.editor.set_texture_directory(
+            [node], os.path.dirname(theirs), relocate_mode="move"
+        )
+
+        self.assertEqual(self._read(src), b"OURS!!!!", "the only copy was deleted")
+        self.assertEqual(self._read(theirs), b"THEIRS!!")
+        self.assertEqual(count, 0)
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), src, "rebound to the other image"
+        )
+
+    def test_move_into_an_alias_of_the_source_folder_keeps_the_only_copy(self):
+        """A destination that is a junction (a subst, a mapped drive) naming the
+        source's own folder: the "copy" there IS the source, so Move removed it
+        -- the only copy -- and left the node on a path to nothing. The file
+        stays; the node reads it through the folder it was pointed at."""
+        src = self._write(f"{self.tmp_root}/real/metal.png", b"ONLY COPY")
+        alias = self._junction(
+            os.path.join(self.tmp_root, "alias"), os.path.dirname(src)
+        )
+        node = self._make_file_node("tex_alias", src)
+
+        count = self.editor.set_texture_directory([node], alias, relocate_mode="move")
+
+        self.assertEqual(self._read(src), b"ONLY COPY", "the only copy was deleted")
+        self.assertEqual(count, 1)
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "alias/metal.png")
+        self.assertEqual(self._reads(node), b"ONLY COPY")
+
+    def test_move_repaths_every_node_reading_one_file(self):
+        """Two nodes of the batch reading one file: the first moved it, the
+        second found its source gone, called the copy a "different size"
+        collision and was left on the deleted path."""
+        src = self._write(f"{self.tmp_root}/ext/stone.png", b"STONE")
+        nodes = [self._make_file_node(n, src) for n in ("tex_shared_a", "tex_shared_b")]
+        target = os.path.join(self.tmp_root, "shared_dest")
+
+        count = self.editor.set_texture_directory(nodes, target, relocate_mode="move")
+
+        self.assertEqual(count, 2)
+        for node in nodes:
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"), "shared_dest/stone.png"
+            )
+            self.assertEqual(self._reads(node), b"STONE")
+        self.assertFalse(os.path.exists(src))
+
+    def test_move_copies_a_file_a_node_outside_the_batch_still_reads(self):
+        """A node left out of the batch (an unselected row, a hidden Arnold
+        node) reading the same file was stranded on a deleted path."""
+        src = self._write(f"{self.tmp_root}/ext/moss.png", b"MOSS")
+        moved = self._make_file_node("tex_in_batch", src)
+        outside = self._make_file_node("tex_outside", src)
+
+        self.editor.set_texture_directory(
+            [moved], os.path.join(self.tmp_root, "moss_dest"), relocate_mode="move"
+        )
+
+        self.assertEqual(cmds.getAttr(f"{outside}.fileTextureName"), src)
+        self.assertEqual(self._read(src), b"MOSS", "the outside reader was stranded")
+        self.assertEqual(self._reads(moved), b"MOSS")
+
+    def test_move_never_rebinds_one_namesake_to_another(self):
+        """Two different same-sized files of one name in one batch: the second
+        was taken for the first's copy, its source deleted and its node bound
+        to the first's bytes. Set Directory keeps nothing apart in subfolders:
+        a name two files claim moves neither."""
+        wood = self._write(f"{self.tmp_root}/wood/diffuse.tga", b"WOOD")
+        metal = self._write(f"{self.tmp_root}/metal/diffuse.tga", b"METL")
+        nodes = {
+            self._make_file_node("tex_wood", wood): b"WOOD",
+            self._make_file_node("tex_metal", metal): b"METL",
+        }
+
+        self.editor.set_texture_directory(
+            list(nodes), os.path.join(self.tmp_root, "one"), relocate_mode="move"
+        )
+
+        for node, data in nodes.items():
+            self.assertEqual(self._reads(node), data, f"{node} reads another file")
+
+    def test_a_texture_below_the_target_is_brought_up_to_it(self):
+        """Set Directory is flat: "directly under the target" holds for a file
+        in one of its subfolders too (a gather would leave it in place)."""
+        target = os.path.join(self.tmp_root, "flat")
+        src = self._write(f"{target}/sub/rock.png", b"ROCK")
+        node = self._make_file_node("tex_below", src)
+
+        self.editor.set_texture_directory([node], target, relocate_mode="move")
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "flat/rock.png")
+        self.assertEqual(self._reads(node), b"ROCK")
+        self.assertFalse(os.path.exists(src))
+
+
+class _Reported:
+    """A lent logger: records ``(level, message)`` with the log_group shape."""
+
+    def __init__(self):
+        self.lines = []
+
+    def __getattr__(self, level):
+        def emit(message, *_args, **_kwargs):
+            self.lines.append((level, str(message)))
+
+        return emit
+
+    def log_group(self, title, items, level="info"):
+        self.lines.append((level, "\n".join([str(title), *map(str, items)])))
+
+    def text(self, level=None):
+        return "\n".join(m for lvl, m in self.lines if level is None or lvl == level)
+
+
+class TestFindAndCopy(MayaTkTestCase):
+    """Find & Copy's work: one dict of answers in -- the two folders and the
+    mode -- relocated files and repathed nodes out. The form that asks for them
+    (both folders on one panel, side by side; reported 2026-08-25: users picked
+    their texture folder as the DESTINATION across two back-to-back pickers) is
+    tentacle's panel, tested there (``test_texture_path_editor_panel.py``)."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_root = tempfile.mkdtemp(prefix="find_copy_test_")
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        self.ext_dir = os.path.join(self.tmp_root, "external")
+        self.dest_dir = os.path.join(self.tmp_root, "dest")
+        for d in (self.si_dir, self.ext_dir, self.dest_dir):
+            os.makedirs(d, exist_ok=True)
+
+        self._original_get_env_info = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return self._original_get_env_info(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+        self.editor = TexturePathEditor()
+        self.reported = _Reported()
+        self.editor.active_logger = self.reported
+        self.answers = None
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+        super().tearDown()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def _write(self, directory, name, payload="payload"):
+        path = os.path.join(directory, name).replace("\\", "/")
+        with open(path, "w") as fh:
+            fh.write(payload)
+        return path
+
+    def _make_file_node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def _path_of(self, node):
+        return (cmds.getAttr(f"{node}.fileTextureName") or "").replace("\\", "/")
+
+    def _sub(self, *parts):
+        path = os.path.join(self.tmp_root, *parts)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _read(*parts):
+        with open(os.path.join(*parts)) as fh:
+            return fh.read()
+
+    def _answer(self, source_dir="", dest_dir=None, mode="Copy"):
+        self.answers = {
+            "source_dir": source_dir,
+            "dest_dir": self.dest_dir if dest_dir is None else dest_dir,
+            "mode": mode,
+        }
+
+    def _run(self, nodes, dry_run=False):
+        """What the panel's Run hands the engine; returns whether there was work."""
+        return self.editor.find_and_copy_textures(
+            [str(n) for n in nodes], self.answers, dry_run=dry_run
+        )
+
+    # -- the sources -----------------------------------------------------------
+
+    def _rows(self, nodes, **answers):
+        """``{node: plan row}`` of ``plan_find_and_copy`` over *nodes*."""
+        self._answer(**answers)
+        return {
+            r["owner"]: r
+            for r in self.editor.plan_find_and_copy([str(n) for n in nodes], self.answers)
+        }
+
+    def test_the_unresolved_are_the_nodes_whose_path_resolves_nowhere(self):
+        good = self._make_file_node("tex_good", self._write(self.ext_dir, "good.png"))
+        gone = self._make_file_node(
+            "tex_gone", os.path.join(self.ext_dir, "gone.png").replace("\\", "/")
+        )
+        self.assertEqual(self.editor.unresolved_file_nodes([good, gone]), [gone])
+        rows = self._rows([good, gone])
+        self.assertTrue(os.path.isfile(rows[good]["source"]))
+        self.assertEqual(rows[gone]["status"], ptk.FileCollect.MISSING)
+
+    def test_a_relative_path_resolves_against_the_workspace(self):
+        self._write(self.si_dir, "rel.png")
+        node = self._make_file_node("tex_rel", "sourceimages/rel.png")
+        self.assertEqual(
+            os.path.normcase(self._rows([node])[node]["source"]),
+            os.path.normcase(os.path.join(self.si_dir, "rel.png").replace("\\", "/")),
+        )
+
+    def test_a_udim_node_whose_tiles_are_on_disk_is_its_own_source(self):
+        """A UDIM path names its SET: present when its tiles are, never re-sought."""
+        self._write(self.ext_dir, "t.1001.png")
+        node = self._make_file_node(
+            "tex_udim", os.path.join(self.ext_dir, "t.<UDIM>.png").replace("\\", "/")
+        )
+        self.assertEqual(self.editor.unresolved_file_nodes([node]), [])
+        self.assertTrue(self._rows([node])[node]["source"].endswith("t.<UDIM>.png"))
+
+    # -- same-named textures (BACKLOG 2026-10-23, S1) ---------------------------
+
+    def test_same_named_textures_land_apart_each_node_on_its_own(self):
+        """``wood/diffuse.png`` and ``metal/diffuse.png`` were keyed by NAME: one
+        copy, both nodes repointed at it, and the log reported success."""
+        wood = self._make_file_node(
+            "wood_file",
+            self._write(self._sub("tex", "wood"), "diffuse.png", payload="WOOD"),
+        )
+        metal = self._make_file_node(
+            "metal_file",
+            self._write(self._sub("tex", "metal"), "diffuse.png", payload="METAL"),
+        )
+        self._answer()
+
+        self._run([wood, metal])
+
+        self.assertTrue(self._path_of(wood).endswith("dest/wood/diffuse.png"))
+        self.assertTrue(self._path_of(metal).endswith("dest/metal/diffuse.png"))
+        self.assertEqual(self._read(self.dest_dir, "wood", "diffuse.png"), "WOOD")
+        self.assertEqual(self._read(self.dest_dir, "metal", "diffuse.png"), "METAL")
+        self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "diffuse.png")))
+
+    def test_an_identical_pair_shares_one_copy_a_namesake_is_kept_apart(self):
+        a = self._make_file_node(
+            "a_file", self._write(self._sub("one"), "diffuse.png", payload="SAME")
+        )
+        b = self._make_file_node(
+            "b_file", self._write(self._sub("two"), "diffuse.png", payload="SAME")
+        )
+        c = self._make_file_node(
+            "c_file", self._write(self._sub("three"), "diffuse.png", payload="OTHER")
+        )
+        self._answer()
+
+        self._run([a, b, c])
+
+        self.assertEqual(self._path_of(a), self._path_of(b), "one copy shared")
+        self.assertTrue(self._path_of(a).endswith("dest/one/diffuse.png"))
+        self.assertTrue(self._path_of(c).endswith("dest/three/diffuse.png"))
+        self.assertEqual(sorted(os.listdir(self.dest_dir)), ["one", "three"])
+
+    def test_a_move_leaves_a_file_a_reader_outside_the_scope_reads(self):
+        """A file node the scope leaves out -- an Arnold-only one under Exclude
+        Arnold Nodes, an unselected row -- reading the file a scoped node reads:
+        the Move took the file away and left that node on a deleted path."""
+        shared = self._write(self.ext_dir, "wood.png", payload="WOOD")
+        scoped = self._make_file_node("tex_scoped", shared)
+        outside = self._make_file_node("tex_outside", shared)
+        self._answer(mode="Move")
+
+        self._run([scoped])
+
+        self.assertTrue(os.path.exists(shared), "the outside reader was stranded")
+        self.assertTrue(self._path_of(scoped).endswith("dest/wood.png"))
+        self.assertEqual(self._path_of(outside), shared)
+        self.assertEqual(self.editor.unresolved_file_nodes([outside]), [])
+
+    def test_an_ambiguous_search_hit_waits_for_its_pick(self):
+        """Two different same-named files under the search folder: it took the
+        NEWEST; the row lists both now, and a pick commits the one chosen."""
+        pool = self._sub("pool")
+        older = self._write(self._sub("pool", "a"), "lost.png", payload="OLD")
+        self._write(self._sub("pool", "b"), "lost.png", payload="NEW")
+        os.utime(older, (1_000_000, 1_000_000))
+        node = self._make_file_node(
+            "tex_lost", os.path.join(self.tmp_root, "gone", "lost.png").replace("\\", "/")
+        )
+        self._answer(source_dir=pool)
+
+        (row,) = self.editor.plan_find_and_copy([node], self.answers)
+        self.assertEqual(row["status"], ptk.FileCollect.AMBIGUOUS)
+        self.assertEqual(len(row["candidates"]), 2)
+        self.assertFalse(self._run([node]), "nothing to collect until a pick")
+        self.assertIn("gone/lost.png", self._path_of(node), "never guessed")
+
+        picked = self.editor.plan_find_and_copy(
+            [node], self.answers, choices={("texture", node): older}
+        )
+        self.editor.find_and_copy_textures([node], self.answers, plan=picked)
+        self.assertTrue(self._path_of(node).endswith("dest/lost.png"))
+        self.assertEqual(self._read(self.dest_dir, "lost.png"), "OLD")
+
+    # -- the run --------------------------------------------------------------
+
+    def test_a_copy_lands_and_repaths(self):
+        node = self._make_file_node("tex_v", self._write(self.ext_dir, "valid.png"))
+        self._answer()
+
+        self.assertTrue(self._run([node]))
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "valid.png")))
+        self.assertTrue(self._path_of(node).endswith("dest/valid.png"))
+
+    def test_a_destination_inside_the_project_is_stored_relative(self):
+        node = self._make_file_node("tex_si", self._write(self.ext_dir, "auto.png"))
+        self._answer(dest_dir=self.si_dir)
+
+        self._run([node])
+
+        self.assertTrue(os.path.exists(os.path.join(self.si_dir, "auto.png")))
+        self.assertEqual(self._path_of(node), "sourceimages/auto.png")
+
+    def test_move_removes_the_original(self):
+        tex = self._write(self.ext_dir, "moved.png")
+        node = self._make_file_node("tex_mv", tex)
+        self._answer(mode="Move")
+
+        self._run([node])
+
+        self.assertFalse(os.path.exists(tex), "Move must remove the original")
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "moved.png")))
+
+    def test_a_file_found_under_another_case_is_pointed_at_as_it_landed(self):
+        """The search matches names case-insensitively, so a stored ``WOOD.png``
+        finds ``Wood.png``; the node must name the file as it landed (a
+        case-sensitive filesystem opens nothing else)."""
+        self._write(self.ext_dir, "Wood.png")
+        node = self._make_file_node(
+            "tex_case", os.path.join(self.ext_dir, "gone", "WOOD.png").replace("\\", "/")
+        )
+        self._answer(source_dir=self.ext_dir)
+
+        self._run([node])
+
+        self.assertIn("Wood.png", os.listdir(self.dest_dir))
+        self.assertTrue(self._path_of(node).endswith("dest/Wood.png"), self._path_of(node))
+
+    def test_an_empty_source_skips_the_unresolved_and_keeps_the_rest(self):
+        """48-of-50 valid: no search folder skips 2, it doesn't abort 48."""
+        good = self._make_file_node("tex_k", self._write(self.ext_dir, "keep.png"))
+        gone = self._make_file_node(
+            "tex_m2", os.path.join(self.ext_dir, "nope.png").replace("\\", "/")
+        )
+        self._answer(source_dir="")
+
+        self._run([good, gone])
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "keep.png")))
+        self.assertTrue(self._path_of(good).endswith("dest/keep.png"))
+        self.assertTrue(self._path_of(gone).endswith("external/nope.png"))
+
+    def test_a_search_folder_never_re_sources_a_path_that_resolves(self):
+        """The file the scene is RENDERING is the one that relocates, whatever
+        else the search folder holds under that name."""
+        live = self._write(self.ext_dir, "dup2.png", payload="THE LIVE ONE")
+        other_dir = os.path.join(self.tmp_root, "newer")
+        os.makedirs(other_dir, exist_ok=True)
+        self._write(other_dir, "dup2.png", payload="a same-named stranger")
+        node = self._make_file_node("tex_re", live)
+        self._answer(source_dir=other_dir)
+
+        self._run([node])
+
+        with open(os.path.join(self.dest_dir, "dup2.png")) as fh:
+            self.assertEqual(fh.read(), "THE LIVE ONE")
+
+    def test_a_valid_path_and_a_search_hit_of_its_name_each_keep_their_own(self):
+        """The search's hit is the BROKEN node's file, never the valid node's: it
+        bound every same-named node to the one valid copy."""
+        valid = self._write(self.ext_dir, "dup.png", payload="THE REAL ONE")
+        stale_dir = os.path.join(self.tmp_root, "archive")
+        os.makedirs(stale_dir, exist_ok=True)
+        self._write(stale_dir, "dup.png", payload="stale")
+        good = self._make_file_node("tex_dup", valid)
+        gone = self._make_file_node(
+            "tex_gone2",
+            os.path.join(self.tmp_root, "vanished", "dup.png").replace("\\", "/"),
+        )
+        self._answer(source_dir=stale_dir)
+
+        self._run([good, gone])
+
+        self.assertTrue(self._path_of(good).endswith("dest/external/dup.png"))
+        self.assertEqual(self._read(self.dest_dir, "external", "dup.png"), "THE REAL ONE")
+        self.assertTrue(self._path_of(gone).endswith("dest/archive/dup.png"))
+
+    def test_a_destination_that_does_not_exist_yet_is_created(self):
+        node = self._make_file_node("tex_new", self._write(self.ext_dir, "new.png"))
+        fresh = os.path.join(self.tmp_root, "brand_new")
+        self._answer(dest_dir=fresh)
+
+        self._run([node])
+
+        self.assertTrue(os.path.exists(os.path.join(fresh, "new.png")))
+
+    def test_move_does_not_delete_a_texture_already_at_the_destination(self):
+        """A valid path inside the destination is a self-copy for Move: it is
+        carried to the repath directly -- and the file must survive."""
+        tex = self._write(self.si_dir, "there.png")
+        node = self._make_file_node("tex_here", tex.replace("/", "\\"))
+        self._answer(dest_dir=self.si_dir, mode="Move")
+
+        self._run([node])
+
+        self.assertTrue(os.path.exists(tex), "move deleted the destination's own file")
+        self.assertEqual(self._path_of(node), "sourceimages/there.png")
+
+    # -- the report -----------------------------------------------------------
+
+    def test_the_report_goes_to_the_lent_logger(self):
+        node = self._make_file_node("tex_rep", self._write(self.ext_dir, "rep.png"))
+        self._answer()
+
+        self._run([node])
+
+        self.assertIn("Remapped 1 file nodes.", self.reported.text("success"))
+
+    def test_the_report_falls_back_to_mayas_channels_with_no_logger(self):
+        self.editor.active_logger = None
+        node = self._make_file_node("tex_hd", self._write(self.ext_dir, "hd.png"))
+        self._answer()
+
+        self._run([node])
+
+        self.assertEqual(self.reported.lines, [])
+        self.assertTrue(self._path_of(node).endswith("dest/hd.png"))
+
+    # -- bookkeeping ------------------------------------------------------------
+
+    def test_repath_records_the_previous_path_for_the_tooltip(self):
+        node = self._make_file_node("tex_prev", self._write(self.ext_dir, "prev.png"))
+        before = self._path_of(node)
+        self._answer()
+
+        self._run([node])
+
+        self.assertEqual(self.editor.previous_paths.get(node), before)
+
+    def test_a_path_that_is_already_final_is_not_rewritten(self):
+        """Re-running over the same destination must not dirty every plug."""
+        self._write(self.si_dir, "settled.png")
+        node = self._make_file_node("tex_settled", "sourceimages/settled.png")
+        self._answer(dest_dir=self.si_dir)
+
+        writes = []
+        original_set_attr = cmds.setAttr
+
+        def counting_set_attr(plug, *args, **kwargs):
+            if str(plug).endswith(".fileTextureName"):
+                writes.append(str(plug))
+            return original_set_attr(plug, *args, **kwargs)
+
+        cmds.setAttr = counting_set_attr
+        try:
+            self._run([node])
+        finally:
+            cmds.setAttr = original_set_attr
+
+        self.assertEqual(writes, [])
+        self.assertEqual(self._path_of(node), "sourceimages/settled.png")
+        self.assertEqual(self.editor.previous_paths, {})
+
+    # -- dry run ----------------------------------------------------------------
+
+    def test_a_dry_run_writes_nothing(self):
+        """No file relocated, no plug touched, and the destination is not even
+        created -- the whole point is that it can be run to look."""
+        tex = self._write(self.ext_dir, "look.png")
+        node = self._make_file_node("tex_look", tex)
+        before = self._path_of(node)
+        fresh_dest = os.path.join(self.tmp_root, "not_yet")
+        self._answer(dest_dir=fresh_dest)
+
+        self.assertTrue(self._run([node], dry_run=True), "a plan with work in it")
+
+        self.assertTrue(os.path.exists(tex))
+        self.assertFalse(os.path.exists(fresh_dest), "a preview created the destination")
+        self.assertEqual(self._path_of(node), before)
+        self.assertEqual(self.editor.previous_paths, {})
+
+    def test_a_dry_run_reports_what_would_move_and_repath(self):
+        self._make_file_node("tex_rep1", self._write(self.ext_dir, "rep1.png"))
+        self._answer()
+
+        self._run(["tex_rep1"], dry_run=True)
+
+        report = self.reported.text()
+        self.assertIn("Dry run", report)
+        self.assertIn("rep1.png", report)
+        self.assertIn("Would repath 1 texture(s)", report)
+        # The library says nothing was written; the panel words the Apply step.
+        self.assertIn("Nothing has been written", report)
+
+    def test_the_preview_promises_the_path_the_commit_writes(self):
+        """Both derive it through ``plan_find_and_copy`` (``ptk.FileCollect.plan``)."""
+        node = self._make_file_node("tex_same", self._write(self.ext_dir, "same.png"))
+        self._answer(dest_dir=self.si_dir)
+
+        self._run([node], dry_run=True)
+        promised = self.reported.text()
+        self._run([node])
+
+        stored = self._path_of(node)
+        self.assertEqual(stored, "sourceimages/same.png")
+        self.assertIn(stored, promised)
+
+    def test_a_preview_with_nothing_to_do_says_so(self):
+        self._write(self.si_dir, "settled2.png")
+        node = self._make_file_node("tex_settled2", "sourceimages/settled2.png")
+        self._answer(dest_dir=self.si_dir)
+
+        self.assertFalse(self._run([node], dry_run=True))
+        self.assertIn("nothing would change", self.reported.text())
+
+    def test_a_long_plan_says_it_was_truncated(self):
+        """A cut listing that does not SAY it was cut reads as the whole plan."""
+        nodes = [
+            self._make_file_node(f"tex_many{i}", self._write(self.ext_dir, f"many{i}.png"))
+            for i in range(ptk.FileCollect.PREVIEW_ROWS + 3)
+        ]
+        self._answer()
+
+        self._run(nodes, dry_run=True)
+
+        self.assertIn("and 3 more", self.reported.text())
+
+
+class TestRelativePathsSurviveTheWrite(MayaTkTestCase):
+    """A relative path this panel writes must still be relative afterwards.
+
+    ``cmds.setAttr`` is not literal on ``fileTextureName``: it expands a
+    *resolvable* relative path straight back to absolute, so the bug only
+    appears for textures that actually exist AND that Maya's own project can
+    resolve. Every other test in this file misses both halves — they patch
+    ``EnvUtils.get_env_info`` at the Python level while Maya's project stays
+    elsewhere, so nothing resolves and every relative string survives by
+    accident. These set Maya's REAL workspace and write REAL files, which is
+    the only configuration that reproduces it (probe:
+    ``tests/temp_tests/probe_ftn_expansion.py``).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_root = tempfile.mkdtemp(prefix="ftn_literal_test_")
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        os.makedirs(self.si_dir, exist_ok=True)
+
+        # Maya must resolve against this root, not just our fake env reader —
+        # the expansion is done by the DG, which never sees the patch.
+        self._original_workspace = cmds.workspace(q=True, rootDirectory=True)
+        cmds.workspace(self.tmp_root, openWorkspace=True)
+
+        self._original_get_env_info = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return self._original_get_env_info(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+        self.editor = TexturePathEditor()
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+        if self._original_workspace:
+            cmds.workspace(self._original_workspace, openWorkspace=True)
+        super().tearDown()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    def _real_texture(self, name):
+        """A texture that EXISTS — an absent file is never expanded."""
+        path = os.path.join(self.si_dir, name).replace("\\", "/")
+        with open(path, "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+        return path
+
+    def _make_file_node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def test_setattr_expands_a_resolvable_relative_path(self):
+        """The Maya behavior the fix exists for — pinned so it can't silently change."""
+        real = self._real_texture("premise.png")
+        node = self._make_file_node("tex_premise", real)
+        cmds.setAttr(
+            f"{node}.fileTextureName", "sourceimages/premise.png", type="string"
+        )
+        self.assertTrue(
+            os.path.isabs(cmds.getAttr(f"{node}.fileTextureName")),
+            "cmds.setAttr no longer expands — the literal write may be redundant",
+        )
+
+    def test_normalize_leaves_an_existing_texture_relative(self):
+        """The reported regression: every path displayed absolute."""
+        real = self._real_texture("normalized.png")
+        node = self._make_file_node("tex_norm", real)
+
+        self.editor.normalize_paths([node])
+
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/normalized.png"
+        )
+
+    def test_browse_and_set_directory_also_store_relative(self):
+        """Same trap, the other two writers that relativize."""
+        real = self._real_texture("flat.png")
+        node = self._make_file_node("tex_flat", real)
+
+        self.editor.set_texture_directory([node], self.si_dir, relocate_mode="rewrite")
+
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/flat.png"
+        )
+
+    def test_reload_textures_does_not_flatten_relative_paths(self):
+        """Reload writes the path back to force a re-read — verbatim, now.
+
+        The panel's own Find & Copy tooltip tells the user to reload after a
+        relocation, so this turned every freshly relativized path absolute.
+        """
+        real = self._real_texture("reloaded.png")
+        node = self._make_file_node("tex_reload", real)
+        shader = cmds.shadingNode("lambert", asShader=True)
+        cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+        self.editor.normalize_paths([node])
+        before = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertEqual(before, "sourceimages/reloaded.png")  # precondition
+
+        MatUtils.reload_textures(refresh_viewport=False)
+
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), before)
+
+    def test_find_and_copy_stores_a_relative_path(self):
+        """The remap loop is a writer too — same trap, same fix."""
+        ext_dir = os.path.join(self.tmp_root, "external")
+        os.makedirs(ext_dir, exist_ok=True)
+        src = os.path.join(ext_dir, "found.png").replace("\\", "/")
+        with open(src, "wb") as fh:
+            fh.write(b"payload")
+        node = self._make_file_node("tex_found", src)
+        self.editor.find_and_copy_textures(
+            [node],
+            {"source_dir": "", "dest_dir": self.si_dir, "mode": "Copy"},
+        )
+
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), "sourceimages/found.png"
+        )
+
+
+class TestRelativePathsAcrossTheReopen(MayaTkTestCase):
+    """What a normalized path does across save / open / save.
+
+    ``TestRelativePathsSurviveTheWrite`` pins the write; this pins the round
+    trip through disk. The stored form is ROOT-relative
+    (``sourceimages/foo.png``) — Maya's own spelling, the first thing its
+    loader tries, and the only relative form the FBX plug-in can locate at
+    write time. Two consequences pull in opposite directions and both are
+    pinned here:
+
+    - the SAVED scene carries the relative path, which is the portability
+      that matters when a ``.ma`` is handed to another machine; and
+    - Maya EXPANDS that path back to absolute as it LOADS the scene, so the
+      next save writes the absolute form back (measured across three
+      generations, ``tests/temp_tests/probe_root_relative_reopen.py``).
+
+    The recovery is what makes that trade safe, so it is pinned too:
+    Normalize is idempotent and restores the relative form in one click, and
+    the exporter runs the same conversion on every export, so what SHIPS is
+    never affected.
+
+    The RULE-relative form (``foo.png``) emitted between 2026-08-18 and
+    2026-08-25 is the one that survives a reopen verbatim, but it names no
+    folder, the FBX writer cannot locate it, and the exporter's own gate read
+    it as a missing texture — see
+    ``test_the_legacy_rule_relative_form_is_upgraded_in_place``.
+
+    A real ``workspace.mel`` is mandatory here: without the file rule the
+    roots resolve differently and every assertion below would pass or fail
+    for the wrong reason.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_root = tempfile.mkdtemp(prefix="ftn_reopen_test_")
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        self.scenes_dir = os.path.join(self.tmp_root, "scenes")
+        os.makedirs(self.si_dir, exist_ok=True)
+        os.makedirs(self.scenes_dir, exist_ok=True)
+        with open(os.path.join(self.tmp_root, "workspace.mel"), "w") as fh:
+            fh.write(
+                'workspace -fr "sourceImages" "sourceimages";\n'
+                'workspace -fr "scene" "scenes";\n'
+                'workspace -fr "mayaAscii" "scenes";\n'
+            )
+
+        self._original_workspace = cmds.workspace(q=True, rootDirectory=True)
+        cmds.workspace(self.tmp_root, openWorkspace=True)
+
+        self._original_get_env_info = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return self._original_get_env_info(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+        self.editor = TexturePathEditor()
+
+    def tearDown(self):
+        EnvUtils.get_env_info = staticmethod(self._original_get_env_info)
+        cmds.file(new=True, force=True)
+        if self._original_workspace:
+            cmds.workspace(self._original_workspace, openWorkspace=True)
+        super().tearDown()
+        shutil.rmtree(self.tmp_root, ignore_errors=True)
+
+    @staticmethod
+    def _png(path, size):
+        """A REAL PNG — ``outSizeX`` is how we prove WHICH file resolved."""
+        import struct
+        import zlib
+
+        raw = b"".join(b"\x00" + b"\xff\x00\x00" * size for _ in range(size))
+
+        def chunk(tag, data):
+            body = tag + data
+            return (
+                struct.pack(">I", len(data))
+                + body
+                + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+            )
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(
+                b"\x89PNG\r\n\x1a\n"
+                + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw))
+                + chunk(b"IEND", b"")
+            )
+        return path.replace("\\", "/")
+
+    def _texture(self, relative_name, size=4):
+        return self._png(os.path.join(self.si_dir, relative_name), size)
+
+    def _node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def _save(self, name):
+        scene = os.path.join(self.scenes_dir, name).replace("\\", "/")
+        cmds.file(rename=scene)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        return scene
+
+    def _reopen(self, scene):
+        cmds.file(new=True, force=True)
+        cmds.workspace(self.tmp_root, openWorkspace=True)
+        cmds.file(scene, open=True, force=True)
+
+    @staticmethod
+    def _stored_on_disk(scene):
+        with open(scene, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if 'setAttr ".ftn"' in line:
+                    return line.strip().split('"string" ')[-1].strip(';"')
+        return None
+
+    def test_normalize_stores_the_root_relative_form(self):
+        """The folder is part of the path — the user's own spelling."""
+        self._node("tex_form", self._texture("form.png"))
+
+        self.editor.normalize_paths(["tex_form"])
+
+        self.assertEqual(
+            cmds.getAttr("tex_form.fileTextureName"), "sourceimages/form.png"
+        )
+
+    def test_the_saved_scene_carries_the_relative_path(self):
+        """The portability that matters: the ``.ma`` on disk is machine-independent.
+
+        This is what a colleague opening the scene from a different drive
+        letter or Dropbox mount actually reads.
+        """
+        self._node("tex_saved", self._texture("saved.png"))
+        self.editor.normalize_paths(["tex_saved"])
+
+        stored = self._stored_on_disk(self._save("saved.ma"))
+
+        self.assertEqual(stored, "sourceimages/saved.png")
+
+    def test_maya_expands_the_relative_path_on_reopen(self):
+        """The known cost of the root-relative form, pinned so it cannot surprise.
+
+        Maya resolves the path against the project root as it loads and keeps
+        the ABSOLUTE result in memory, so the next save writes that back and
+        the panel shows absolute paths in the next session. The test below is
+        the recovery. Should Maya ever stop doing this, THIS test fails first
+        and the trade documented on ``to_project_relative`` is stale.
+        """
+        self._node("tex_expand", self._texture("expand.png"))
+        self.editor.normalize_paths(["tex_expand"])
+
+        self._reopen(self._save("expand.ma"))
+
+        self.assertTrue(
+            os.path.isabs(cmds.getAttr("tex_expand.fileTextureName")),
+            "Maya no longer expands a root-relative .ftn on load",
+        )
+
+    def test_normalize_restores_the_relative_form_after_a_reopen(self):
+        """One click puts it back — which is what makes the expansion survivable."""
+        self._node("tex_restore", self._texture("restore.png"))
+        self.editor.normalize_paths(["tex_restore"])
+        self._reopen(self._save("restore.ma"))
+
+        self.editor.normalize_paths(["tex_restore"])
+
+        self.assertEqual(
+            cmds.getAttr("tex_restore.fileTextureName"), "sourceimages/restore.png"
+        )
+
+    def test_normalize_is_idempotent_across_generations(self):
+        """Three save/open generations, normalized each time: no drift."""
+        self._node("tex_gen", self._texture("gen.png"))
+
+        scene = self._save("gen0.ma")
+        for generation in range(3):
+            self._reopen(scene)
+            self.editor.normalize_paths(["tex_gen"])
+            self.assertEqual(
+                cmds.getAttr("tex_gen.fileTextureName"),
+                "sourceimages/gen.png",
+                f"drifted at generation {generation}",
+            )
+            scene = self._save(f"gen{generation + 1}.ma")
+
+    def test_the_relative_form_still_loads_the_right_image(self):
+        """A stable string that resolves to nothing is not a fix.
+
+        ``outSizeX`` is read from the decoded image, so it names the file Maya
+        actually found.
+        """
+        self._node("tex_loads", self._texture("loads.png", size=8))
+        self.editor.normalize_paths(["tex_loads"])
+
+        self._reopen(self._save("loads.ma"))
+
+        self.assertEqual(cmds.getAttr("tex_loads.outSizeX"), 8.0)
+
+    def test_a_subfolder_under_sourceimages_keeps_its_subfolder(self):
+        """Relativizing must not flatten ``sourceimages/sub/…`` to a basename."""
+        self._node("tex_sub", self._texture("sub/deep.png", size=16))
+
+        self.editor.normalize_paths(["tex_sub"])
+
+        self.assertEqual(
+            cmds.getAttr("tex_sub.fileTextureName"), "sourceimages/sub/deep.png"
+        )
+
+        self._reopen(self._save("sub.ma"))
+
+        self.assertEqual(cmds.getAttr("tex_sub.outSizeX"), 16.0)
+
+    def test_a_namesake_at_the_project_root_no_longer_shadows_the_form(self):
+        """The hazard the RULE-relative form carried, and why this one drops it.
+
+        A bare ``dup.png`` resolves against the project ROOT first, so with
+        ``<proj>/dup.png`` present it silently bound to the WRONG image — and
+        the converter had to refuse the relative form entirely, keeping the
+        texture on an absolute path. ``sourceimages/dup.png`` names the
+        folder, so there is nothing to shadow and it relativizes like any
+        other texture.
+        """
+        self._png(os.path.join(self.tmp_root, "dup.png"), 32)  # the former shadow
+        self._node("tex_dup", self._texture("dup.png", size=4))
+
+        self.editor.normalize_paths(["tex_dup"])
+
+        self.assertEqual(
+            cmds.getAttr("tex_dup.fileTextureName"), "sourceimages/dup.png"
+        )
+
+        self._reopen(self._save("dup.ma"))
+
+        self.assertEqual(
+            cmds.getAttr("tex_dup.outSizeX"),
+            4.0,
+            "the stored path resolved to the root namesake, not the texture",
+        )
+
+
+class TestFindAndCopyLightmaps(MayaTkTestCase):
+    """Find & Copy takes the lightmap dependencies along, and names what it
+    could not find.
+
+    Reported 2026-08-26 on a migrated room: every texture was copied and the
+    WebXR preview came back unlit -- the baked EXRs are referenced by bake
+    markers, not file nodes, so no path command saw them -- and the export then
+    failed on two textures the search had silently missed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_root = tempfile.mkdtemp(prefix="find_copy_lm_")
+        self.addCleanup(shutil.rmtree, self.tmp_root, ignore_errors=True)
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        self.ext_dir = os.path.join(self.tmp_root, "external")
+        self.dest_dir = os.path.join(self.tmp_root, "dest")
+        for d in (self.si_dir, self.ext_dir, self.dest_dir):
+            os.makedirs(d, exist_ok=True)
+
+        original = EnvUtils.get_env_info
+
+        def fake_get_env_info(key):
+            if key == "sourceimages":
+                return self.si_dir
+            if key == "workspace":
+                return self.tmp_root
+            return original(key)
+
+        EnvUtils.get_env_info = staticmethod(fake_get_env_info)
+        self.addCleanup(
+            lambda: setattr(EnvUtils, "get_env_info", staticmethod(original))
+        )
+        self.editor = TexturePathEditor()
+        self.reported = _Reported()
+        self.editor.active_logger = self.reported
+
+    def _write(self, directory, name, payload="payload"):
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, name).replace("\\", "/")
+        with open(path, "w") as fh:
+            fh.write(payload)
+        return path
+
+    def _make_file_node(self, name, path):
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def _path_of(self, node):
+        return (cmds.getAttr(f"{node}.fileTextureName") or "").replace("\\", "/")
+
+    @staticmethod
+    def _records():
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        return LightmapRecords
+
+    def _lit_cube(self, name, map_path):
+        cube = cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+        self._records().commit({cube: map_path})
+        return cube
+
+    @staticmethod
+    def _marker_dir(cube):
+        import json
+
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        info = json.loads(cmds.getAttr(f"{cube}.{LightmapRecords.LIGHTMAP_INFO_ATTR}"))
+        # The map's folder lives in the private record (never on the marker),
+        # in the portable spelling; compare what it resolves to.
+        folder = LightmapRecords._folder_hint(info, LightmapRecords._folder_hints())
+        return os.path.normcase(
+            os.path.abspath(LightmapRecords._resolved_dir(folder, info["map"]))
+        )
+
+    def _norm(self, path):
+        return os.path.normcase(os.path.abspath(path))
+
+    def _run(self, nodes, lightmaps=None, dry_run=False, **answers):
+        """What the panel's Run hands the engine over *nodes* (+ *lightmaps*)."""
+        answers.setdefault("source_dir", "")
+        answers.setdefault("dest_dir", self.dest_dir)
+        answers.setdefault("mode", "Copy")
+        return self.editor.find_and_copy_textures(
+            [str(n) for n in nodes], answers, lightmaps=lightmaps or [], dry_run=dry_run
+        )
+
+    def _messages(self, level=None):
+        return [m for lvl, m in self.reported.lines if level is None or lvl == level]
+
+    # -- what the search did not find -----------------------------------------
+
+    def test_names_the_unresolved_textures_the_search_did_not_find(self):
+        good = self._make_file_node("tex_ok", self._write(self.ext_dir, "ok.png"))
+        gone = self._make_file_node(
+            "tex_gone",
+            os.path.join(self.ext_dir, "never_there.png").replace("\\", "/"),
+        )
+        search = os.path.join(self.tmp_root, "search")
+        self._write(search, "unrelated.png")
+
+        self._run([good, gone], source_dir=search)
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "ok.png")))
+        not_found = [m for m in self._messages("warning") if "not found under" in m]
+        self.assertEqual(len(not_found), 1, self.reported.lines)
+        self.assertIn("never_there.png", not_found[0])
+        self.assertIn(gone, not_found[0])
+        still = [m for m in self._messages("warning") if "still unresolved" in m]
+        self.assertEqual(len(still), 1, self.reported.lines)
+        self.assertIn(gone, still[0])
+
+    def test_a_clean_run_reports_nothing_unresolved(self):
+        node = self._make_file_node("tex_clean", self._write(self.ext_dir, "clean.png"))
+
+        self._run([node])
+
+        self.assertFalse([m for m in self._messages("warning") if "unresolved" in m])
+
+    def test_a_tiled_node_is_repathed_once_its_tiles_land(self):
+        """Regression: the remap matched stored basenames literally, so a
+        <UDIM> node whose tiles had just been copied kept its old path."""
+        for tile in ("rock.1001.png", "rock.1002.png"):
+            self._write(self.ext_dir, tile)
+        node = self._make_file_node(
+            "tex_udim", os.path.join(self.ext_dir, "rock.<UDIM>.png").replace("\\", "/")
+        )
+
+        self._run([node], source_dir=self.ext_dir)
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "rock.1002.png")))
+        self.assertTrue(
+            self._path_of(node).endswith("dest/rock.<UDIM>.png"), self._path_of(node)
+        )
+
+    # -- lightmaps ride along -------------------------------------------------
+
+    def test_lightmaps_are_copied_and_their_markers_repointed(self):
+        node = self._make_file_node("tex_lm", self._write(self.ext_dir, "wall.png"))
+        cube = self._lit_cube("lit", self._write(self.ext_dir, "lit_LightMap.exr"))
+        deps = self.editor.lightmap_dependencies()
+
+        self._run([node], lightmaps=deps)
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "lit_LightMap.exr")))
+        self.assertEqual(self._marker_dir(cube), self._norm(self.dest_dir))
+        self.assertTrue(
+            any("Lightmaps —" in m for m in self._messages("success")),
+            self.reported.lines,
+        )
+
+    def test_a_selected_row_relocates_its_own_file_the_probe_too(self):
+        """A lightmap row IS its file: the reflection probe's row names no
+        object, and a map row's objects must not drag the probe along.
+        Added: 2026-10-14"""
+        cube = self._lit_cube("lit_p", self._write(self.ext_dir, "lit_p_LightMap.exr"))
+        records = self._records()
+        records.commit_probe(self._write(self.ext_dir, "room_Probe.exr"), (0, 0, 0))
+        deps = {d["map"]: d for d in records.lightmap_dependencies()}
+
+        self._run([], lightmaps=[deps["room_Probe.exr"]])
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "room_Probe.exr")))
+        self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "lit_p_LightMap.exr")))
+        self.assertNotEqual(self._marker_dir(cube), self._norm(self.dest_dir))
+        after = {d["map"]: d for d in records.lightmap_dependencies()}
+        self.assertEqual(
+            self._norm(os.path.dirname(after["room_Probe.exr"]["path"])),
+            self._norm(self.dest_dir),
+        )
+
+    def test_a_scoped_lightmap_rides_along_unasked(self):
+        """The scope already answered whether it goes: no question on the form."""
+        node = self._make_file_node("tex_opt", self._write(self.ext_dir, "opt.png"))
+        cube = self._lit_cube("optout", self._write(self.ext_dir, "optout_LightMap.exr"))
+
+        self._run([node], lightmaps=self.editor.lightmap_dependencies())
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "optout_LightMap.exr")))
+        self.assertEqual(self._marker_dir(cube), self._norm(self.dest_dir))
+
+    def test_a_missing_lightmap_is_searched_for_in_the_source_folder(self):
+        cube = self._lit_cube("lost", os.path.join(self.tmp_root, "gone", "lost_LightMap.exr"))
+        self._write(os.path.join(self.ext_dir, "deep"), "lost_LightMap.exr")
+        deps = self.editor.lightmap_dependencies()
+        self.assertIsNone(deps[0]["path"])
+
+        self._run([], lightmaps=deps, source_dir=self.ext_dir)
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "lost_LightMap.exr")))
+        self.assertEqual(self._marker_dir(cube), self._norm(self.dest_dir))
+
+    def test_a_lightmap_only_scope_runs_and_a_missing_one_is_named(self):
+        self._lit_cube("nowhere", os.path.join(self.tmp_root, "gone", "nowhere.exr"))
+
+        self._run([], lightmaps=self.editor.lightmap_dependencies(), source_dir=self.ext_dir)
+
+        missing = [m for m in self._messages("warning") if "not found under" in m]
+        self.assertEqual(len(missing), 1, self.reported.lines)
+        self.assertIn("nowhere.exr", missing[0])
+        self.assertFalse(any("No textures found" in m for m in self._messages()))
+
+    def test_dry_run_plans_the_lightmaps_and_touches_nothing(self):
+        cube = self._lit_cube("dry", self._write(self.ext_dir, "dry_LightMap.exr"))
+        before = self._marker_dir(cube)
+        deps = self.editor.lightmap_dependencies()
+
+        planned = self._run([], lightmaps=deps, dry_run=True)
+
+        self.assertFalse(os.path.exists(os.path.join(self.dest_dir, "dry_LightMap.exr")))
+        self.assertEqual(self._marker_dir(cube), before)
+        self.assertTrue(any("lightmap(s) into" in m for m in self._messages()))
+        self.assertTrue(planned, "a plan with work in it arms Apply")
+        self._run([], lightmaps=deps)
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "dry_LightMap.exr")))
+        self.assertEqual(self._marker_dir(cube), self._norm(self.dest_dir))
+
+    # -- lightmap rows ----------------------------------------------------------
+
+    def test_a_lightmap_row_is_labelled_by_material_and_map_stem(self):
+        """A row reading ``BASEBOARD_A (+45)`` identified nothing (2026-08-26):
+        the shader column names the material, the node column the map's stem."""
+        cube = self._lit_cube("lbl", self._write(self.ext_dir, "ROOM_ENV_LightMap.exr"))
+        mat = cmds.shadingNode("lambert", asShader=True, name="ROOM_ENV")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="ROOM_ENVSG")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        dep = next(
+            d for d in self.editor.lightmap_dependencies() if d["map"] == "ROOM_ENV_LightMap.exr"
+        )
+        self.assertEqual(self.editor.lightmap_labels(dep), ("ROOM_ENV", "ROOM_ENV_LightMap"))
+
+
+class TestDeleteFileNodeWarnsWhenConnected(MayaTkTestCase):
+    """Delete File Node names what the deletion would unwire.
+
+    Reported 2026-09-03: the confirm asked "delete the file node 'x'?" with no
+    hint that x was driving a material, so a wired texture read exactly like an
+    orphan one. ``delete_consequences`` is what the panel's confirm says.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.editor = TexturePathEditor()
+
+    def _file_node(self, name):
+        return cmds.shadingNode("file", asTexture=True, name=name)
+
+    def test_an_orphan_file_node_has_no_consequence(self):
+        """Every file node hangs off defaultTextureList1 -- that is not a consumer."""
+        self.assertEqual(self.editor.delete_consequences([self._file_node("tex_orphan")]), [])
+
+    def test_a_connected_file_node_names_its_material(self):
+        node = self._file_node("tex_wired")
+        shader = cmds.shadingNode("lambert", asShader=True, name="lam_wired")
+        cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+
+        text = " ".join(self.editor.delete_consequences([node]))
+
+        self.assertIn("Connected to 1 material(s): lam_wired", text)
+        self.assertIn("broken", text)
+
+    def test_the_count_covers_every_material_behind_the_selection(self):
+        node = self._file_node("tex_shared")
+        for name in ("lam_a", "lam_b"):
+            shader = cmds.shadingNode("lambert", asShader=True, name=name)
+            cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+
+        text = " ".join(self.editor.delete_consequences([node]))
+
+        self.assertIn("Connected to 2 material(s)", text)
+        self.assertIn("lam_a", text)
+        self.assertIn("lam_b", text)
+
+    def test_a_utility_only_chain_still_warns(self):
+        """A bump chain that never reaches a surface shader breaks all the same."""
+        node = self._file_node("tex_bump")
+        bump = cmds.shadingNode("bump2d", asUtility=True, name="bump_only")
+        cmds.connectAttr(f"{node}.outAlpha", f"{bump}.bumpValue", force=True)
+
+        text = " ".join(self.editor.delete_consequences([node]))
+
+        self.assertIn("Connected to 1 node(s) in the shading graph", text)
+
+    def test_delete_removes_the_node_and_keeps_the_material(self):
+        node = self._file_node("tex_gone")
+        shader = cmds.shadingNode("lambert", asShader=True, name="lam_gone")
+        cmds.connectAttr(f"{node}.outColor", f"{shader}.color", force=True)
+
+        self.assertEqual(self.editor.delete_file_nodes([node]), 1)
+
+        self.assertFalse(cmds.objExists("tex_gone"))
+        self.assertTrue(cmds.objExists("lam_gone"))
+
+
+class TestRenameFromTheEditor(MayaTkTestCase):
+    """Rename File / a path edit that changes only the file name, and Keep
+    Names In Sync, driven through the editor's engine (the panel's cells and
+    menus hand it the row and the option box's affixes). Added: 2026-10-04
+    """
+
+    #: Keep Names In Sync's affixes: ``(shader, file node)``.
+    SYNC = (("", "_MAT"), ("", "_file"))
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        store = ptk.TempArtifacts("tpe_rename", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        self.dir = store.dir_path().replace("\\", "/")
+        for name in ("rock_Normal.png", "rock_Base_Color.png", "taken.png"):
+            with open(os.path.join(self.dir, name), "wb") as f:
+                f.write(b"DATA")
+        self.mat = cmds.shadingNode("lambert", asShader=True, name="rock_MAT")
+        self.nodes = {}
+        for name, plug in (
+            ("rock_Normal.png", "diffuse"),
+            ("rock_Base_Color.png", "color"),
+        ):
+            node = cmds.shadingNode("file", asTexture=True)
+            Attributes.set_plug_literal(f"{node}.fileTextureName", f"{self.dir}/{name}")
+            out = "outColor" if plug == "color" else "outAlpha"
+            cmds.connectAttr(f"{node}.{out}", f"{self.mat}.{plug}")
+            self.nodes[name] = node
+        self.editor = TexturePathEditor()
+
+    def _project(self, folder=None):
+        """Open *folder* (default: the textures' own) as the scene's project."""
+        self.addCleanup(cmds.workspace, cmds.workspace(q=True, rd=True), o=True)
+        cmds.workspace(folder or self.dir, openWorkspace=True)
+
+    def _env_cube(self):
+        """Another set's map on the material: an environment cube's file node."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        with open(os.path.join(self.dir, "env_cube.dds"), "wb") as f:
+            f.write(b"CUBE")
+        cube = cmds.shadingNode("file", asTexture=True, name="env_cube_file")
+        Attributes.set_plug_literal(f"{cube}.fileTextureName", f"{self.dir}/env_cube.dds")
+        cmds.connectAttr(f"{cube}.outAlpha", f"{self.mat}.translucence")
+        return cube
+
+    def test_a_path_edit_renames_only_when_the_name_alone_changed_to_nothing(self):
+        self._project()
+        stored = f"{self.dir}/rock_Normal.png"
+        self.assertTrue(self.editor.is_file_rename(stored, f"{self.dir}/new.png"))
+        self.assertFalse(
+            self.editor.is_file_rename(stored, f"{self.dir}/taken.png"),
+            "an existing file is a repoint",
+        )
+        self.assertFalse(
+            self.editor.is_file_rename(stored, f"{self.dir}/sub/new.png"),
+            "another folder is a repoint",
+        )
+
+    def test_a_name_only_path_edit_inside_the_project_renames_the_file(self):
+        self._project()
+        node = self.nodes["rock_Normal.png"]
+        outcome = self.editor.apply_path_edit(node, f"{self.dir}/stone_Normal.png")
+        self.assertEqual(outcome, "renamed")
+        self.assertTrue(os.path.isfile(f"{self.dir}/stone_Normal.png"))
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), f"{self.dir}/stone_Normal.png"
+        )
+
+    def test_a_path_edit_outside_the_project_repoints_and_leaves_the_file(self):
+        """Outside the scene's project a name-only path edit repoints: another
+        project may read the file, so it keeps its name."""
+        project = ptk.TempArtifacts("tpe_rename_project", policy="scoped")
+        self.addCleanup(project.cleanup, True)
+        self._project(project.dir_path().replace("\\", "/"))
+        node = self.nodes["rock_Normal.png"]
+        typed = f"{self.dir}/stone_Normal.png"
+        self.assertEqual(self.editor.apply_path_edit(node, typed), "repathed")
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Base_Color.png", "rock_Normal.png", "taken.png"],
+            "nothing renamed on disk",
+        )
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), typed, "repointed")
+        self.assertIn(node, self.editor.previous_paths)
+
+    def test_rename_file_renames_on_disk_and_repoints(self):
+        node = self.nodes["rock_Normal.png"]
+        self.assertTrue(
+            self.editor.rename_texture(
+                {"file_node": node, "shader_node": self.mat}, "stone_Normal.png"
+            )
+        )
+        self.assertTrue(os.path.isfile(f"{self.dir}/stone_Normal.png"))
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), f"{self.dir}/stone_Normal.png"
+        )
+        self.assertTrue(cmds.objExists("rock_MAT"), "sync is off: the shader stays")
+
+    def test_a_refused_name_changes_nothing(self):
+        node = self.nodes["rock_Normal.png"]
+        with self.assertRaises((ValueError, OSError)):
+            self.editor.rename_texture({"file_node": node}, "taken.png")
+        self.assertTrue(os.path.isfile(f"{self.dir}/rock_Normal.png"))
+
+    def test_set_directory_repoints_each_to_its_file_in_one_folder(self):
+        """Browse for Folder on several rows: each to its same-named file there."""
+        moved = f"{self.dir}/moved"
+        os.makedirs(moved)
+        with open(f"{moved}/rock_Normal.png", "wb") as f:
+            f.write(b"DATA")
+        self.editor.set_texture_directory(
+            [self.nodes["rock_Normal.png"], self.nodes["rock_Base_Color.png"]], moved
+        )
+        self.assertTrue(
+            cmds.getAttr(f"{self.nodes['rock_Normal.png']}.fileTextureName").endswith(
+                "/moved/rock_Normal.png"
+            )
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{self.nodes['rock_Base_Color.png']}.fileTextureName"),
+            f"{self.dir}/rock_Base_Color.png",
+            "no such file in the folder: the path stays",
+        )
+
+    def test_reverting_a_lightmap_row_clears_its_objects_markers(self):
+        """A lightmap row has no file node: its delete is the lightmap's --
+        the bake markers binding it are cleared; the .exr stays on disk."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        cube = cmds.ls(cmds.polyCube(name="lm_cube")[0], long=True)[0]
+        LightmapRecords._write_marker(cube, {"map": "lm_cube_Lightmap.exr"})
+        dep = {"map": "lm_cube_Lightmap.exr", "objects": [cube], "path": None}
+        objects, kept = self.editor.lightmap_revert_scope([dep])
+        self.assertEqual((objects, kept), ([cube], []))
+        self.editor.revert_lightmaps(objects)
+        self.assertFalse(LightmapRecords._marker_node(cube), "the marker is cleared")
+
+    def test_with_sync_on_the_whole_material_follows(self):
+        self._project()  # sync renames only the project's own files
+        node = self.nodes["rock_Normal.png"]
+        self.editor.rename_texture(
+            {"file_node": node, "shader_node": self.mat}, "stone_Normal.png", sync=self.SYNC
+        )
+        self.assertTrue(cmds.objExists("stone_MAT"))
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["stone_Base_Color.png", "stone_Normal.png", "taken.png"],
+        )
+        self.assertTrue(cmds.objExists("stone_Normal_file"))
+        self.assertTrue(cmds.objExists("stone_Base_Color_file"))
+
+    def test_with_sync_on_a_new_map_type_renames_that_file(self):
+        """A rename that is not a new base for the material's own set renames
+        that file alone (``rock_Base_Color.png`` -> ``rock_Albedo.png``)."""
+        self._project()
+        node = self.nodes["rock_Base_Color.png"]
+        self.assertTrue(
+            self.editor.rename_texture(
+                {"file_node": node, "shader_node": self.mat},
+                "rock_Albedo.png",
+                sync=self.SYNC,
+            )
+        )
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Albedo.png", "rock_Normal.png", "taken.png"],
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), f"{self.dir}/rock_Albedo.png"
+        )
+        self.assertTrue(cmds.objExists("rock_MAT"))
+
+    def test_with_sync_on_another_set_s_map_is_renamed_alone(self):
+        """Renaming an environment cube synced the material to the CUBE's new
+        base, and the cube kept its name, unreported."""
+        self._project()
+        cube = self._env_cube()
+        self.assertTrue(
+            self.editor.rename_texture(
+                {"file_node": cube, "shader_node": self.mat},
+                "studio_env.dds",
+                sync=self.SYNC,
+            )
+        )
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Base_Color.png", "rock_Normal.png", "studio_env.dds", "taken.png"],
+        )
+        self.assertTrue(cmds.getAttr(f"{cube}.fileTextureName").endswith("/studio_env.dds"))
+        self.assertTrue(cmds.objExists("rock_MAT"), "the material is untouched")
+
+    def test_with_sync_on_another_set_s_file_node_is_renamed_alone(self):
+        self._project()
+        cube = self._env_cube()
+        self.editor.rename_file_node(
+            cube, "studio_env_file", shader=self.mat, sync=self.SYNC
+        )
+        self.assertTrue(cmds.objExists("studio_env_file"))
+        self.assertTrue(cmds.objExists("rock_MAT"), "the material is untouched")
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["env_cube.dds", "rock_Base_Color.png", "rock_Normal.png", "taken.png"],
+        )
+
+    def test_with_sync_on_a_file_node_s_new_base_renames_the_material(self):
+        """With or without the node suffix typed."""
+        self._project()
+        self.editor.rename_file_node(
+            self.nodes["rock_Normal.png"], "stone_Normal", shader=self.mat, sync=self.SYNC
+        )
+        self.assertTrue(cmds.objExists("stone_MAT"))
+        self.assertTrue(cmds.objExists("stone_Normal_file"))
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["stone_Base_Color.png", "stone_Normal.png", "taken.png"],
+        )
+
+    def test_with_sync_on_a_shader_rename_takes_the_set_along(self):
+        self._project()
+        self.editor.rename_shader(self.mat, "stone_MAT", sync=self.SYNC)
+        self.assertTrue(cmds.objExists("stone_MAT"))
+        self.assertIn("stone_Normal.png", os.listdir(self.dir))
+
+    def test_with_sync_off_a_shader_rename_renames_it_alone(self):
+        self.assertEqual(self.editor.rename_shader(self.mat, "boulder_MAT"), "boulder_MAT")
+        self.assertIn("rock_Normal.png", os.listdir(self.dir))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

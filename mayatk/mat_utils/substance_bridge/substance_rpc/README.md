@@ -27,13 +27,13 @@ The server refuses any request a web page could send: an `Origin` header, a non-
 
 | Op | Does |
 |:--|:--|
-| `script.start` | Queues a script (its text, `args`, the project it is meant for); compiled first, refused for another project; runs when Painter is idle, each piece one undo entry |
-| `script.status` / `script.cancel` / `script.jobs` | A job's state, report, console and error; stop it (a bake under way stops); every kept job |
+| `script.start` | Queues a script (its text, `args`, the project it is meant for); compiled first, refused for another project; runs when Painter is idle, each piece one undo entry (a step queued `args.when_idle(fn, undo=False)` has none: Painter computes the stack only outside one, so an export goes there) |
+| `script.status` / `script.cancel` / `script.jobs` | A job's state, report, console and error; stop it (a bake under way stops); every kept job. Answered off Painter's main thread, so a job is followed through a long step |
 | `project.info` | `{is_open, name, uuid, file_path, mesh_path, needs_saving}` |
 | `project.open` / `create` / `save` / `save_as` / `close` | Painter's project calls (`create` takes mesh maps, a resolution, the UDIM workflow) |
 | `mesh.reload` / `mesh.reload_status` | Reload the open project's mesh (async; the Update Mesh script) |
 | `project.set_resolution`, `bake.set_high_poly`, `textures.apply_mesh_maps`, `bake.pending_setup` | Project setup, applied now or held until a project opens |
-| `bake.lighting_to_diffuse`, `bake.mesh_maps` | The bakes the built-in scripts call |
+| `bake.lighting_to_diffuse`, `bake.mesh_maps` | The bakes the built-in scripts call; the first lays the baked AO (and curvature) map over Base Color as a fill layer painted from it |
 | `system.ping` / `list_ops` / `describe` / `identity` / `version` | Liveness, discovery, this instance, versions |
 
 There is no op that evaluates a string: a script reaches Painter only through `script.start`. A script may also call any op module directly (`from substance_rpc.ops import bake_ops`).
