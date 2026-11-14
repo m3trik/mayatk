@@ -287,8 +287,20 @@ def _colour_channel(stack):
     raise RuntimeError("the texture set has no Base Color (or Diffuse) channel to lay the lighting over")
 
 
-def _paint_from_mesh_map(layer, channel, ts, usage, as_data: bool) -> None:
-    """Make *layer* paint *channel*, and only it, from *ts*'s baked *usage* map.
+def _mesh_map(ts, usage):
+    """*ts*'s baked *usage* map, as the resource a fill layer takes.
+
+    Raises:
+        RuntimeError: *ts* has none (none baked, none imported).
+    """
+    resource = ts.get_mesh_map_resource(usage)
+    if resource is None:
+        raise RuntimeError(f"it has no {getattr(usage, 'name', usage)} mesh map (bake it first)")
+    return resource
+
+
+def _paint_from_mesh_map(layer, channel, resource, as_data: bool) -> None:
+    """Make *layer* paint *channel*, and only it, from a baked mesh map.
 
     A fill layer Painter's API inserts has no channel active and paints
     nothing: the channel is switched on, then given the map (the texture set's
@@ -297,21 +309,14 @@ def _paint_from_mesh_map(layer, channel, ts, usage, as_data: bool) -> None:
     Parameters:
         layer: The fill layer (``layerstack.insert_fill``'s).
         channel: The ``ChannelType`` it paints.
-        ts: The texture set whose map it is.
-        usage: The ``MeshMapUsage`` baked.
+        resource: The map (:func:`_mesh_map`).
         as_data: Read the map's values as they are, not as an sRGB picture.
             Painter blends a colour channel in its display encoding, so an
             occlusion of 0.5 read as a picture darkens the colour to about a
             fifth (0.5 decoded) where the light reaching it is a half; read as
             data it darkens it by that half. An overlay wants the picture
             reading: mid grey is then the value that changes nothing.
-
-    Raises:
-        RuntimeError: *ts* has no *usage* map (none baked, none imported).
     """
-    resource = ts.get_mesh_map_resource(usage)
-    if resource is None:
-        raise RuntimeError(f"it has no {getattr(usage, 'name', usage)} mesh map (bake it first)")
     layer.active_channels = {channel}
     source = layer.set_source(channel, resource)
     if as_data:
@@ -354,7 +359,8 @@ def _add_lighting_layer(
 
     Raises:
         RuntimeError: the texture set has no colour channel, or no map to lay
-            over it.
+            over it. Raised before the stack is touched: the last run's
+            layers stay, and no empty one is left.
     """
     import substance_painter.baking as baking
     import substance_painter.layerstack as layerstack
@@ -362,19 +368,22 @@ def _add_lighting_layer(
 
     stack = textureset.Stack.from_name(_ts_name(ts))
     colour = _colour_channel(stack)
+    # Every map first: a missing one must stop the run while the stack is whole.
+    ao = _mesh_map(ts, baking.MeshMapUsage.AO)
+    curvature = _mesh_map(ts, baking.MeshMapUsage.Curvature) if include_curvature else None
     _remove_previous_layers(layerstack, stack, (layer_name, f"{layer_name} (Curvature)"))
     insert_pos = layerstack.InsertPosition.from_textureset_stack(stack)
     # insert_fill(position) takes no name: the node is named afterwards.
     layer = layerstack.insert_fill(insert_pos)
     _name_node(layer, layer_name)
-    _paint_from_mesh_map(layer, colour, ts, baking.MeshMapUsage.AO, as_data=True)
+    _paint_from_mesh_map(layer, colour, ao, as_data=True)
     _set_blending_mode(layerstack, layer, colour, blend_mode)
     _apply_layer_intensity(layer, colour, intensity)
 
     if include_curvature:
         curv_layer = layerstack.insert_fill(insert_pos)  # above the AO layer
         _name_node(curv_layer, f"{layer_name} (Curvature)")
-        _paint_from_mesh_map(curv_layer, colour, ts, baking.MeshMapUsage.Curvature, as_data=False)
+        _paint_from_mesh_map(curv_layer, colour, curvature, as_data=False)
         _set_blending_mode(layerstack, curv_layer, colour, "Overlay")
         _apply_layer_intensity(curv_layer, colour, curvature_intensity)
 

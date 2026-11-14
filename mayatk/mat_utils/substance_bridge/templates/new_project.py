@@ -71,6 +71,8 @@ def _set_up():
 
 
 def _save():
+    if os.path.exists(args["PROJECT"]):  # it appeared while the project was made
+        raise RuntimeError(f"{args['PROJECT']} exists now: the new project is left unsaved rather than saved over it.")
     project_ops.project_save_as(path=args["PROJECT"])
     args.report(f"Saved as {args['PROJECT']}.")
 

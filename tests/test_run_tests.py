@@ -549,6 +549,32 @@ class TestTheCommandLine(unittest.TestCase):
             self.assertEqual(rt.main(), rt.EXIT_OK)
         self.assertEqual(built.call_args.kwargs["patterns"], ["a", "b"])
 
+    def test_a_full_run_includes_the_mock_tests(self):
+        """``mock_tests/`` ran only with ``--mocks``, which no full run passed:
+        0.34.0 shipped with one of them failing behind a green ``--all``
+        (BACKLOG 2026-11-14). The driver loads their conftest and restores the
+        real ``maya`` modules after each, as for any named mock module."""
+        with mock.patch.object(rt.sys, "argv", ["run_tests.py", "--all"]), \
+                mock.patch.object(rt, "MayaTestRunner") as built, \
+                contextlib.redirect_stdout(io.StringIO()):
+            rt.main()
+        self.assertIs(built.return_value.discover_tests.call_args.kwargs.get("include_mocks"), True)
+
+
+class TestEveryModuleIsReachedByName(unittest.TestCase):
+    """The runner keys a module by its name and resolves it main folder first,
+    so a mock module named like a main one never ran (three did: 31 tests)."""
+
+    def test_no_two_test_folders_share_a_module_name(self):
+        runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(runner.results_file.unlink, True)
+        names = [
+            name
+            for folder in ("", runner.EXTENDED_DIR, runner.MOCKS_DIR)
+            for name in runner._discover_in(folder)
+        ]
+        self.assertEqual(sorted({n for n in names if names.count(n) > 1}), [])
+
 
 class TestTheGuiMayaIsHidden(unittest.TestCase):
     """The GUI pass's Maya starts on a private desktop (``connect(hidden=True)``):

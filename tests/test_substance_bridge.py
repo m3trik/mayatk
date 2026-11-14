@@ -389,6 +389,21 @@ class TestReport(unittest.TestCase):
         _, said = self._said({"job": "j1", "label": "Probe", "state": "cancelled", "error": None})
         self.assertIn("Probe was cancelled.", said)
 
+    def test_a_wait_that_raised_still_names_its_job(self):
+        """The job was queued, and may still be running: a wait on it that
+        raised was reported as a script that "did not run"."""
+        import types
+
+        def gone():
+            raise RuntimeError("the connection closed")
+
+        with self.assertLogs(self.bridge.logger, "INFO") as logs:
+            status = self.bridge.conclude(types.SimpleNamespace(result=gone), job="j1")
+        self.assertEqual((status["job"], status["state"]), ("j1", "failed"))
+        said = "\n".join(logs.output)
+        self.assertIn("failed in Painter: the connection closed", said)
+        self.assertNotIn("did not run", said)
+
     def test_a_run_that_never_reached_painter_is_not_a_failure_in_painter(self):
         _, said = self._said(SubstanceBridge.follow({}))
         self.assertIn("did not run", said)
