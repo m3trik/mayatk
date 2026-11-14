@@ -232,32 +232,38 @@ def _later(fn):
 def _step(job, fn, undo=True):
     """Run one piece of the job (the script, or one of its idle steps) in its
     undo entry (none for a step queued ``undo=False``), its output the job's
-    console; False when the job ended in it. Painter must still hold the
-    project the run was meant for: the job waited for Painter to be idle, and
-    a person may have opened another meanwhile."""
+    console; the state the job ended in (``"cancelled"``, ``"failed"``), or
+    None when the piece ran through. Painter must still hold the project the
+    run was meant for: the job waited for Painter to be idle, and a person may
+    have opened another meanwhile.
+
+    The state itself is :func:`_end`'s to write, last: ``script.status``
+    answers off the main thread, and a caller that reads a finished state
+    stops polling, so the error, the traceback and the console's tail are in
+    place before it can."""
     console = _Console(job)
     entry = _undo_entry(job["label"]) if undo else contextlib.nullcontext()
+    ended = None
     try:
         _refuse_other_project(job["expect"])
         with entry, contextlib.redirect_stdout(console), contextlib.redirect_stderr(console):
             fn()
-        return True
     except ScriptCancelled:
-        job["state"] = "cancelled"
+        ended = "cancelled"
     except BaseException as exc:  # noqa: BLE001 -- a script's failure is its job's, never Painter's
-        job["state"] = "failed"
         job["error"] = f"{type(exc).__name__}: {exc}"
         job["traceback"] = traceback.format_exc()
+        ended = "failed"
     finally:
         console.flush()
-    return False
+    return ended
 
 
-def _end(job, state=None):
-    if state:
-        job["state"] = state
+def _end(job, state):
+    """End *job* in *state*, written after everything a reader takes with it."""
     job["ended"] = time.time()
     job["_steps"] = []
+    job["state"] = state
     _prune()
 
 
@@ -277,8 +283,9 @@ def _run(job, code):
         namespace["substance_painter"] = substance_painter
     except ImportError:
         pass
-    if not _step(job, lambda: exec(code, namespace)):
-        _end(job)
+    ended = _step(job, lambda: exec(code, namespace))
+    if ended:
+        _end(job, ended)
     elif job["_steps"]:
         _later(lambda: _next_step(job))
     else:
@@ -291,8 +298,9 @@ def _next_step(job):
         _end(job, "cancelled")
         return
     fn, undo = job["_steps"].pop(0)
-    if not _step(job, fn, undo):
-        _end(job)
+    ended = _step(job, fn, undo)
+    if ended:
+        _end(job, ended)
     elif job["_steps"]:
         _later(lambda: _next_step(job))
     else:

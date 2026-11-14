@@ -470,6 +470,31 @@ class TestScriptRunner(unittest.TestCase):
         self.assertIn("probe.py", status["traceback"])
         self.assertTrue(self.client.ping(), "Painter's server is unharmed")
 
+    def test_a_failed_job_reads_finished_only_once_its_error_and_traceback_are_written(self):
+        """``script.status`` answers off the main thread, and a caller that
+        reads a finished state stops polling: the state is written last. A
+        status read while the traceback was being formatted saw ``failed``
+        with no traceback and an empty console (2026-11-13 review)."""
+        from unittest import mock
+
+        from substance_rpc.ops import script_ops
+
+        seen = []
+        format_exc = script_ops.traceback.format_exc
+
+        def spied():
+            running = list(script_ops._JOBS.values())[-1]
+            seen.append(script_ops.status(running["job"]))
+            return format_exc()
+
+        with mock.patch.object(script_ops.traceback, "format_exc", spied):
+            status = self._run("print('last words', end='')\nraise KeyError('x')")
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(seen[0]["state"], "running", seen[0])
+        self.assertIn("probe.py", status["traceback"])
+        self.assertEqual(status["console"], ["last words"])
+        self.assertIsNotNone(status["ended"])
+
     def test_a_script_that_does_not_compile_is_refused_before_it_queues(self):
         with self.assertRaises(RuntimeError) as ctx:
             self.client.run_script("def broken(:\n", path="probe.py")
