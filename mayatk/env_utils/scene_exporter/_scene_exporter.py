@@ -338,13 +338,6 @@ class SceneExporter(ptk.SceneExporterBase):
             consider_lod_visible=True,
         )
 
-    @ptk.Deprecation.parameter(
-        "hide_log_file",
-        drop=True,
-        remove_in="0.28.0",
-        since="2026-10-14",
-        reason="The run log lives in the per-user cache, never beside the export.",
-    )
     def perform_export(
         self,
         export_dir: str,
@@ -396,8 +389,6 @@ class SceneExporter(ptk.SceneExporterBase):
         (``ptk.SceneExporterBase.log_file_path``) -- never a file beside the
         export, recording down to DEBUG whatever *log_level* shows; the
         panel always sets it.
-        *hide_log_file* is retired
-        (warns; removed in 0.28.0): nothing lands in the export folder to hide.
 
         ``tasks["version"]``, the retired Version input, was removed in
         pythontk 0.19.0: a run that still sends it is refused before anything
@@ -1072,6 +1063,7 @@ class SceneExporter(ptk.SceneExporterBase):
         Samples animation only across the frames that carry motion
         (:meth:`UsdUtils.sampling_frame_range` -- ``frameRange`` is a direct
         multiplier on export cost); a static export writes no time samples.
+        Several exported roots stand under one root prim named after the file.
         The ``data_export`` carrier exports as a prim like any other node; its
         custom attributes are not yet verified to arrive as ``userProperties``
         on every consumer, which the log says once per run.
@@ -1108,8 +1100,10 @@ class SceneExporter(ptk.SceneExporterBase):
                 "USD: the data_export carrier ships as a prim; consumers reading its "
                 "attributes as userProperties are not yet verified."
             )
+        # One root prim, so a stage referencing the deliverable receives every
+        # exported root and the materials they share (UsdUtils.single_root).
         written = UsdUtils.export(
-            file_path=usd_path, options=options, selection_only=True
+            file_path=usd_path, options=options, selection_only=True, single_root=True
         )
         self.logger.info(f"USD written: {written}")
         self._author_lod_variants(written, selection)

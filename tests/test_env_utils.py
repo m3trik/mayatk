@@ -1470,6 +1470,25 @@ class TestExportScene(MayaTkTestCase):
         self.assertEqual(EnvUtils.export_scene(out, "obj"), out)
         self.assertTrue(os.path.isfile(out))
 
+    def test_usd_stands_under_one_root_prim(self):
+        """A stage referencing the file receives its default prim alone, so the
+        scene's roots are written under one, named after the file."""
+        from pxr import Sdf
+
+        cmds.polyCube(name="usd_scene_a")
+        cmds.polyCube(name="usd_scene_b")
+        out = os.path.join(self.store.dir_path(), "scene_kit.usda")
+        self.assertEqual(EnvUtils.export_scene(out, "usd"), out)
+        layer = Sdf.Layer.FindOrOpen(out)
+        self.assertEqual([spec.name for spec in layer.rootPrims], ["scene_kit"])
+        self.assertEqual(layer.defaultPrim, "scene_kit")
+        children = layer.GetPrimAtPath("/scene_kit").nameChildren
+        self.assertLessEqual({"usd_scene_a", "usd_scene_b"}, set(children.keys()))
+        self.assertTrue(
+            [spec for spec in children.values() if spec.typeName == "Material"],
+            "the material both cubes share is written beside them: it moves too",
+        )
+
     def test_the_glb_intermediate_fbx_folder_is_gone_after_a_good_export(self):
         """Regression (2026-10-13): the intermediate came from a detached store that
         nothing released, so every GLB export left a full-scene FBX in temp."""

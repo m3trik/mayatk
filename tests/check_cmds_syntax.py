@@ -91,6 +91,9 @@ PLUGIN_CMDS = frozenset(
         "FBXExportBakeComplexStart",  # FBX plugin (bake range; fbx_utils)
         "FBXExportBakeComplexEnd",  # FBX plugin (bake range; fbx_utils)
         "FBXExportEmbeddedTextures",  # FBX plugin (export-option setter; env_utils/bridges)
+        "FBXExportInAscii",  # FBX plugin (binary/ASCII switch; scene_exporter's record write)
+        "FBXGetTakeCount",  # FBX plugin (a file's take count; fbx_utils, the bake template)
+        "FBXClose",  # FBX plugin (closes the file FBXRead opened; same readers)
         "FBXExportSplitAnimationIntoTakes",  # FBX plugin (take splitting; fbx_utils)
         "arnoldRenderToTexture",  # mtoa (Arnold RTT bake; texture_baker)
         "gameExporter",  # Game Exporter

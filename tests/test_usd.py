@@ -1034,5 +1034,507 @@ class TestSampledExport(MayaTkTestCase):
         self.assertEqual(len(calls), 1, [flags for flags, _ in calls])
 
 
+class _AuthoredLayers(MayaTkTestCase):
+    """Layers written with pxr alone: what a file neither DCC wrote looks like."""
+
+    def setUp(self):
+        super().setUp()
+        UsdUtils.load_plugin()
+        self.tempdir = tempfile.mkdtemp(prefix="usd_authored_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tempdir, ignore_errors=True)
+        super().tearDown()
+
+    def _default_tangents(self, in_type, out_type):
+        """Set the session's default key tangents for this test; what they were
+        comes back after it (they outlive a new scene, and later modules key
+        with them)."""
+        prior = (
+            cmds.keyTangent(query=True, g=True, inTangentType=True)[0],
+            cmds.keyTangent(query=True, g=True, outTangentType=True)[0],
+        )
+        self.addCleanup(
+            cmds.keyTangent, g=True, inTangentType=prior[0], outTangentType=prior[1]
+        )
+        cmds.keyTangent(g=True, inTangentType=in_type, outTangentType=out_type)
+
+    def _new_stage(self, name):
+        """A fresh stage at ``<tempdir>/<name>``; mayaUsd keeps a read layer
+        alive, so a path this session already holds is cleared, not re-created."""
+        from pxr import Sdf, Usd
+
+        path = os.path.join(self.tempdir, name).replace("\\", "/")
+        layer = Sdf.Layer.Find(path)
+        if layer is not None:
+            layer.Clear()
+            return path, Usd.Stage.Open(layer)
+        return path, Usd.Stage.CreateNew(path)
+
+    @staticmethod
+    def _quad(stage, path):
+        from pxr import UsdGeom
+
+        mesh = UsdGeom.Mesh.Define(stage, path)
+        mesh.CreatePointsAttr([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
+        mesh.CreateFaceVertexCountsAttr([4])
+        mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+        mesh.CreateSubdivisionSchemeAttr("none")
+        return mesh
+
+    @staticmethod
+    def _material(stage, path, shader="surface"):
+        from pxr import Gf, Sdf, UsdShade
+
+        material = UsdShade.Material.Define(stage, path)
+        node = UsdShade.Shader.Define(stage, f"{path}/{shader}")
+        node.CreateIdAttr("UsdPreviewSurface")
+        node.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(0.4, 0.4, 0.45)
+        )
+        material.CreateSurfaceOutput().ConnectToSource(node.ConnectableAPI(), "surface")
+        return material
+
+    def _kit(self, name, materials):
+        """``/kit`` holding one quad per ``{material prim: shader prim}`` entry,
+        each bound to its material under ``/kit/mtl``."""
+        from pxr import UsdShade
+
+        path, stage = self._new_stage(name)
+        stage.DefinePrim("/kit", "Xform")
+        for index, (material, shader) in enumerate(materials.items()):
+            mesh = self._quad(stage, f"/kit/part{index}")
+            bound = self._material(stage, f"/kit/mtl/{material}", shader)
+            UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(bound)
+        stage.GetRootLayer().defaultPrim = "kit"
+        stage.GetRootLayer().Save()
+        return path
+
+    @staticmethod
+    def _shading(nodes):
+        """``{shading group: its surface shader}`` among *nodes*."""
+        pairs = {}
+        for group in cmds.ls(nodes, exactType="shadingEngine") or []:
+            shaders = cmds.listConnections(
+                f"{group}.surfaceShader", source=True, destination=False
+            )
+            pairs[group] = shaders[0] if shaders else None
+        return pairs
+
+
+class TestForeignLayerImport(_AuthoredLayers):
+    """What ``import_scene`` owes a layer neither DCC wrote: the motion the file
+    states between its samples, and each material under its own name."""
+
+    def test_sparse_samples_read_as_usd_interpolates_them(self):
+        """USD is linear between samples. mayaUsd's reader keys with Maya's
+        GLOBAL default tangent, so under the stock ``auto`` a two-sample move
+        eased (measured 2026-11-13: 103.429 at frame 2 where the file says
+        111.111). The import reads linear and puts the default back."""
+        from pxr import Gf, UsdGeom
+
+        path, stage = self._new_stage("sparse.usda")
+        stage.SetStartTimeCode(1)
+        stage.SetEndTimeCode(10)
+        mover = UsdGeom.Xform.Define(stage, "/mover")
+        move = mover.AddTranslateOp()
+        move.Set(Gf.Vec3d(0, 100, 0), 1)
+        move.Set(Gf.Vec3d(0, 200, 0), 10)
+        stage.GetRootLayer().Save()
+        stated = stage.GetPrimAtPath("/mover").GetAttribute("xformOp:translate").Get(2)
+
+        self._default_tangents("auto", "spline")
+        UsdUtils.import_scene(path)
+        self.assertAlmostEqual(
+            cmds.getAttr("mover.translateY", time=2), stated[1], places=3
+        )
+        self.assertEqual(
+            (
+                cmds.keyTangent(query=True, g=True, inTangentType=True),
+                cmds.keyTangent(query=True, g=True, outTangentType=True),
+            ),
+            (["auto"], ["spline"]),
+            "the user's default tangents are theirs: back as they were",
+        )
+
+    def test_the_default_tangents_come_back_when_the_read_fails(self):
+        from unittest import mock
+
+        path = self._kit("fails.usda", {"steel": "surface"})
+        self._default_tangents("spline", "spline")
+        with mock.patch.object(cmds, "file", side_effect=RuntimeError("no read")):
+            with self.assertRaises(RuntimeError):
+                UsdUtils.import_scene(path)
+        self.assertEqual(
+            cmds.keyTangent(query=True, g=True, inTangentType=True), ["spline"]
+        )
+
+    def test_an_imported_material_is_named_on_its_shader_and_survives_an_export(self):
+        """mayaUsd puts the Material prim's name on the shading group and the
+        Shader prim's on the shader (``surface``, ``surface1``); the export names
+        a Material after its SHADER, so the round trip wrote ``surface`` and
+        ``surface1`` (measured 2026-11-13). The import gives the shader the
+        material's name and the group ``<name>SG``, Maya's own spelling."""
+        from pxr import Usd
+
+        path = self._kit("named.usda", {"steel": "surface", "rubber": "surface"})
+        new_nodes = UsdUtils.import_scene(path)
+        self.assertEqual(
+            self._shading(new_nodes), {"steelSG": "steel", "rubberSG": "rubber"}
+        )
+        self.assertTrue(
+            all(cmds.objExists(n) for n in new_nodes), "the returned names are live"
+        )
+        self.assertTrue({"steel", "steelSG"} <= set(new_nodes))
+
+        out = UsdUtils.export(
+            os.path.join(self.tempdir, "named_out.usda"), objects=["kit"]
+        )
+        stage = Usd.Stage.Open(out)
+        self.assertEqual(
+            sorted(p.GetName() for p in stage.Traverse() if p.GetTypeName() == "Material"),
+            ["rubber", "steel"],
+        )
+
+    def test_the_reader_s_own_names_stay_on_request(self):
+        path = self._kit("raw.usda", {"steel": "surface"})
+        new_nodes = UsdUtils.import_scene(path, material_names="shading_group")
+        self.assertEqual(self._shading(new_nodes), {"steel": "surface"})
+
+    def test_a_material_named_as_its_shader_keeps_the_name(self):
+        """Our own export writes ``Material steel`` holding ``Shader steel``.
+        Maya cannot name both nodes ``steel``: the shader takes it and the group
+        arrives ``steel1``, which is no material's name."""
+        path = self._kit("same.usda", {"steel": "steel"})
+        self.assertEqual(
+            self._shading(UsdUtils.import_scene(path)), {"steelSG": "steel"}
+        )
+
+    def test_a_material_whose_own_name_ends_in_a_digit_keeps_it(self):
+        """``Material steel1`` holding ``Shader steel`` reads exactly like the
+        clash above (group ``steel1``, shader ``steel``); the layer tells them
+        apart, and here the material really is ``steel1``."""
+        path = self._kit("digit.usda", {"steel1": "steel"})
+        self.assertEqual(
+            self._shading(UsdUtils.import_scene(path)), {"steel1SG": "steel1"}
+        )
+
+    def test_a_layer_in_maya_s_own_spelling_is_left_as_it_reads(self):
+        path = self._kit("maya_spelled.usda", {"steelSG": "steel"})
+        self.assertEqual(
+            self._shading(UsdUtils.import_scene(path)), {"steelSG": "steel"}
+        )
+
+    def test_an_unknown_material_names_is_refused(self):
+        """A misspelt value would pass for ``"shading_group"`` and say nothing."""
+        path = self._kit("typo.usda", {"steel": "surface"})
+        with self.assertRaises(ValueError):
+            UsdUtils.import_scene(path, material_names="shaders")
+        cube = cmds.polyCube(name="typo_cube")[0]
+        with self.assertRaises(ValueError):
+            UsdUtils.export(
+                os.path.join(self.tempdir, "typo_out.usda"),
+                objects=[cube],
+                material_names="shadingGroup",
+            )
+        self.assertFalse(os.path.exists(os.path.join(self.tempdir, "typo_out.usda")))
+
+    def test_names_stay_inside_the_import_s_namespace(self):
+        """``cmds.rename`` with a bare name moves a node OUT of its namespace
+        (measured): the new names carry the node's own."""
+        path = self._kit("spaced.usda", {"steel": "surface"})
+        new_nodes = UsdUtils.import_scene(path, namespace="kit_ns")
+        self.assertEqual(self._shading(new_nodes), {"kit_ns:steelSG": "kit_ns:steel"})
+
+
+class TestSingleRoot(_AuthoredLayers):
+    """A deliverable another stage can reference whole: a reference takes the
+    default prim alone, so several roots (or materials beside the root) are lost
+    through it (measured 2026-11-13: 1 of 2 meshes, no material)."""
+
+    @staticmethod
+    def _through_a_reference(path):
+        """``(meshes, meshes whose bound material arrives)`` on a stage that
+        references *path* the way an assembly would."""
+        from pxr import Usd, UsdShade
+
+        stage = Usd.Stage.CreateInMemory()
+        stage.DefinePrim("/placed").GetReferences().AddReference(path)
+        meshes = [p for p in stage.Traverse() if p.GetTypeName() == "Mesh"]
+        bound = [
+            m
+            for m in meshes
+            if UsdShade.MaterialBindingAPI(m).ComputeBoundMaterial()[0]
+        ]
+        return len(meshes), len(bound)
+
+    def test_an_export_of_two_roots_is_kept_whole_through_a_reference(self):
+        from pxr import Usd
+
+        left = cmds.polyCube(name="left_part")[0]
+        right = cmds.polyCube(name="right_part")[0]
+        shader = cmds.shadingNode("standardSurface", asShader=True, name="shared_mat")
+        group = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="shared_matSG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader", force=True)
+        cmds.sets([left, right], edit=True, forceElement=group)
+
+        flat = UsdUtils.export(
+            os.path.join(self.tempdir, "flat.usda"), objects=[left, right]
+        )
+        self.assertEqual(
+            self._through_a_reference(flat), (1, 0), "the loss this pass repairs"
+        )
+
+        out = UsdUtils.export(
+            os.path.join(self.tempdir, "wall_kit.usda"),
+            objects=[left, right],
+            single_root=True,
+        )
+        self.assertEqual(self._through_a_reference(out), (2, 2))
+        stage = Usd.Stage.Open(out)
+        self.assertEqual(
+            [p.GetName() for p in stage.GetPseudoRoot().GetChildren()], ["wall_kit"]
+        )
+        self.assertEqual(str(stage.GetDefaultPrim().GetPath()), "/wall_kit")
+        self.assertTrue(stage.GetPrimAtPath("/wall_kit/left_part"))
+
+    def test_an_animated_export_under_one_root_keeps_its_split_passes(self):
+        """``rootPrim`` would do this inside mayaUsd, at the cost of the sampled
+        export (the flag moves prims, so it takes one slow pass); the re-root
+        runs after the write, on the layer the split passes made."""
+        from unittest import mock
+
+        left = cmds.polyCube(name="left_part")[0]
+        right = cmds.polyCube(name="right_part")[0]
+        cmds.setKeyframe(left, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(left, attribute="translateX", time=5, value=4)
+        with mock.patch.object(
+            UsdUtils, "_split_export", wraps=UsdUtils._split_export
+        ) as split:
+            out = UsdUtils.export(
+                os.path.join(self.tempdir, "moving_kit.usda"),
+                objects=[left, right],
+                options={"frameRange": (1, 5)},
+                single_root=True,
+            )
+        self.assertTrue(split.called, "the sampled export still ran split")
+        from pxr import Usd
+
+        stage = Usd.Stage.Open(out)
+        moved = stage.GetPrimAtPath("/moving_kit/left_part")
+        self.assertEqual(
+            moved.GetAttribute("xformOp:translate").GetTimeSamples(),
+            [1.0, 2.0, 3.0, 4.0, 5.0],
+        )
+
+    def test_a_usdz_takes_its_root_s_name_from_the_package(self):
+        from pxr import Usd
+
+        left = cmds.polyCube(name="left_part")[0]
+        right = cmds.polyCube(name="right_part")[0]
+        out = UsdUtils.export(
+            os.path.join(self.tempdir, "boxed.usdz"),
+            objects=[left, right],
+            single_root=True,
+        )
+        stage = Usd.Stage.Open(out)
+        self.assertEqual(
+            [p.GetName() for p in stage.GetPseudoRoot().GetChildren()], ["boxed"]
+        )
+
+    def test_every_path_in_the_layer_follows_the_move(self):
+        """Every path that pointed at a moved prim follows it: bindings, shader
+        connections, internal references, and the ones inside a variant, which
+        no composed stage shows at once. The root here already bears the file's
+        name, the hardest case: a path into it reads like a path already moved,
+        and so does one into its child named as another root."""
+        from pxr import Sdf, Usd, UsdGeom, UsdShade
+
+        path, stage = self._new_stage("crate.usda")
+        UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+        body = self._quad(stage, "/crate/body")
+        steel = self._material(stage, "/mtl/steel")
+        UsdShade.MaterialBindingAPI.Apply(body.GetPrim()).Bind(steel)
+        self._quad(stage, "/crate/mtl")
+        other = stage.DefinePrim("/other", "Xform")
+        other.CreateRelationship("into_crate").SetTargets(["/crate/body"])
+        stage.GetPrimAtPath("/mtl").CreateRelationship("into_namesake").SetTargets(
+            ["/crate/mtl"]
+        )
+        # An internal reference naming no prim means the layer's default prim,
+        # which becomes the new root: left so, it would reference its own parent.
+        stage.OverridePrim("/other/as_default").GetReferences().AddInternalReference(
+            Sdf.Path.emptyPath
+        )
+        self._quad(stage, "/Prototypes/screw/mesh")
+        stage.OverridePrim("/crate/screw_1").GetReferences().AddInternalReference(
+            "/Prototypes/screw"
+        )
+        lods = stage.DefinePrim("/crate/lods", "Xform").GetVariantSets().AddVariantSet("LOD")
+        for name in ("LOD0", "LOD1"):
+            lods.AddVariant(name)
+            lods.SetVariantSelection(name)
+            with lods.GetVariantEditContext():
+                level = self._quad(stage, f"/crate/lods/{name}")
+                UsdShade.MaterialBindingAPI.Apply(level.GetPrim()).Bind(steel)
+        stage.GetRootLayer().defaultPrim = "crate"
+        stage.GetRootLayer().Save()
+        del stage
+
+        self.assertEqual(UsdUtils.single_root(path), "/crate")
+        layer = Sdf.Layer.FindOrOpen(path)
+        self.assertEqual([spec.name for spec in layer.rootPrims], ["crate"])
+        self.assertEqual(layer.defaultPrim, "crate")
+        stage = Usd.Stage.Open(layer)
+        material = "/crate/mtl/steel"
+        self.assertEqual(
+            str(
+                UsdShade.MaterialBindingAPI(stage.GetPrimAtPath("/crate/crate/body"))
+                .GetDirectBinding()
+                .GetMaterialPath()
+            ),
+            material,
+        )
+        surface = UsdShade.Material(stage.GetPrimAtPath(material)).GetSurfaceOutput()
+        self.assertEqual(
+            str(surface.GetConnectedSource()[0].GetPath()), f"{material}/surface"
+        )
+        self.assertTrue(
+            stage.GetPrimAtPath("/crate/crate/screw_1/mesh"),
+            "the internal reference still reaches its prototype",
+        )
+        self.assertEqual(
+            [
+                str(t)
+                for t in stage.GetPrimAtPath("/crate/other")
+                .GetRelationship("into_crate")
+                .GetTargets()
+            ],
+            ["/crate/crate/body"],
+            "a path into the root that bears the file's name",
+        )
+        self.assertEqual(
+            [
+                str(t)
+                for t in stage.GetPrimAtPath("/crate/mtl")
+                .GetRelationship("into_namesake")
+                .GetTargets()
+            ],
+            ["/crate/crate/mtl"],
+            "a path into that root's child named as another root",
+        )
+        self.assertTrue(
+            stage.GetPrimAtPath("/crate/other/as_default/body"),
+            "the default-prim reference still brings the old default prim's content",
+        )
+        self.assertEqual(
+            str(UsdGeom.GetStageUpAxis(stage)), "Z", "the layer's own metadata stays"
+        )
+        holder = stage.GetPrimAtPath("/crate/crate/lods")
+        for name in ("LOD0", "LOD1"):
+            holder.GetVariantSets().GetVariantSet("LOD").SetVariantSelection(name)
+            level = stage.GetPrimAtPath(f"/crate/crate/lods/{name}")
+            self.assertEqual(
+                str(
+                    UsdShade.MaterialBindingAPI(level)
+                    .GetDirectBinding()
+                    .GetMaterialPath()
+                ),
+                material,
+                f"the binding inside variant {name}",
+            )
+
+    def test_a_layer_already_under_one_root_is_left_as_written(self):
+        from pxr import Sdf
+
+        path = self._kit("whole.usda", {"steel": "surface"})
+        before = Sdf.Layer.FindOrOpen(path).ExportToString()
+        self.assertIsNone(UsdUtils.single_root(path))
+        after = Sdf.Layer.FindOrOpen(path)
+        after.Reload()
+        self.assertEqual(after.ExportToString(), before)
+
+    def test_a_held_layer_is_read_again_from_the_file(self):
+        """The writer replaces the file under a layer this session may hold. An
+        unforced reload trusts the file's time stamp, so a replacement within
+        its resolution kept the old content, and the pass wrapped and saved
+        that over the new file (2026-11-13 review, measured in pxr)."""
+        from pxr import Sdf
+
+        path, stage = self._new_stage("held.usda")
+        self._quad(stage, "/a")
+        self._quad(stage, "/b")
+        stage.GetRootLayer().Save()
+        held = stage.GetRootLayer()
+        with open(path, "w") as handle:
+            handle.write(
+                '#usda 1.0\n\ndef Xform "x"\n{\n}\n\ndef Xform "y"\n{\n}\n\ndef Xform "z"\n{\n}\n'
+            )
+        self.assertEqual(UsdUtils.single_root(path), "/held")
+        self.assertEqual(
+            sorted(held.GetPrimAtPath("/held").nameChildren.keys()), ["x", "y", "z"]
+        )
+        del stage
+        fresh = Sdf.Layer.FindOrOpen(path)
+        self.assertEqual([spec.name for spec in fresh.rootPrims], ["held"])
+
+    def test_a_one_root_layer_keeps_a_default_prim_under_its_root(self):
+        """A default prim BELOW the root is the author's choice of what a
+        reference receives: not ours to move up."""
+        from pxr import Sdf
+
+        path = os.path.join(self.tempdir, "nested.usda").replace("\\", "/")
+        with open(path, "w") as handle:
+            handle.write(
+                '#usda 1.0\n(\n    defaultPrim = "World/Geo"\n)\n\n'
+                'def Xform "World"\n{\n    def Xform "Geo"\n    {\n    }\n}\n'
+            )
+        self.assertIsNone(UsdUtils.single_root(path))
+        layer = Sdf.Layer.FindOrOpen(path)
+        self.assertEqual(layer.defaultPrim, "World/Geo")
+
+    def test_a_layer_that_composes_sublayers_is_refused(self):
+        """A sublayer's prims are not this layer's to move: paths into them
+        would be rewritten to where nothing arrives."""
+        base_path, base = self._new_stage("base.usda")
+        self._quad(base, "/from_base")
+        base.GetRootLayer().Save()
+        path, stage = self._new_stage("over_base.usda")
+        self._quad(stage, "/a")
+        self._quad(stage, "/b")
+        stage.GetRootLayer().subLayerPaths.append("./base.usda")
+        stage.GetRootLayer().Save()
+        del stage, base
+        with self.assertRaises(ValueError):
+            UsdUtils.single_root(path)
+
+    def test_a_lone_root_that_is_not_the_default_prim_becomes_it(self):
+        from pxr import Sdf
+
+        path, stage = self._new_stage("undeclared.usda")
+        self._quad(stage, "/only/mesh")
+        stage.GetRootLayer().Save()
+        del stage
+        self.assertEqual(UsdUtils.single_root(path), "/only")
+        self.assertEqual(Sdf.Layer.FindOrOpen(path).defaultPrim, "only")
+
+    def test_the_root_s_name_is_spelled_as_a_prim_may_be(self):
+        from pxr import Sdf
+
+        path, stage = self._new_stage("2 wall-kit.usda")
+        self._quad(stage, "/a")
+        self._quad(stage, "/b")
+        stage.GetRootLayer().Save()
+        del stage
+        self.assertEqual(UsdUtils.single_root(path), "/_2_wall_kit")
+        self.assertEqual(
+            UsdUtils.single_root(path), None, "a second pass has nothing to do"
+        )
+        layer = Sdf.Layer.FindOrOpen(path)  # held: a temporary layer expires mid-read
+        self.assertEqual([spec.name for spec in layer.rootPrims], ["_2_wall_kit"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

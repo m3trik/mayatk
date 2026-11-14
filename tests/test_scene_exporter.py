@@ -7612,6 +7612,46 @@ class TestTexturePathPipeline(MayaTkTestCase):
         names = {prim.GetName() for prim in stage.Traverse()}
         self.assertIn(self.cube.split("|")[-1], names)
 
+    def test_a_usd_deliverable_of_several_roots_stands_under_one_root_prim(self):
+        """A stage referencing a file receives its default prim alone: two
+        exported roots sharing a material arrived as one mesh with no material
+        (measured 2026-11-13). The deliverable is written under one root prim
+        named after the file, so the reference receives all of it."""
+        try:
+            cmds.loadPlugin("mayaUsdPlugin", quiet=True)
+            from pxr import Usd, UsdShade
+        except Exception:  # noqa: BLE001
+            self.skipTest("mayaUsdPlugin not available")
+        other = cmds.polyCube(name="ExportCubeB")[0]
+        shader = cmds.shadingNode("standardSurface", asShader=True, name="kit_mat")
+        group = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="kit_matSG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader", force=True)
+        cmds.sets([self.cube, other], edit=True, forceElement=group)
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=[self.cube, other],
+                output_name="kit_usd",
+                tasks={"output_format": "usd"},
+            )
+        )
+        path = self.exporter.export_path
+        written = Usd.Stage.Open(path)
+        self.assertEqual(
+            [p.GetName() for p in written.GetPseudoRoot().GetChildren()], ["kit_usd"]
+        )
+        self.assertEqual(str(written.GetDefaultPrim().GetPath()), "/kit_usd")
+        placed = Usd.Stage.CreateInMemory()
+        placed.DefinePrim("/placed").GetReferences().AddReference(path.replace("\\", "/"))
+        meshes = [p for p in placed.Traverse() if p.GetTypeName() == "Mesh"]
+        self.assertEqual(len(meshes), 2)
+        self.assertTrue(
+            all(UsdShade.MaterialBindingAPI(m).ComputeBoundMaterial()[0] for m in meshes),
+            "every mesh keeps its material through the reference",
+        )
+
     def test_usd_format_reports_the_fbx_only_knobs_as_inert(self):
         """A preset / takes / bake-range still selected are FBX-only -- said, not hidden."""
         try:
@@ -12318,7 +12358,7 @@ class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
 class TestRunLogFile(unittest.TestCase):
     """The run log is the SCENE's (``ptk.SceneExporterBase.log_file_path``):
     one file in the per-user cache whatever the export is named, never one
-    beside each deliverable (2026-10-13). ``hide_log_file`` is retired."""
+    beside each deliverable (2026-10-13)."""
 
     def test_the_log_is_keyed_by_the_scene(self):
         exp = SceneExporter.__new__(SceneExporter)
@@ -12327,12 +12367,6 @@ class TestRunLogFile(unittest.TestCase):
         self.assertRegex(os.path.basename(first), r"^hero_[0-9a-f]{8}\.log$")
         exp._saved_scene_path = lambda: os.path.join("proj", "shot2", "hero.ma")
         self.assertNotEqual(exp.log_file_path(), first)
-
-    def test_hide_log_file_is_retired(self):
-        exp = SceneExporter.__new__(SceneExporter)
-        missing = os.path.join(os.path.dirname(__file__), "no_such_export_dir")
-        with self.assertWarns(DeprecationWarning):
-            self.assertFalse(exp.perform_export(export_dir=missing, hide_log_file=True))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ import os
 import re
 import math
 import logging
+import contextlib
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -156,6 +157,10 @@ class UsdUtils(ptk.HelpMixin):
         "remapUVSetsTo": [["st", "map1"]],
     }
 
+    #: What a material's name sits on: ``material_names`` of :meth:`export` and
+    #: :meth:`import_scene`.
+    MATERIAL_NAMES = ("shader", "shading_group")
+
     #: The ``cmds.file`` translator mayaUsd registers for READING a layer: an import,
     #: a reference and an open all go through it (:meth:`file_options`).
     IMPORT_TRANSLATOR = "USD Import"
@@ -211,6 +216,7 @@ class UsdUtils(ptk.HelpMixin):
         selection_only: bool = True,
         material_names: str = "shader",
         prune_static: bool = False,
+        single_root: bool = False,
     ) -> str:
         """Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).
 
@@ -239,13 +245,19 @@ class UsdUtils(ptk.HelpMixin):
                 flags are put back, but each flip is an undoable edit, and a
                 reference edit on a referenced node -- so it is for a scene
                 opened to be converted, not a user's working scene.
+            single_root: Put the layer's root prims under ONE root prim named
+                after the file, made the default prim, so a stage that
+                references the file receives all of it (:meth:`single_root`).
+                For a deliverable; a bridge payload keeps its flat layout.
 
         Returns:
             The absolute path of the exported file.
 
         Raises:
             RuntimeError: Nothing selected for a selection export, or export failure.
+            ValueError: An unknown *material_names*.
         """
+        cls._check_material_names(material_names)
         cls.load_plugin()
 
         file_path = os.path.abspath(os.path.expandvars(file_path))
@@ -276,6 +288,10 @@ class UsdUtils(ptk.HelpMixin):
                 cls._maya_usd_export(tmp_layer, selection_only, opts, prune_static)
                 if material_names == "shader":
                     cls.name_materials_after_shaders(tmp_layer)
+                if single_root:  # named after the package, not the scratch layer
+                    cls.single_root(
+                        tmp_layer, os.path.splitext(os.path.basename(file_path))[0]
+                    )
                 result = ptk.UsdzPackager.from_layer(tmp_layer, file_path)
             finally:
                 store.cleanup()
@@ -285,6 +301,8 @@ class UsdUtils(ptk.HelpMixin):
         cls._maya_usd_export(file_path, selection_only, opts, prune_static)
         if material_names == "shader":
             cls.name_materials_after_shaders(file_path)
+        if single_root:
+            cls.single_root(file_path)
         logger.info(f"Exported USD: {file_path}")
         return file_path
 
@@ -1062,7 +1080,7 @@ class UsdUtils(ptk.HelpMixin):
 
         layer = Sdf.Layer.Find(str(usd_path))
         if layer is not None:
-            layer.Reload()
+            layer.Reload(True)  # forced: an unforced reload trusts the file's time stamp
         else:
             layer = Sdf.Layer.FindOrOpen(str(usd_path))
         if layer is None:
@@ -1200,6 +1218,145 @@ class UsdUtils(ptk.HelpMixin):
         dst = dst or ptk.TempArtifacts("usd_lods").path(extension=".usda")
         copy.Export(dst)
         return dst
+
+    @classmethod
+    def single_root(cls, usd_path: str, name: Optional[str] = None) -> Optional[str]:
+        """Put every root prim of the layer at *usd_path* under ONE root prim,
+        in place, and make it the layer's default prim; return its path, or
+        None when the layer was already so.
+
+        A stage that references a file receives its default prim alone.
+        ``mayaUSDExport`` leaves one root per exported root object and puts a
+        material several roots share beside them, so a reference dropped the
+        other roots and every material bound across them (measured 2026-11-13:
+        1 of 2 meshes, no material). Opening or importing the file was never
+        affected. For a layer this module's export wrote.
+
+        The root is an ``Xform`` named after the file (*name*, spelled by
+        :meth:`sanitize_prim_name`). A layer with one root keeps it: only its
+        default prim is stated where none was. Several roots all move, one
+        already bearing the name included (``/crate`` becomes ``/crate/crate``:
+        one rule, whatever the roots are called). Every path that pointed at a
+        moved prim follows it -- relationship targets, attribute connections,
+        inherits, specializes, internal references and payloads (one naming no
+        prim meant the default prim, and now names where that went), inside
+        variants too. Not rewritten: layer metadata that names a prim
+        (``relocates``, a render-settings path) and path expressions; no
+        exporter here writes them. The file is read again from disk first (the
+        writer just replaced it), so a held layer's unsaved edits are dropped.
+
+        A pass after the write, not ``mayaUSDExport``'s ``rootPrim``: that flag
+        moves prims, which sends an animated export through one slow pass
+        (:attr:`_UNSPLIT_FLAGS`). Copies, not a namespace edit: moving the
+        roots one by one is quadratic in their count (10,000 roots: 7.4 s
+        edited, 0.8 s copied). blendertk uses its exporter's own
+        ``root_prim_path``.
+
+        Parameters:
+            usd_path: The layer to edit (not a ``.usdz``: pxr cannot save into
+                a package).
+            name: The root's name; default the file's stem.
+
+        Returns:
+            The root prim's path, or None when nothing changed.
+
+        Raises:
+            ValueError: The layer composes sublayers: their prims are not this
+                layer's to move.
+        """
+        from pxr import Sdf
+
+        layer = Sdf.Layer.Find(str(usd_path))
+        if layer is not None:
+            layer.Reload(True)  # forced: an unforced reload trusts the file's time stamp
+        else:
+            layer = Sdf.Layer.FindOrOpen(str(usd_path))
+        if layer is None:
+            return None
+        if layer.subLayerPaths:
+            raise ValueError(
+                f"{usd_path} composes sublayers, whose prims are not this layer's "
+                "to move: flatten the stage first."
+            )
+        roots = [spec.name for spec in layer.rootPrims]
+        if not roots:
+            return None
+        default = layer.defaultPrim.strip("/")
+        if len(roots) == 1:
+            if default.split("/")[0] == roots[0]:
+                return None  # the root, or a prim under it, by the author's choice
+            layer.defaultPrim = roots[0]
+            layer.Save()
+            return f"/{roots[0]}"
+        name = cls.sanitize_prim_name(
+            name or os.path.splitext(os.path.basename(str(usd_path)))[0]
+        )
+        top = Sdf.Path.absoluteRootPath
+        # Staged under a name no root bears: a path already under it is one the
+        # copy remapped, and every other still names a prim where the writer
+        # left it. A root bearing the file's name is then told from the new root.
+        holder = name
+        while holder in roots:
+            holder = f"_{holder}"
+        staged = top.AppendChild(holder)
+        was_default = staged.AppendPath(default) if default else None
+
+        def moved(path):
+            if not path.IsAbsolutePath() or path.HasPrefix(staged):
+                return path
+            return path.ReplacePrefix(top, staged)
+
+        def moved_arc(arc, kind):
+            if arc.assetPath:
+                return arc  # another file's prim
+            if arc.primPath.isEmpty:  # the default prim: the new root itself, left so
+                if was_default is None:
+                    return arc
+                target = was_default
+            else:
+                target = moved(arc.primPath)
+            if kind is Sdf.Payload:
+                return Sdf.Payload("", target, arc.layerOffset)
+            return Sdf.Reference("", target, arc.layerOffset, arc.customData)
+
+        staging = Sdf.Layer.CreateAnonymous(".usda")
+        with Sdf.ChangeBlock():
+            Sdf.PrimSpec(staging, holder, Sdf.SpecifierDef, "Xform")
+            for child in roots:  # the copy remaps what points inside each root
+                Sdf.CopySpec(
+                    layer, top.AppendChild(child), staging, staged.AppendChild(child)
+                )
+        specs: List[Any] = []
+        staging.Traverse(top, lambda path: specs.append(path))
+        with Sdf.ChangeBlock():  # and this, what points from one root into another
+            for path in specs:
+                if path.IsPrimPath() or path.IsPrimVariantSelectionPath():
+                    spec = staging.GetPrimAtPath(path)
+                    if spec is None:
+                        continue
+                    spec.inheritPathList.ModifyItemEdits(moved)
+                    spec.specializesList.ModifyItemEdits(moved)
+                    if spec.hasReferences:
+                        spec.referenceList.ModifyItemEdits(
+                            lambda arc: moved_arc(arc, Sdf.Reference)
+                        )
+                    if spec.hasPayloads:
+                        spec.payloadList.ModifyItemEdits(
+                            lambda arc: moved_arc(arc, Sdf.Payload)
+                        )
+                elif path.IsPropertyPath():
+                    spec = staging.GetPropertyAtPath(path)
+                    if isinstance(spec, Sdf.RelationshipSpec):
+                        spec.targetPathList.ModifyItemEdits(moved)
+                    elif isinstance(spec, Sdf.AttributeSpec):
+                        spec.connectionPathList.ModifyItemEdits(moved)
+        with Sdf.ChangeBlock():
+            layer.rootPrims.clear()
+            # Copied back under its own name, which carries every staged path over.
+            Sdf.CopySpec(staging, staged, layer, top.AppendChild(name))
+            layer.defaultPrim = name
+        layer.Save()
+        return f"/{name}"
 
     @staticmethod
     def skinning_methods(usd_path: str) -> Dict[str, str]:
@@ -1521,6 +1678,125 @@ class UsdUtils(ptk.HelpMixin):
         ]
 
     @classmethod
+    def _check_material_names(cls, value: str) -> None:
+        """Refuse a ``material_names`` outside :attr:`MATERIAL_NAMES`: a misspelt
+        one would otherwise pass for ``"shading_group"`` and say nothing."""
+        if value not in cls.MATERIAL_NAMES:
+            raise ValueError(
+                f"Unknown material_names {value!r}: expected one of {cls.MATERIAL_NAMES}."
+            )
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _linear_key_defaults():
+        """Maya's global default key tangents set to ``linear`` for the block,
+        put back after it.
+
+        USD interpolates linearly between time samples, and mayaUsd's reader
+        creates its keys with the session's default tangents (stock ``auto``):
+        a two-sample move 100 -> 200 over frames 1-10 read 103.429 at frame 2
+        where the layer says 111.111 (measured 2026-11-13, mayaUsd 0.30). Read
+        under a linear default the curve is the layer's, at no cost per key.
+        Set around the read rather than on the new curves afterwards: the
+        import's node list is optional (``return_new_nodes``), and that pass
+        costs a call per curve.
+        """
+        prior_in = (cmds.keyTangent(query=True, g=True, inTangentType=True) or ["auto"])[0]
+        prior_out = (cmds.keyTangent(query=True, g=True, outTangentType=True) or ["auto"])[0]
+        try:
+            cmds.keyTangent(g=True, inTangentType="linear", outTangentType="linear")
+            yield
+        finally:
+            cmds.keyTangent(g=True, inTangentType=prior_in, outTangentType=prior_out)
+
+    @staticmethod
+    def _material_prim_names(usd_path: Optional[str]) -> set:
+        """The names of the ``Material`` prims the stage at *usd_path* composes
+        (empty when there is no readable stage)."""
+        if not usd_path:
+            return set()
+        from pxr import Usd
+
+        stage = Usd.Stage.Open(str(usd_path))
+        if stage is None:
+            return set()
+        return {p.GetName() for p in stage.Traverse() if p.GetTypeName() == "Material"}
+
+    @classmethod
+    def name_shaders_after_materials(
+        cls, nodes: List[str], usd_path: Optional[str] = None
+    ) -> Dict[str, str]:
+        """Give each material among the imported *nodes* Maya's own spelling:
+        its surface shader takes the material's name, its shading group
+        ``<name>SG``. The inverse of :meth:`name_materials_after_shaders`.
+
+        mayaUsd names the shading group after the ``Material`` prim and the
+        shader after the ``Shader`` prim inside it, a name that says nothing
+        (``surface``, ``Principled_BSDF``; the next material's is ``surface1``).
+        Everything else here identifies a material by its SHADER -- FBX, the
+        manifests, :meth:`export` -- so a plain import then export wrote
+        ``Material surface`` and ``surface1`` (measured 2026-11-13).
+
+        A group already spelled ``<shader>SG`` is left alone. Where a Material
+        and its Shader share a name (what :meth:`export` writes) Maya gives the
+        shader the name and the group a digit (``steel1``): that group becomes
+        ``steelSG``. A material whose own name ends in a digit reads the same
+        way, so the layer is read to tell them apart, only when that pattern
+        shows. A shader this import did not make, or one a group of this pass
+        already named, keeps its name. New names stay in the node's namespace
+        (a bare name would move it into the current one, measured).
+
+        Parameters:
+            nodes: The nodes the import created.
+            usd_path: The layer they came from; without it a group named
+                ``<shader><digits>`` is taken for Maya's clash rename.
+
+        Returns:
+            ``{old name: new name}`` for every node renamed.
+        """
+        if not nodes:  # `cmds.ls([])` lists the whole scene
+            return {}
+        fresh = set(nodes)
+        renamed: Dict[str, str] = {}
+        named: set = set()
+        materials: Optional[set] = None
+        for group in cmds.ls(nodes, exactType="shadingEngine") or []:
+            shaders = (
+                cmds.listConnections(
+                    f"{group}.surfaceShader", source=True, destination=False
+                )
+                or []
+            )
+            if not shaders:
+                continue
+            shader = shaders[0]
+            if shader in named or shader not in fresh:
+                continue
+            space, _, group_name = group.rpartition(":")
+            shader_name = shader.rpartition(":")[2]
+            if group_name == f"{shader_name}SG":
+                continue
+            name = group_name
+            if name.endswith("SG") and len(name) > 2:
+                name = name[:-2]
+            if name != shader_name and name.rstrip("0123456789") == shader_name:
+                if materials is None:
+                    materials = cls._material_prim_names(usd_path)
+                if name not in materials:
+                    name = shader_name  # Maya's clash rename, not a material's name
+            absolute = f":{space}:" if space else ":"
+            renamed[group] = cmds.rename(group, f"{absolute}{name}SG")
+            if shader_name != name:
+                renamed[shader] = cmds.rename(shader, f"{absolute}{name}")
+                shader = renamed[shader]
+            named.add(shader)
+        if renamed:
+            logger.info(
+                f"{len(renamed)} imported shading node(s) named after their material."
+            )
+        return renamed
+
+    @classmethod
     def import_scene(
         cls,
         file_path: str,
@@ -1529,6 +1805,7 @@ class UsdUtils(ptk.HelpMixin):
         return_new_nodes: bool = True,
         read_animation: bool = True,
         conform: bool = False,
+        material_names: str = "shader",
     ) -> List[str]:
         """Import a USD file, optionally isolated into a namespace.
 
@@ -1537,7 +1814,9 @@ class UsdUtils(ptk.HelpMixin):
         isolation the ``.ma``/FBX paths get: the *active* namespace is set
         before the import and every created node lands under it, then the
         prior namespace is restored — the exact contract of
-        :meth:`FbxUtils.import_scene`.
+        :meth:`FbxUtils.import_scene`. Keys are read with linear tangents, as
+        USD interpolates between its samples (:meth:`_linear_key_defaults`);
+        the session's default tangents are put back.
 
         Parameters:
             file_path: Source USD file (``$VAR``/``~`` expanded).
@@ -1557,16 +1836,27 @@ class UsdUtils(ptk.HelpMixin):
                 stage in another unit or up axis into this scene's
                 (:meth:`stage_conform`, :meth:`conform_roots`) -- for a foreign
                 layer. Off for a layer the bridge wrote for this scene.
+            material_names: What carries an imported material's name --
+                ``"shader"`` (default): the surface shader takes the Material
+                prim's name and its group ``<name>SG``, Maya's own spelling and
+                the identity :meth:`export` writes back
+                (:meth:`name_shaders_after_materials`; it needs the node list,
+                so *return_new_nodes*); ``"shading_group"``: mayaUsd's own
+                names, the group after the Material prim and the shader after
+                its Shader prim.
 
         Returns:
             The newly created node names (namespace-prefixed when *namespace*
-            is given) -- after a conform, the DAG nodes by their paths under its
-            group, the group included -- or ``[]``.
+            is given; shading nodes by the names *material_names* gave them) --
+            after a conform, the DAG nodes by their paths under its group, the
+            group included -- or ``[]``.
 
         Raises:
             FileNotFoundError: If *file_path* does not exist.
             RuntimeError: On import failure.
+            ValueError: An unknown *material_names*.
         """
+        cls._check_material_names(material_names)
         file_path = os.path.abspath(
             os.path.expandvars(os.path.expanduser(str(file_path)))
         )
@@ -1596,13 +1886,14 @@ class UsdUtils(ptk.HelpMixin):
             restore_ns = cmds.namespaceInfo(currentNamespace=True, absoluteName=True)
             cmds.namespace(setNamespace=namespace)
         try:
-            new_nodes = cmds.file(
-                source,
-                i=True,
-                returnNewNodes=return_new_nodes,
-                ignoreVersion=True,
-                **read,
-            )
+            with cls._linear_key_defaults():
+                new_nodes = cmds.file(
+                    source,
+                    i=True,
+                    returnNewNodes=return_new_nodes,
+                    ignoreVersion=True,
+                    **read,
+                )
         finally:
             if restore_ns is not None:
                 cmds.namespace(setNamespace=restore_ns)
@@ -1614,6 +1905,9 @@ class UsdUtils(ptk.HelpMixin):
         # cmds.file returns the new-node list only with returnNewNodes; without
         # it the return is the filename string — honor the List[str] contract.
         new_nodes = new_nodes if isinstance(new_nodes, list) else []
+        if material_names == "shader" and new_nodes:
+            renamed = cls.name_shaders_after_materials(new_nodes, source)
+            new_nodes = [renamed.get(node, node) for node in new_nodes]
         if skin_methods and not new_nodes:
             # Nothing to apply the method TO. Scanning the scene instead would
             # touch skins this import did not create, so say so rather than
