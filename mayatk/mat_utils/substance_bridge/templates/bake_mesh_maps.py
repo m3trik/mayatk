@@ -1,11 +1,11 @@
-"""Bake Mesh Maps: bake the chosen mesh maps of every texture set, from the bake source when one was sent."""
+"""Bake Mesh Maps: bake the ticked mesh maps of every texture set, from the high poly its baking settings name (New Project's bake source)."""
 
 # Runs inside Painter (the substance_rpc plugin's ``script.start``) on the
 # project named in Project, else the one open in Painter.
 WORKS_ON = "project"
 
 # Rows: __PAINTER_PROJECT__ __PAINTER_SAVE__ __PAINTER__
-# Row: __MAP_BAKE_RESOLUTION__ choice 2048 "Map Resolution" choices=512|1024|2048|4096 tooltip="Bake output size, square."
+# Row: __MAP_BAKE_RESOLUTION__ choice 2048 "Map Resolution" choices=Project|512|1024|2048|4096 tooltip="Bake output size, square. Project keeps the size the project's baking settings hold."
 # Row: __BAKE_NORMAL__ bool on "Normal"
 # Row: __BAKE_WORLD_NORMAL__ bool on "World Space Normal"
 # Row: __BAKE_ID__ bool on "ID"
@@ -34,11 +34,15 @@ chosen = [
 if not chosen:
     raise RuntimeError("No mesh map is ticked to bake.")
 
-result = bake_ops.mesh_maps(maps=chosen, resolution=int(args.get("MAP_BAKE_RESOLUTION", 2048)), cancelled=args.cancelled)
+size = str(args.get("MAP_BAKE_RESOLUTION", 2048))
+result = bake_ops.mesh_maps(maps=chosen, resolution=int(size) if size.isdigit() else 0, cancelled=args.cancelled)
 for entry in result["baked"]:
-    args.report(f"Baked: {entry}")
+    for name, maps in entry.items():
+        args.report(f"{name}: baked {', '.join(maps)}.")
 if result["errors"]:
     raise RuntimeError("; ".join(result["errors"]))
+
+
 def _save():
     project.save()
     args.report("Project saved.")

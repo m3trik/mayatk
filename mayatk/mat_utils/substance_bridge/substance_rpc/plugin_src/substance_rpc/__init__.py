@@ -123,9 +123,14 @@ _STATE_EVENTS = (
 _handlers = []
 
 
-def publish_state(_event=None):
+def publish_state(_event=None, again=True):
     """Write what Painter holds into the instance record: the project (path,
-    name, UUID, the mesh it was made from) and whether Painter is busy."""
+    name, UUID, the mesh it was made from) and whether Painter is busy.
+
+    At its own project events Painter is still busy and cannot yet say the
+    project's UUID or mesh: what it left out is published once it is idle
+    (*again*: one more look, never a loop over a project that names no mesh).
+    """
     try:
         from .ops.project_ops import project_info  # noqa: PLC0415
         import substance_painter.project as project  # noqa: PLC0415
@@ -138,6 +143,8 @@ def publish_state(_event=None):
             busy=bool(project.is_busy()),
             paused=is_paused(),
         )
+        if again and info["is_open"] and (info.get("uuid") is None or info.get("mesh_path") is None):
+            project.execute_when_not_busy(lambda: publish_state(again=False))
     except Exception as exc:  # noqa: BLE001 -- a stale record beats a raise in Painter's event loop
         print(f"[substance_rpc] state not published: {exc}")
 

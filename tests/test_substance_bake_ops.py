@@ -100,12 +100,15 @@ class TestLightingLayerIntensity(unittest.TestCase):
 
     def _install_fake_painter(self, opacity_mode="method", with_opacity=True):
         """Install a fake ``substance_painter`` modeling the REAL API surface
-        (verified against the installed Painter's layerstack module):
+        (read from a running Painter 12.1's layerstack module):
         ``insert_fill(position)`` takes no name kwarg, and opacity / naming /
-        blending are METHODS on the layer node (``Node.set_opacity(opacity,
-        channel)``, ``Node.set_name``, ``Node.set_blending_mode``) — there are
-        no module-level setters. A fake that invents module functions would
-        validate an API Painter never shipped.
+        blending / the source are on the layer node (``Node.set_opacity(opacity,
+        channel)``, ``Node.set_name``, ``Node.set_blending_mode``,
+        ``active_channels``, ``set_source(channel, resource)``) — there are
+        no module-level setters. A fake that invents module functions
+        validates an API Painter never shipped: this one once had a
+        ``layerstack.set_source_from_mesh_map``, and the op it passed added a
+        layer that painted nothing.
 
         opacity_mode:
             "method"     -- Node.set_opacity(opacity, channel)   (current API)
@@ -114,7 +117,7 @@ class TestLightingLayerIntensity(unittest.TestCase):
         """
         import types
 
-        calls = {"opacity": [], "mesh_map": [], "blend": [], "names": []}
+        calls = {"opacity": [], "source": [], "space": [], "blend": [], "names": [], "layers": []}
 
         baking = types.ModuleType("substance_painter.baking")
 
@@ -128,14 +131,26 @@ class TestLightingLayerIntensity(unittest.TestCase):
 
         class ChannelType:
             BaseColor = "BaseColor"
+            Diffuse = "Diffuse"
 
         class Stack:
-            @staticmethod
-            def from_name(name):
-                return ("stack", name)
+            channels = ("BaseColor", "Roughness")
+
+            def __init__(self, name):
+                self.name = name
+
+            @classmethod
+            def from_name(cls, name):
+                return cls(name)
+
+            def all_channels(self):
+                return {channel: object() for channel in self.channels}
 
         textureset.ChannelType = ChannelType
         textureset.Stack = Stack
+
+        colormanagement = types.ModuleType("substance_painter.colormanagement")
+        colormanagement.GenericColorSpace = types.SimpleNamespace(Raw="Raw")
 
         layerstack = types.ModuleType("substance_painter.layerstack")
 
@@ -148,10 +163,19 @@ class TestLightingLayerIntensity(unittest.TestCase):
             Multiply = "Multiply"
             Overlay = "Overlay"
 
+        class _Source:
+            def __init__(self, layer):
+                self.layer = layer
+
+            def set_color_space(self, space):
+                calls["space"].append((self.layer.name, space))
+
         class _Layer:
             def __init__(self):
                 self.name = None
                 self.uid = "uid::unnamed"
+                self.active_channels = set()  # Painter's: a new fill paints nothing
+                calls["layers"].append(self)
 
             def set_name(self, name):
                 self.name = name
@@ -160,6 +184,12 @@ class TestLightingLayerIntensity(unittest.TestCase):
 
             def set_blending_mode(self, mode, channel=None):
                 calls["blend"].append((self.name, mode, channel))
+
+            def set_source(self, channel, source):
+                if channel not in self.active_channels:  # Painter's EditionContextException
+                    raise RuntimeError(f"{channel} is not an active channel of {self.name}")
+                calls["source"].append((self.name, channel, source))
+                return _Source(self)
 
         if with_opacity:
             if opacity_mode == "method":
@@ -177,31 +207,31 @@ class TestLightingLayerIntensity(unittest.TestCase):
         def insert_fill(pos):  # real signature: position only, no name kwarg
             return _Layer()
 
-        def set_source_from_mesh_map(layer, channel, usage):
-            calls["mesh_map"].append((getattr(layer, "name", layer), channel, usage))
-
         layerstack.InsertPosition = InsertPosition
         layerstack.BlendingMode = BlendingMode
         layerstack.insert_fill = insert_fill
-        layerstack.set_source_from_mesh_map = set_source_from_mesh_map
         layerstack._Layer = _Layer  # exposed for direct-layer tests
+        layerstack._Stack = Stack
 
         parent = types.ModuleType("substance_painter")
         parent.layerstack = layerstack
         parent.textureset = textureset
         parent.baking = baking
+        parent.colormanagement = colormanagement
 
         keys = (
             "substance_painter",
             "substance_painter.layerstack",
             "substance_painter.textureset",
             "substance_painter.baking",
+            "substance_painter.colormanagement",
         )
         saved = {k: sys.modules.get(k) for k in keys}
         sys.modules["substance_painter"] = parent
         sys.modules["substance_painter.layerstack"] = layerstack
         sys.modules["substance_painter.textureset"] = textureset
         sys.modules["substance_painter.baking"] = baking
+        sys.modules["substance_painter.colormanagement"] = colormanagement
 
         def restore():
             for k, v in saved.items():
@@ -213,36 +243,98 @@ class TestLightingLayerIntensity(unittest.TestCase):
         self.addCleanup(restore)
         return calls, layerstack
 
-    def test_add_lighting_layer_applies_both_intensities(self):
-        """End-to-end: AO and curvature intensities reach the opacity setter."""
+    @staticmethod
+    def _texture_set(maps=("AO", "Curvature")):
+        """A texture set as Painter's: its name, and the mesh maps it has baked."""
         import types
 
+        return types.SimpleNamespace(
+            name="TS", get_mesh_map_resource=lambda usage: f"res:TS.{usage}" if usage in maps else None
+        )
+
+    def _add(self, bake_utils, ts=None, **overrides):
+        options = dict(
+            layer_name="AO", blend_mode="Multiply", intensity=1.0, include_curvature=False, curvature_intensity=0.3
+        )
+        options.update(overrides)
+        return bake_utils._add_lighting_layer(ts or self._texture_set(), **options)
+
+    def test_add_lighting_layer_applies_both_intensities(self):
+        """End-to-end: AO and curvature intensities reach the opacity setter."""
         from substance_rpc.ops import bake_ops as bake_utils
 
         calls, _ = self._install_fake_painter()
-        ts = types.SimpleNamespace(name="TS")
-
-        uid = bake_utils._add_lighting_layer(
-            ts,
-            layer_name="AO",
-            blend_mode="Multiply",
-            intensity=0.5,
-            include_curvature=True,
-            curvature_intensity=0.3,
-        )
+        uid = self._add(bake_utils, intensity=0.5, include_curvature=True)
 
         self.assertTrue(uid)
-        # Both the AO and the curvature fill layer were sourced from a mesh map.
-        self.assertEqual(len(calls["mesh_map"]), 2)
         applied = {name: op for (name, _ch, op) in calls["opacity"]}
         self.assertAlmostEqual(applied["AO"], 0.5)
         self.assertAlmostEqual(applied["AO (Curvature)"], 0.3)
 
+    def test_the_lighting_layer_paints_base_color_from_the_baked_ao_map(self):
+        """The layer the op added painted NOTHING: a fill Painter's API inserts
+        has no channel active, and its source was never set (the setter the op
+        looked for is not in Painter). Measured in Painter 12.1: with the
+        channel switched on and the texture set's AO map as its source, the
+        exported Base Color is the base multiplied by the map."""
+        from substance_rpc.ops import bake_ops as bake_utils
+
+        calls, _ = self._install_fake_painter()
+        self._add(bake_utils)
+
+        (layer,) = calls["layers"]
+        self.assertEqual(layer.active_channels, {"BaseColor"}, "Base Color alone: no other channel is touched")
+        self.assertEqual(calls["source"], [("AO", "BaseColor", "res:TS.AO")])
+        self.assertEqual(calls["blend"], [("AO", "Multiply", "BaseColor")])
+        # Read as data: an occlusion of 0.5 halves the colour (read as an sRGB
+        # picture it would darken it to about a fifth).
+        self.assertEqual(calls["space"], [("AO", "Raw")])
+
+    def test_the_curvature_layer_overlays_its_map_read_as_a_picture(self):
+        """Above the AO layer; its mid grey must stay the value that changes
+        nothing, which is the picture reading Painter gives it (measured: read
+        as data, the overlay brightened every flat face)."""
+        from substance_rpc.ops import bake_ops as bake_utils
+
+        calls, _ = self._install_fake_painter()
+        self._add(bake_utils, include_curvature=True)
+
+        self.assertEqual(
+            calls["source"],
+            [("AO", "BaseColor", "res:TS.AO"), ("AO (Curvature)", "BaseColor", "res:TS.Curvature")],
+        )
+        self.assertIn(("AO (Curvature)", "Overlay", "BaseColor"), calls["blend"])
+        self.assertEqual(calls["space"], [("AO", "Raw")], "the curvature source keeps Painter's reading")
+
+    def test_a_texture_set_with_no_ao_map_is_an_error_not_an_empty_layer(self):
+        from substance_rpc.ops import bake_ops as bake_utils
+
+        self._install_fake_painter()
+        with self.assertRaises(RuntimeError) as ctx:
+            self._add(bake_utils, ts=self._texture_set(maps=()))
+        self.assertIn("no AO mesh map", str(ctx.exception))
+
+    def test_a_specular_glossiness_set_takes_the_lighting_on_diffuse(self):
+        from substance_rpc.ops import bake_ops as bake_utils
+
+        calls, layerstack = self._install_fake_painter()
+        layerstack._Stack.channels = ("Diffuse", "Glossiness")
+        self._add(bake_utils)
+        self.assertEqual(calls["source"], [("AO", "Diffuse", "res:TS.AO")])
+
+    def test_a_set_with_no_colour_channel_says_so(self):
+        from substance_rpc.ops import bake_ops as bake_utils
+
+        calls, layerstack = self._install_fake_painter()
+        layerstack._Stack.channels = ("Height",)
+        with self.assertRaises(RuntimeError) as ctx:
+            self._add(bake_utils)
+        self.assertIn("no Base Color", str(ctx.exception))
+        self.assertEqual(calls["layers"], [], "no layer is left behind")
+
     def test_the_layer_id_is_painters_uid_value_not_its_method(self):
         """Painter's ``uid`` is a method (``ReadOnlyUid.uid``): the op reported
         ``'<bound method ReadOnlyUid.uid of FillLayerNode(89)>'`` live."""
-        import types
-
         from substance_rpc.ops import bake_ops as bake_utils
 
         _, layerstack = self._install_fake_painter()
@@ -256,15 +348,7 @@ class TestLightingLayerIntensity(unittest.TestCase):
                 return 89
 
         layerstack.insert_fill = lambda pos: _PainterLayer()
-        uid = bake_utils._add_lighting_layer(
-            types.SimpleNamespace(name="TS"),
-            layer_name="AO",
-            blend_mode="Multiply",
-            intensity=1.0,
-            include_curvature=False,
-            curvature_intensity=0.3,
-        )
-        self.assertEqual(uid, 89)
+        self.assertEqual(self._add(bake_utils), 89)
 
     def test_apply_layer_intensity_partial_applies_clamped(self):
         from substance_rpc.ops import bake_ops as bake_utils
@@ -503,6 +587,15 @@ class TestLightingToDiffuseBakes(unittest.TestCase):
         self.assertEqual(calls["layer_after_end"], [True, True])
         self.assertEqual(result["baked_maps"], [{"Body": ["AO"]}, {"Trim": ["AO"]}])
         self.assertEqual(result["layers_created"], [{"Body": "uid::Body"}, {"Trim": "uid::Trim"}])
+
+    def test_the_result_keeps_what_a_persons_copy_of_the_script_reads(self) -> None:
+        """Copy to My Scripts makes a person's own Bake Lighting, which runs in
+        the built-in one's place: the release it was copied from read the
+        result's ``warnings`` (and the plugin's ``UNDRIVEN``)."""
+        _, _, bake_utils = self._painter()
+        result = bake_utils.lighting_to_diffuse(bake_resolution=256)
+        self.assertEqual(result["warnings"], [])
+        self.assertIsInstance(bake_utils.UNDRIVEN, str)
 
     def test_only_the_ops_maps_bake_and_the_project_keeps_its_own_choice(self) -> None:
         calls, state, bake_utils = self._painter()

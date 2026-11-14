@@ -603,6 +603,39 @@ class TestScriptRunner(unittest.TestCase):
         status = self.client.job(job)
         self.assertEqual((status["state"], status["report"]), ("done", ["created", "saved"]))
 
+    def test_a_step_that_reads_the_stack_runs_outside_an_undo_entry(self):
+        """Painter computes the layer stack only once an undo entry is closed
+        (measured: an export inside one wrote the textures of before the job's
+        edits), so a step that only reads it is queued with none."""
+        job = self.client.run_script(
+            "args.when_idle(lambda: args.report('edited'))\n"
+            "args.when_idle(lambda: args.report('exported'), undo=False)",
+            path="probe.py",
+            label="Probe",
+        )
+        self._drain()
+        status = self.client.job(job)
+        self.assertEqual((status["state"], status["report"]), ("done", ["edited", "exported"]))
+        self.assertEqual(self.painter.undo_scopes, ["Probe", "Probe"], "the script and its editing step; the export has none")
+
+    def test_a_jobs_status_has_every_key_from_the_start(self):
+        """Its status is read off Painter's main thread while that thread
+        writes it: no key is added later (a dict resized under a reader)."""
+        self.painter.busy = True
+        job = self.client.run_script("x = 1", path="probe.py")
+        queued = self.client.job(job)
+        self.assertEqual((queued["state"], queued["started"], queued["ended"]), ("queued", None, None))
+        self.painter.busy = False
+        self.painter.held.pop(0)()
+        self.assertEqual(set(self.client.job(job)), set(queued))
+
+    def test_following_a_job_needs_no_main_thread(self):
+        """A long synchronous step (an export, a save) holds Painter's main
+        thread: the job's status and its cancel still answer."""
+        for op in ("script.status", "script.cancel", "script.jobs"):
+            self.assertFalse(substance_rpc.PLUGIN.registry.needs_main_thread(op), op)
+        self.assertTrue(substance_rpc.PLUGIN.registry.needs_main_thread("script.start"))
+
     def test_a_failing_idle_step_fails_the_job(self):
         job = self.client.run_script("args.when_idle(lambda: 1 / 0)", path="probe.py")
         self._drain()
@@ -656,6 +689,31 @@ class TestInstanceRecord(unittest.TestCase):
         self.assertIs(record["state"]["busy"], False)
         self.assertEqual(PainterRpcClient.holding("C:/projects/test.spp")["id"], record["id"])
         self.assertIsNone(PainterRpcClient.holding("C:/projects/other.spp"))
+
+    def test_what_painter_could_not_say_while_busy_is_published_once_it_is_idle(self):
+        """Measured in Painter 12.1: at its ProjectCreated / ProjectSaved events
+        ``get_uuid`` and ``last_imported_mesh_path`` raise (it is still busy),
+        and nothing published again, so the record named a project with no
+        mesh: Update Mesh, straight after New Project, found no Painter
+        "holding the project made from this mesh"."""
+        project = self.painter.modules["substance_painter.project"]
+        known = project.get_uuid, project.last_imported_mesh_path
+
+        def busy(*_):
+            raise RuntimeError("the project is busy")
+
+        project.get_uuid = project.last_imported_mesh_path = busy
+        self.painter.busy = True
+        substance_rpc.publish_state()  # as Painter's ProjectSaved event calls it
+        held = PainterRpcClient.painters()[0]["state"]["project"]
+        self.assertEqual((held["uuid"], held["mesh_path"]), (None, None))
+        project.get_uuid, project.last_imported_mesh_path = known
+        self.painter.busy = False
+        self.assertEqual(len(self.painter.held), 1, "one more look, once Painter is idle")
+        self.painter.held.pop(0)()
+        held = PainterRpcClient.painters()[0]["state"]["project"]
+        self.assertEqual((held["uuid"], held["mesh_path"]), (self.painter.uuid, "C:/meshes/test.fbx"))
+        self.assertEqual(self.painter.held, [], "a project that names no mesh is not asked forever")
 
     def test_a_call_without_the_token_is_refused(self):
         with self.assertRaises(RuntimeError):

@@ -1,16 +1,13 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Bake ops: iray-backed mesh-map bakes and lighting composites.
+"""Bake ops: mesh-map bakes, and baked lighting laid over Base Color.
 
-Moved here from the standalone app's own Painter plugin when the two became
-this one (2026-11-05).
-
-The ``bake.lighting_to_diffuse`` op is the headline helper: it drives
-Painter's iray-backed baker for AO (and optionally Curvature) and adds a
-multiply fill layer onto the base color channel so the result reads as
-baked lighting. It is not a literal iray viewport render — Painter's
-Python API doesn't expose that — but the baked maps come from the same
-iray engine and composite identically for ~80% of production needs.
+``bake.lighting_to_diffuse`` bakes ambient occlusion (and, asked, curvature)
+per texture set with Painter's own baker, then adds a fill layer on top of the
+set's stack that multiplies the AO map onto Base Color (curvature as an
+overlay above it), so the texture reads as lit. It is the baked maps
+composited, not a render of the viewport: Painter's Python API has none.
+``bake.mesh_maps`` bakes the chosen mesh maps and adds no layer.
 """
 
 import logging
@@ -42,9 +39,10 @@ def _resolve_texture_sets(texture_set: Optional[str]):
 
 
 def _ts_name(ts) -> str:
-    """``TextureSet.name`` is a method on newer Painter, attr on older — coerce both."""
+    """*ts*'s name on any Painter: a property since 10.1 (still callable there,
+    with a deprecation warning in Painter's log on every call), a method before."""
     n = ts.name
-    return n() if callable(n) else n
+    return str(n) if isinstance(n, str) else n()
 
 
 def _uid(layer, fallback: str):
@@ -261,28 +259,65 @@ def _set_blending_mode(layerstack, layer, channel, blend_mode: str) -> None:
     logger.warning("[bake] No blending-mode setter available on this Painter.")
 
 
-#: Why a lighting layer is not driven by the AO map (said in the op's result).
+#: What an earlier release's result said in ``warnings`` while the lighting
+#: layer was not painted from the AO map. It is now, so nothing says this; the
+#: name stays for a script of a person's own written against that release (a
+#: copy of the built-in one reads the result's ``warnings``). A plugin payload
+#: cannot retire a name through ``ptk.Deprecation``: Painter has no pythontk.
 UNDRIVEN = (
     "the lighting layer is added but not driven by the AO map: this Painter's "
     "Python API has no verified setter for a fill layer's mesh-map source"
 )
 
 
-def _mesh_map_setter(layerstack):
-    """The layerstack call that drives a fill channel from a mesh map, or ``None``."""
-    return getattr(layerstack, "set_source_from_mesh_map", None) or getattr(
-        layerstack, "set_channel_source_to_mesh_map", None
-    )
+def _colour_channel(stack):
+    """The channel of *stack* the lighting is laid over: Base Color, or Diffuse
+    in a specular / glossiness project.
+
+    Raises:
+        RuntimeError: *stack* has neither.
+    """
+    import substance_painter.textureset as textureset
+
+    channels = stack.all_channels()
+    for name in ("BaseColor", "Diffuse"):
+        channel = getattr(textureset.ChannelType, name, None)
+        if channel is not None and channel in channels:
+            return channel
+    raise RuntimeError("the texture set has no Base Color (or Diffuse) channel to lay the lighting over")
 
 
-def _undriven() -> bool:
-    """Whether this Painter can drive a fill channel from a mesh map: False
-    when it has the setter (or no layerstack to ask)."""
-    try:
-        import substance_painter.layerstack as layerstack
-    except ImportError:
-        return False
-    return _mesh_map_setter(layerstack) is None
+def _paint_from_mesh_map(layer, channel, ts, usage, as_data: bool) -> None:
+    """Make *layer* paint *channel*, and only it, from *ts*'s baked *usage* map.
+
+    A fill layer Painter's API inserts has no channel active and paints
+    nothing: the channel is switched on, then given the map (the texture set's
+    own mesh-map resource) as its source.
+
+    Parameters:
+        layer: The fill layer (``layerstack.insert_fill``'s).
+        channel: The ``ChannelType`` it paints.
+        ts: The texture set whose map it is.
+        usage: The ``MeshMapUsage`` baked.
+        as_data: Read the map's values as they are, not as an sRGB picture.
+            Painter blends a colour channel in its display encoding, so an
+            occlusion of 0.5 read as a picture darkens the colour to about a
+            fifth (0.5 decoded) where the light reaching it is a half; read as
+            data it darkens it by that half. An overlay wants the picture
+            reading: mid grey is then the value that changes nothing.
+
+    Raises:
+        RuntimeError: *ts* has no *usage* map (none baked, none imported).
+    """
+    resource = ts.get_mesh_map_resource(usage)
+    if resource is None:
+        raise RuntimeError(f"it has no {getattr(usage, 'name', usage)} mesh map (bake it first)")
+    layer.active_channels = {channel}
+    source = layer.set_source(channel, resource)
+    if as_data:
+        import substance_painter.colormanagement as colormanagement
+
+        source.set_color_space(colormanagement.GenericColorSpace.Raw)
 
 
 def _remove_previous_layers(layerstack, stack, names) -> None:
@@ -306,54 +341,42 @@ def _add_lighting_layer(
     include_curvature: bool,
     curvature_intensity: float,
 ) -> Optional[str]:
-    """Insert a fill layer on top of the stack that multiplies AO (+optional
-    curvature) onto the base color channel.
+    """Insert a fill layer on top of the stack that lays the baked AO map
+    over Base Color (*blend_mode*, Multiply by default), and with
+    *include_curvature* a second one above it that overlays the curvature map.
 
-    Returns the new layer's UID/name on success, ``None`` if the API surface
-    isn't compatible with what we expect.
+    Each layer paints the colour channel alone, from the texture set's own
+    mesh map: the AO read as data (:func:`_paint_from_mesh_map`). A previous
+    run's layers of these names are replaced.
+
+    Returns:
+        The lighting layer's uid.
+
+    Raises:
+        RuntimeError: the texture set has no colour channel, or no map to lay
+            over it.
     """
+    import substance_painter.baking as baking
     import substance_painter.layerstack as layerstack
     import substance_painter.textureset as textureset
 
     stack = textureset.Stack.from_name(_ts_name(ts))
+    colour = _colour_channel(stack)
     _remove_previous_layers(layerstack, stack, (layer_name, f"{layer_name} (Curvature)"))
     insert_pos = layerstack.InsertPosition.from_textureset_stack(stack)
-    # Real API: insert_fill(position) takes no name kwarg (verified against
-    # the installed Painter — the old name= call raised TypeError); the node
-    # is named afterwards via Node.set_name.
+    # insert_fill(position) takes no name: the node is named afterwards.
     layer = layerstack.insert_fill(insert_pos)
     _name_node(layer, layer_name)
-
-    base_color = textureset.ChannelType.BaseColor
-    _set_blending_mode(layerstack, layer, base_color, blend_mode)
-
-    # Source: drive base color from the AO mesh map. NOTE: neither name below
-    # exists in the installed Painter's layerstack module — the real recipe
-    # goes through TextureSet.get_mesh_map_resource(usage) plus the fill
-    # layer's SourceEditorMixin, whose per-channel source contract can't be
-    # designed statically (needs a live Painter session to validate). Until
-    # then this resolves defensively and degrades to a warning: the layer is
-    # created, blended, and intensity-scaled, but not yet map-driven.
-    mesh_map_setter = _mesh_map_setter(layerstack)
-    if mesh_map_setter is None:
-        logger.warning(
-            "[bake] No mesh-map-to-fill-channel setter on substance_painter.layerstack. "
-            "Layer was created but base color source is not driven by the AO map."
-        )
-        return _uid(layer, _ts_name(ts) + "/" + layer_name)
-
-    import substance_painter.baking as baking
-
-    mesh_map_setter(layer, base_color, baking.MeshMapUsage.AO)
-    _apply_layer_intensity(layer, base_color, intensity)
+    _paint_from_mesh_map(layer, colour, ts, baking.MeshMapUsage.AO, as_data=True)
+    _set_blending_mode(layerstack, layer, colour, blend_mode)
+    _apply_layer_intensity(layer, colour, intensity)
 
     if include_curvature:
-        # Stack a second overlay layer for curvature contribution.
-        curv_layer = layerstack.insert_fill(insert_pos)
+        curv_layer = layerstack.insert_fill(insert_pos)  # above the AO layer
         _name_node(curv_layer, f"{layer_name} (Curvature)")
-        _set_blending_mode(layerstack, curv_layer, base_color, "Overlay")
-        mesh_map_setter(curv_layer, base_color, baking.MeshMapUsage.Curvature)
-        _apply_layer_intensity(curv_layer, base_color, curvature_intensity)
+        _paint_from_mesh_map(curv_layer, colour, ts, baking.MeshMapUsage.Curvature, as_data=False)
+        _set_blending_mode(layerstack, curv_layer, colour, "Overlay")
+        _apply_layer_intensity(curv_layer, colour, curvature_intensity)
 
     return _uid(layer, _ts_name(ts) + "/" + layer_name)
 
@@ -381,12 +404,13 @@ def lighting_to_diffuse(
     save_project: bool = False,
     cancelled=None,
 ) -> dict:
-    """Bake iray-backed AO (+ optional curvature) and composite onto base color.
+    """Bake AO (+ optional curvature) and lay it over Base Color: a Multiply
+    fill layer painted from the AO map, an Overlay one from the curvature map.
 
     Parameters:
         texture_set: Name of a single texture set to bake, or ``None`` for all.
         bake_resolution: Bake output size (power of two). ``1024`` → 1024².
-        ao_intensity: Multiplier applied to AO contribution when compositing.
+        ao_intensity: The lighting layer's opacity (0-1).
         ao_secondary_rays: AO sample count (Painter: 1-256). Higher = cleaner, slower.
         ao_max_distance: Max occluder distance, a fraction of the mesh's bounding
             box (Painter's default, up to 1.0).
@@ -396,7 +420,7 @@ def lighting_to_diffuse(
         ao_subsample: Antialiasing by supersampling: 1 none, 2, 4 or 8 (others
             round to the nearest).
         include_curvature: Also bake curvature and stack as an overlay layer.
-        curvature_intensity: Curvature multiplier when ``include_curvature``.
+        curvature_intensity: The curvature layer's opacity (0-1).
         layer_name: Name of the inserted fill layer.
         blend_mode: Blend mode for the AO layer (default ``Multiply``).
         skip_existing_bakes: If True, only bake when mesh maps are missing.
@@ -406,7 +430,8 @@ def lighting_to_diffuse(
 
     Returns:
         ``{texture_sets, baked_maps, layers_created, parameters, saved, errors,
-        warnings}``.
+        warnings}``; ``warnings`` is always empty now, and kept for a script
+        written against the release that filled it.
     """
     import substance_painter.baking as baking
 
@@ -420,8 +445,7 @@ def lighting_to_diffuse(
         "warnings": [],
     }
 
-    # Painter's own property names (read from Painter 2026-10-19; the op once
-    # wrote names Painter never had). Subsampling is Painter's common
+    # Painter's own property names. Subsampling is Painter's common
     # "Antialiasing", not an AO setting.
     size = int(math.log2(bake_resolution))
     common_kwargs = {"OutputSize": (size, size), "SubSampling": _subsampling(ao_subsample)}
@@ -479,9 +503,6 @@ def lighting_to_diffuse(
                 result["layers_created"].append({name: uid})
         except Exception as e:
             result["errors"].append(f"{name}/layer: {type(e).__name__}: {e}")
-
-    if result["layers_created"] and _undriven():
-        result["warnings"].append(UNDRIVEN)
 
     if save_project and not result["errors"]:
         try:

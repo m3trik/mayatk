@@ -345,6 +345,56 @@ class TestDeliver(unittest.TestCase):
         self.assertIsNone(result["job"])
 
 
+class TestReport(unittest.TestCase):
+    """How a finished job is said: what it printed, and on a failure where."""
+
+    def setUp(self):
+        self.bridge = SubstanceBridge()
+        self.bridge.logger.setLevel("INFO")
+
+    def _said(self, status):
+        with self.assertLogs(self.bridge.logger, "INFO") as logs:
+            ran = self.bridge.report(status)
+        return ran, "\n".join(logs.output)
+
+    def test_a_failed_job_says_where_in_the_script_it_failed(self):
+        """A person's own script failing showed ``KeyError: 'x'`` and nothing
+        else: the traceback and what it printed came back and were dropped."""
+        status = {
+            "job": "j1",
+            "label": "Probe",
+            "path": "C:/s/probe.py",
+            "state": "failed",
+            "error": "KeyError: 'x'",
+            "report": ["made it"],
+            "console": ["working on it"],
+            "traceback": (
+                "Traceback (most recent call last):\n"
+                '  File "C:/painter/substance_rpc/ops/script_ops.py", line 227, in _step\n    fn()\n'
+                '  File "C:/s/probe.py", line 3, in <module>\n'
+                "KeyError: 'x'\n"
+            ),
+        }
+        ran, said = self._said(status)
+        self.assertFalse(ran)
+        self.assertIn("Probe failed in Painter: KeyError: 'x'", said)
+        self.assertIn('File "C:/s/probe.py", line 3', said)
+        self.assertNotIn("script_ops.py", said, "the runner's own frames say nothing a person can act on")
+        self.assertIn("working on it", said)
+        self.assertIn("made it", said)
+
+    def test_a_cancel_says_why_when_painter_gave_a_reason(self):
+        _, said = self._said({"job": "j1", "label": "Probe", "state": "cancelled", "error": "Scripts are paused in Painter."})
+        self.assertIn("Probe was cancelled: Scripts are paused in Painter.", said)
+        _, said = self._said({"job": "j1", "label": "Probe", "state": "cancelled", "error": None})
+        self.assertIn("Probe was cancelled.", said)
+
+    def test_a_run_that_never_reached_painter_is_not_a_failure_in_painter(self):
+        _, said = self._said(SubstanceBridge.follow({}))
+        self.assertIn("did not run", said)
+        self.assertNotIn("failed in Painter", said)
+
+
 class TestDeliverInBackground(unittest.TestCase):
     """A panel's send: the waits (a launch serving, a project opening) run in
     the panel's background, silently; the queue and every word on its thread."""
@@ -414,6 +464,31 @@ class TestDeliverInBackground(unittest.TestCase):
         self._finish()
         (queued,) = self.queued
         self.assertEqual((queued["job"], queued["delivered"]), (None, False))
+
+    def test_the_panel_always_hears_how_the_wait_ended(self):
+        """A panel refuses a second Run until ``on_queued``: a Painter that
+        died between serving and the queue left it refusing every run."""
+        from unittest import mock
+
+        self.conn.held = None
+        self._send("bake_lighting", params={"PAINTER_PROJECT": "C:/p/b.spp"})
+        with mock.patch.object(self.conn.rpc, "run_script", side_effect=RuntimeError("gone")):
+            with mock.patch.object(self.conn, "project", side_effect=OSError("the socket closed")):
+                self._finish()
+        (queued,) = self.queued
+        self.assertEqual((queued["job"], queued["delivered"]), (None, False))
+
+    def test_a_busy_painter_is_said_not_raised(self):
+        """Mid-save or mid-export its main thread answers nothing: the run
+        stops with a sentence, never a traceback in the panel's log."""
+        from unittest import mock
+
+        self.bridge.logger.setLevel("INFO")
+        with mock.patch.object(self.conn, "project", side_effect=ConnectionError("timed out")):
+            with self.assertLogs(self.bridge.logger, "ERROR") as logs:
+                result = self._send("bake_lighting")
+        self.assertFalse(result["delivered"])
+        self.assertIn("is busy and did not answer", "\n".join(logs.output))
 
 
 class TestScriptArgs(unittest.TestCase):
