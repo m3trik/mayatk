@@ -1,7 +1,7 @@
 name: Tests
 
 # mayatk's runtime suite needs Maya, which no runner has. This workflow runs the
-# slice that does NOT: `test/mock_tests`, whose conftest injects maya.cmds /
+# slice that does NOT: `tests/mock_tests`, whose conftest injects maya.cmds /
 # maya.mel / OpenMaya as MagicMocks before anything imports mayatk.
 #
 # Deliberately NOT `workflow_call`-able and deliberately NOT part of
@@ -18,12 +18,12 @@ on:
 jobs:
   mock-tests:
     # mayatk's runtime suite needs Maya, which no runner has - but pyproject
-    # already narrows a bare `pytest` to test/mock_tests, and that slice needs
-    # no DCC at all: test/mock_tests/conftest.py injects maya.cmds / maya.mel /
+    # already narrows a bare `pytest` to tests/mock_tests, and that slice needs
+    # no DCC at all: tests/mock_tests/conftest.py injects maya.cmds / maya.mel /
     # the OpenMaya modules as MagicMocks before anything imports mayatk.
     #
     # Verified 2026-08-23 under plain CPython 3.11 (NOT mayapy) with an
-    # offscreen QPA: `pytest test/mock_tests` -> 281 passed, 194 skipped, exit 0.
+    # offscreen QPA: `pytest tests/mock_tests` -> 281 passed, 194 skipped, exit 0.
     # The 194 are two MODULE-level "stale mock suite, pre-cmds-migration" skips
     # (test_sequencer_controller / test_sequencer_perf), not environment skips:
     # nothing in here quietly opts out for want of Maya.
@@ -93,7 +93,7 @@ jobs:
           set +e
           # Stream through tee rather than capturing: a buffered capture shows
           # nothing in the log while a suite is hung.
-          pytest --tb=short -q test/mock_tests 2>&1 | tee pytest_out.txt
+          pytest --tb=short -q tests/mock_tests 2>&1 | tee pytest_out.txt
           # PIPESTATUS, not $? - piping through tee would report tee's exit code
           # (always 0) and turn every failure green.
           RC=${PIPESTATUS[0]}

@@ -326,14 +326,14 @@ reach.
 
 ## Tests
 
-- pythontk `test/test_articulation.py` -- the model, the analysis on the
+- pythontk `tests/test_articulation.py` -- the model, the analysis on the
   magnifier's shape, the conformance document.
-- pythontk `test/test_articulated_rig_web.py` -- the GLB pass, auto-activation,
+- pythontk `tests/test_articulated_rig_web.py` -- the GLB pass, auto-activation,
   and the real page in headless Edge: the JS model against every conformance
   case, a grab against the Python solve, a real mouse drag, a headset grip on
   synthetic input, a slider; `ARTICULATED_RIG_LIVE_GLB` runs it on a real
   export.
-- mayatk `test/test_articulated_rig.py` -- build, teardown, every control on
+- mayatk `tests/test_articulated_rig.py` -- build, teardown, every control on
   its joint and the telescope's arrow clear of its tubes, Maya against the
   model, the end control (the head follows it, turns with it, keys play back,
   IK/FK without a jump, the controls riding their joints, a saved scene moving
@@ -342,15 +342,15 @@ reach.
   the Grab Tool, limits, give, undo, the post-rig edits carrying animation
   (curves, a layer, a moved rig group), and a refused edit leaving the rig and
   its keys standing.
-- tentacle `test/test_articulated_rig_panel.py` (a fake toolkit; then a fresh
+- tentacle `tests/test_articulated_rig_panel.py` (a fake toolkit; then a fresh
   GUI Maya, `run_tests.py --in-maya`) -- the panel acted on as a user does: Analyze, a row's type combo before and after
   the build, limits and give typed into a row (and the give scrolled), a row
   clicked selecting its control, the End Control checkbox, Switch IK / FK and
   Rest Pose, Split Off Selected, Set Limits From Pose, Adjust Pivots, Remove,
   the Grab button.
-- mayatk `test/articulated_rig_live_check.py` -- a real prop through the real
+- mayatk `tests/articulated_rig_live_check.py` -- a real prop through the real
   export (`ARTICULATED_RIG_LIVE_SCENE`); writes the GLB the web test loads.
-- unitytk `test/test_articulated_rig_runtime.py` -- the C# model against the
+- unitytk `tests/test_articulated_rig_runtime.py` -- the C# model against the
   conformance cases, the controller, the importer and the Animator override in
   batch Unity; `ARTICULATED_RIG_LIVE_FBX` imports a real export (the FBX the
   mayatk live check writes beside its GLB).

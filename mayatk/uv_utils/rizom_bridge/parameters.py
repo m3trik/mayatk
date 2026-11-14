@@ -473,7 +473,7 @@ _PRESET_IGNORES_RE = re.compile(r"^--\s*@ignores:\s*(.+?)\s*$", re.MULTILINE)
 # param token under different field names for different Rizom versions -- e.g.
 # ``SpacingSize=__PACK_SPACING__`` (<= 2021) vs ``PaddingSize=__PACK_SPACING__``
 # (>= 2022), the probed rename (2020.1: SpacingSize/MarginSize safe,
-# PaddingSize access-violates). Re-probe with mayatk/test/rizom_headless_probe.py.
+# PaddingSize access-violates). Re-probe with mayatk/tests/rizom_headless_probe.py.
 _INLINE_MIN_LINE_RE = re.compile(r"--\s*@min_rizom_line:\s*(\d+(?:\.\d+)*)")
 _INLINE_MAX_LINE_RE = re.compile(r"--\s*@max_rizom_line:\s*(\d+(?:\.\d+)*)")
 

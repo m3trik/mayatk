@@ -1,0 +1,588 @@
+# !/usr/bin/python
+# coding=utf-8
+"""
+Base Test Class for MayaTk Tests
+
+Provides common functionality for all mayatk test cases including
+Maya scene setup, cleanup, and utility methods.
+"""
+
+import unittest
+import json
+import sys
+import os
+
+# Make the sibling ecosystem repos importable when a test file runs outside
+# the runner (whose _suite_driver pins these paths itself). Derived from this
+# file's location so any checkout works. Insert the REPO roots, never the bare
+# workspace root: the workspace root resolves each sibling as an empty
+# namespace package whenever the real one isn't importable elsewhere.
+_SCRIPTS_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+for _pkg in ("mayatk", "pythontk", "uitk", "tentacle"):
+    _pkg_root = os.path.join(_SCRIPTS_ROOT, _pkg)
+    if os.path.isdir(_pkg_root) and _pkg_root not in sys.path:
+        sys.path.insert(0, _pkg_root)
+
+try:
+    import maya.cmds as cmds
+except ImportError as error:
+    print(f"Warning: {error}")
+
+import mayatk  # noqa: F401 -- fail fast: the sibling path must resolve the real package
+
+
+#: Root of the machine-local scenes a few extended tests replay. Those are
+#: production files that cannot ship, so the location is supplied per machine
+#: rather than hardcoded (which would also put a studio's folder layout in a
+#: public repo): point ``MAYATK_TEST_ASSETS`` at the folder holding them.
+#: Unset, it falls back to a sentinel that CANNOT exist, so every existence
+#: guard skips. The sentinel matters: ``""`` would betray any guard written
+#: with pathlib, because ``Path("").exists()`` is ``Path(".").exists()`` --
+#: True -- while ``os.path.exists("")`` is False.
+TEST_ASSETS = os.environ.get("MAYATK_TEST_ASSETS", "") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "__missing_test_asset__"
+)
+
+
+class TestAssets:
+    """Where the machine-local fixtures live, and what they are called.
+
+    The fixtures are named for what they *exercise*, not for the client program
+    they came from: a program identifier in tracked source leaks a business
+    relationship the way a studio drive path does, and mayatk is public. Shaped
+    like unitytk's ``base_test.TestAssets``; the old names live beside the
+    private fixtures, never in source.
+    """
+
+    #: A staged folder's own rename map, kept beside the fixtures it renames:
+    #: ``{"neutral/relative/path": "legacy/relative/path"}``. It lets a folder
+    #: staged under the old names keep resolving while it is renamed on disk.
+    #: It lives in the private fixture root, never in tracked source, because
+    #: the old names ARE the client identifiers the rename removed.
+    ALIASES_FILE = "legacy_aliases.json"
+
+    @classmethod
+    def root(cls) -> str:
+        """The fixture root; read live so a test can redirect it."""
+        return TEST_ASSETS
+
+    @classmethod
+    def aliases(cls) -> dict:
+        """The root's rename map; empty when it has none or it is unreadable.
+
+        Read as ``utf-8-sig``: Windows PowerShell 5.1 saves UTF-8 with a byte
+        order mark, which ``json`` rejects.
+        """
+        try:
+            with open(
+                os.path.join(cls.root(), cls.ALIASES_FILE), encoding="utf-8-sig"
+            ) as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @classmethod
+    def path(cls, *parts: str) -> str:
+        """A path under :meth:`root`, honouring the root's :attr:`ALIASES_FILE`.
+
+        Returns the neutral path unless it is absent AND the legacy name is
+        present -- so a fresh layout, a legacy layout and a half-renamed one all
+        resolve, and an unset root still yields a can't-exist path under either
+        guard style (``os.path.exists`` and ``Path(...).exists()``).
+        """
+        current = os.path.join(cls.root(), *parts)
+        if os.path.exists(current):
+            return current
+        legacy = cls.aliases().get("/".join(parts))
+        if isinstance(legacy, str) and legacy:
+            staged = os.path.join(cls.root(), *legacy.split("/"))
+            if os.path.exists(staged):
+                return staged
+        return current
+
+
+def asset_path(*parts: str) -> str:
+    """A path under :data:`TEST_ASSETS`; can't-exist when that root is unset.
+
+    Thin delegator kept for the call sites; the resolution rules, legacy names
+    included, live on :class:`TestAssets`.
+    """
+    return TestAssets.path(*parts)
+
+
+#: Lazily-allocated per-process wav fixture dir (see :func:`make_temp_wav`).
+#: The store must stay referenced so its session-exit cleanup fires.
+_wav_store = None
+_wav_dir = None
+
+
+def make_temp_wav(name: str, duration_sec: float = 0.5, sr: int = 22050) -> str:
+    """Write a silent WAV fixture and return its forward-slash path.
+
+    One writer for the seven audio suites' hand-rolled ``_make_wav`` copies.
+    The file lands in a per-process ``ptk.TempArtifacts`` directory under the
+    SYSTEM temp dir, not ``tests/temp_tests``: the copies shared fixed
+    friendly-named paths on the cloud-synced O: drive, where a concurrent run
+    or a scanner holding a just-written file made durations intermittently
+    unreadable -- the 2026-08-02 full-suite-only flake where the assertion
+    landed exactly on the caller's ``default_duration`` (and single moving
+    failures reproduced during the 2026-08-14 fix itself). The BASENAME stays
+    clean because several suites derive track ids from the wav stem; the
+    session policy cleans up at interpreter exit and age-sweeps leftovers of
+    killed runs.
+    """
+    import struct
+    import wave
+
+    global _wav_store, _wav_dir
+    if _wav_dir is None:
+        import pythontk as ptk
+
+        _wav_store = ptk.TempArtifacts(
+            "mayatk_test_wav", policy="session", max_age_days=1
+        )
+        _wav_dir = _wav_store.dir_path()
+    path = os.path.join(_wav_dir, f"{name}.wav").replace("\\", "/")
+    n = int(sr * duration_sec)
+    data = struct.pack(f"<{n}h", *([0] * n))
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(data)
+    return path
+
+
+def child_python():
+    """The interpreter a test spawns a Python child with.
+
+    Inside a GUI Maya (``--gui``, the Script Editor runner) ``sys.executable``
+    is ``maya.exe``, whose ``-c`` starts another GUI Maya that never exits;
+    the ``mayapy`` beside it runs the child instead.
+    """
+    import pythontk as ptk
+
+    return ptk.AppLauncher.companion_python() or sys.executable
+
+
+class PainterPluginsSandbox:
+    """Point Painter's plugins folder at a temp folder for a test module
+    (``SUBSTANCE_PAINTER_PLUGINS_PATH``, which ``Installer.user_plugin_dir``
+    reads first), so no install, refresh or status ever reaches the person's
+    ``Documents\\Adobe\\...\\plugins``. ``start()`` in ``setUpModule``,
+    ``stop()`` in ``tearDownModule``.
+    """
+
+    ENV = "SUBSTANCE_PAINTER_PLUGINS_PATH"
+
+    def __init__(self):
+        import pythontk as ptk
+
+        self._temp = ptk.TempArtifacts("ppl", policy="scoped")
+        self._before = None
+
+    def start(self):
+        self._before = os.environ.get(self.ENV)
+        os.environ[self.ENV] = os.path.join(self._temp.dir_path(), "painter")
+        return self
+
+    def stop(self):
+        if self._before is None:
+            os.environ.pop(self.ENV, None)
+        else:
+            os.environ[self.ENV] = self._before
+        self._temp.cleanup()
+
+
+def import_without_maya(module_name, null_attrs):
+    """Import *module_name* in a subprocess with ``maya`` blocked.
+
+    Verifies the module's ImportError guards define each name in
+    *null_attrs* as ``None`` (graceful degrade) instead of leaving it
+    undefined (NameError at first use). Returns the CompletedProcess;
+    callers assert ``returncode == 0``.
+    """
+    import subprocess
+
+    checks = "\n".join(
+        f"assert m.{attr} is None, '{attr} not nulled'" for attr in null_attrs
+    )
+    script = (
+        "import sys, importlib.abc\n"
+        "class _NoMaya(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'maya':\n"
+        "            raise ImportError('maya blocked')\n"
+        "sys.meta_path.insert(0, _NoMaya())\n"
+        f"import {module_name} as m\n"
+        f"{checks}\n"
+    )
+    env = os.environ.copy()
+    roots = [
+        os.path.join(_SCRIPTS_ROOT, pkg)
+        for pkg in ("mayatk", "pythontk", "uitk", "tentacle")
+    ]
+    env["PYTHONPATH"] = os.pathsep.join(roots + [env.get("PYTHONPATH", "")])
+    return subprocess.run(
+        [child_python(), "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
+    )
+
+
+def skipUnlessExtended(func):
+    """Decorator to skip tests unless MAYATK_EXTENDED_TESTS is set."""
+    return unittest.skipUnless(
+        os.environ.get("MAYATK_EXTENDED_TESTS") == "1",
+        "Extended test (skipped unless --extended flag is used)",
+    )(func)
+
+
+def _is_batch() -> bool:
+    try:
+        return bool(cmds.about(batch=True))
+    except Exception:
+        return False
+
+
+def skipIfBatch(reason: str = "Interactive-only (needs GUI Maya)"):
+    """Decorator to skip a test under mayapy/batch (headless) sessions.
+
+    For tests exercising interactive-only Maya features (e.g. MEL commands
+    sourced only by the GUI, viewport-dependent behavior).  The default
+    headless runner skips them; they still run in the GUI pass / --gui runs.
+    """
+    return unittest.skipIf(_is_batch(), reason)
+
+
+#: The throwaway project a module run straight under mayapy opens
+#: (:meth:`MayaTkTestCase.open_throwaway_project`); kept referenced so its
+#: session cleanup fires.
+_project_store = None
+
+
+class MayaTkTestCase(unittest.TestCase):
+    """Base class for all mayatk test cases."""
+
+    @staticmethod
+    def open_throwaway_project():
+        """Make sure the active project is a throwaway one under the temp root.
+
+        A tool that names no path writes into the active project, and mayapy
+        opens the user's default one: a module run straight under mayapy
+        (``mayapy test_x.py``, outside the suite driver's sandboxed project)
+        wrote shadow maps, pre-bake backups and lightmap EXRs into it. Batch
+        only: in an interactive Maya the project is the USER's, and the suite
+        driver swaps it for the run and gives it back. Checked per test (one
+        query), so a test that opened and restored a project of its own
+        cannot leave the next one in the user's.
+        """
+        global _project_store
+        if not _is_batch():
+            return
+        try:
+            import pythontk as ptk
+
+            active = cmds.workspace(q=True, rd=True) or ""
+            root = os.path.realpath(ptk.TempArtifacts.root())
+            if active and ptk.FileUtils.is_under(os.path.realpath(active), root):
+                return
+            if _project_store is None:
+                _project_store = ptk.TempArtifacts(
+                    "mtk_test_project", policy="session", max_age_days=1
+                )
+            folder = _project_store.dir_path(name="project")
+            ptk.Workspace.create(folder)
+            cmds.workspace(folder, openWorkspace=True)
+        except Exception as e:  # noqa: BLE001 - never block a test on this
+            print(f"Warning: could not open a throwaway project: {e}")
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up once for all tests in the class."""
+        cls.test_messages = []
+        cls.open_throwaway_project()
+
+    def setUp(self):
+        """Set up clean Maya scene for each test.
+
+        This is the ONLY per-test scene reset — tearDown intentionally does
+        not wipe again (setUp of the next test does, and the suite driver
+        resets the scene between modules).  One wipe per test instead of two
+        saves minutes on a full run.
+        """
+        try:
+            cmds.file(new=True, force=True)
+        except Exception as e:
+            print(f"Warning: Could not create new scene: {e}")
+        self.open_throwaway_project()
+        self._fbx_state_at_setup = self._fbx_export_hook_state()
+
+    @staticmethod
+    def _fbx_export_hook_state():
+        """(session producer keys, session stager names, explicit-auto-takes flag) — or None if unavailable."""
+        try:
+            from mayatk.env_utils.fbx_utils import FbxUtils
+        except Exception:  # a test env without the fbx module still runs
+            return None
+        return (
+            set(FbxUtils._session_producers),
+            set(FbxUtils._session_stagers),
+            FbxUtils._explicit_auto_takes,
+        )
+
+    def tearDown(self):
+        """Put the session-global FBX export hook back the way it was.
+
+        Authoring a ``ShotStore`` (or an audio producer) REGISTERS a
+        before-export preparer, which lives on the FbxUtils class and so
+        outlives ``cmds.file(new=True)`` -- the scene wipe in setUp cannot
+        reach a process-level registry. Left behind, it makes every later
+        export in the session silently run someone else's preparer, and any
+        later assertion on the hook fail: measured 2026-08-31, running
+        test_scene_exporter before test_shot_export_view leaked
+        ``['shots', 'audio']`` and failed two round-trip tests that pass in
+        isolation. Seven of the nine store-authoring modules never cleaned
+        up, so this belongs here rather than in each of them. Only what THIS
+        test added is removed, through the public API, so a preparer a suite
+        deliberately installed around a class survives.
+        """
+        before = getattr(self, "_fbx_state_at_setup", None)
+        after = self._fbx_export_hook_state()
+        if before and after:
+            from mayatk.env_utils.fbx_utils import FbxUtils
+
+            producers, stagers, explicit = before
+            for key in after[0] - producers:
+                FbxUtils.disable_export_producer(key)
+            for name in after[1] - stagers:
+                FbxUtils.unregister_export_stager(name)
+            if after[2] and not explicit:
+                FbxUtils.disable_auto_takes()
+        super().tearDown()
+
+    #: Where a test's own scratch artifacts belong: gitignored, swept by the
+    #: harness, and never inside the tracked ``tests/`` tree.
+    TEMP_TESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_tests")
+
+    @classmethod
+    def temp_path(cls, name: str) -> str:
+        """Absolute path to *name* under ``tests/temp_tests/`` (dir created).
+
+        Writing a scratch artifact beside the test module instead puts it in
+        the TRACKED tree, where it survives the run, gets re-synced by the
+        cloud client on every write, and shows up in ``git status``.
+        """
+        os.makedirs(cls.TEMP_TESTS, exist_ok=True)
+        return os.path.join(cls.TEMP_TESTS, name)
+
+    @staticmethod
+    def read_text_settled(
+        path: str, attempts: int = 5, delay: float = 0.2, **open_kwargs
+    ) -> str:
+        """Read *path* as text, tolerating a brief external lock.
+
+        This repo lives on a cloud-synced drive, so a file the suite JUST wrote
+        can still be held open by the sync client (or a scanner) when the very
+        next line reads it back -- surfacing as ``PermissionError: [Errno 13]``
+        only under a full run, where the machine is busiest. Observed on
+        ``test_render_opacity_export`` reading an FBX it had just exported.
+
+        Retries briefly rather than papering over a real bug: the writer here
+        is Maya's FBX exporter, which has already returned, so the only thing
+        left to wait on is the external holder letting go.
+        """
+        import time
+
+        last = None
+        for attempt in range(attempts):
+            try:
+                with open(path, "r", **open_kwargs) as handle:
+                    return handle.read()
+            except PermissionError as error:  # external holder, not our writer
+                last = error
+                if attempt < attempts - 1:
+                    time.sleep(delay)
+        raise last
+
+    def assertNodeExists(self, node_name: str, msg: str = None):
+        """Assert that a Maya node exists."""
+        exists = cmds.objExists(str(node_name))
+        if not exists:
+            msg = msg or f"Node '{node_name}' does not exist"
+            raise AssertionError(msg)
+
+    def assertNodeType(self, node, expected_type: str, msg: str = None):
+        """Assert that a node is of the expected type."""
+        actual_type = cmds.nodeType(str(node))
+        if actual_type != expected_type:
+            msg = msg or f"Expected node type '{expected_type}', got '{actual_type}'"
+            raise AssertionError(msg)
+
+    def assertNodesConnected(self, source, destination, msg: str = None):
+        """Assert that two attributes/plugs are connected."""
+        src = str(source)
+        dst = str(destination)
+        try:
+            connections = cmds.listConnections(dst, source=True, plugs=True) or []
+            if src in connections or any(
+                c.split(".")[0] == src.split(".")[0] for c in connections
+            ):
+                return
+            raise AssertionError(msg or f"'{src}' is not connected to '{dst}'")
+        except Exception as e:
+            raise AssertionError(msg or f"Error checking connection: {e}")
+
+    def create_test_cube(self, name: str = "test_cube"):
+        """Create a test cube for testing. Returns transform name (str)."""
+        return cmds.polyCube(name=name)[0]
+
+    def create_test_sphere(self, name: str = "test_sphere"):
+        """Create a test sphere for testing. Returns transform name (str)."""
+        return cmds.polySphere(name=name)[0]
+
+    def create_test_cylinder(self, name: str = "test_cylinder"):
+        """Create a test cylinder for testing. Returns transform name (str)."""
+        return cmds.polyCylinder(name=name)[0]
+
+    def create_skinned_mesh(
+        self, name: str = "test_skinned", joints: int = 3, history: bool = False
+    ):
+        """A cylinder smooth-bound to a straight joint chain.
+
+        The fixture for "does this operation preserve a deformer stack?" —
+        the bug class where an op's history cleanup (``delete -ch``) takes
+        the skinCluster and the orig shape with it, silently unbinding a
+        rigged mesh. Shared by the uv / components / node_utils suites.
+
+        Parameters:
+            history (bool): Also leave LIVE construction history on both
+                sides of the deformer — a UV op run before the bind and
+                another after it. Production meshes look like this (measured
+                on a rigged wire loom: ``polyNormalizeUV`` upstream,
+                ``createUVSet`` / ``polyCopyUV`` / ``polyLayoutUV``
+                downstream), and it is the discriminating case for anything
+                that writes geometry straight onto a shape: the live shape is
+                driven by a poly node rather than by the deformer, so a write
+                to the input shape never reaches it and a write to either is
+                recomputed away on the next evaluation.
+
+        Returns:
+            (mesh, joint_chain, skin_cluster) as name strings.
+        """
+        mesh = cmds.polyCylinder(
+            name=name, r=1, h=8, sx=12, sy=6, ax=(0, 1, 0), ch=history
+        )[0]
+        if history:  # upstream of the bind
+            cmds.polyNormalizeUV(f"{mesh}.map[*]", normalizeType=1, ch=True)
+        cmds.select(clear=True)
+        span = 8.0 / max(joints - 1, 1)
+        chain = [
+            cmds.joint(name=f"{name}_jnt_{i + 1}", position=(0, -4 + i * span, 0))
+            for i in range(joints)
+        ]
+        cmds.select(clear=True)
+        skin = cmds.skinCluster(
+            chain, mesh, toSelectedBones=True, name=f"{name}_skinCluster"
+        )[0]
+        if history:  # downstream of the bind — now drives the live shape
+            # polyLayoutUV is one of the ops Maya inserts AFTER a deformer
+            # (measured: polyLayoutUV / polyMapCut / polyCopyUV / polySoftEdge
+            # and polyEditUV's polyTweakUV do; polyNormalizeUV / polyProjection
+            # / polyAutoProjection go before it) — and it is what the
+            # production looms carry.
+            cmds.polyLayoutUV(f"{mesh}.f[*]", layout=2, ch=True)
+        return mesh, chain, skin
+
+    @staticmethod
+    def live_shape(mesh: str):
+        """The mesh's renderable (non-intermediate) shape, full path."""
+        return (
+            cmds.listRelatives(
+                str(mesh), shapes=True, noIntermediate=True, fullPath=True
+            )
+            or [None]
+        )[0]
+
+    @staticmethod
+    def sample_input(attr: str, u: float = 0.5, v: float = 0.5) -> float:
+        """The value the file node driving *attr* delivers at ``(u, v)``.
+
+        mayapy never evaluates a file texture through ``getAttr`` (it returns
+        the plug defaults: ``outColorR`` 0, ``outAlpha`` 1), so this samples
+        the image with ``colorAtPoint`` and reads the channel the WIRED plug
+        carries: R for ``outColorR``, the alpha for ``outAlpha`` -- or the
+        RGB luminance when ``alphaIsLuminance`` is on, as Maya does.
+        """
+        src = cmds.listConnections(attr, source=True, destination=False, plugs=True)
+        if not src:
+            raise AssertionError(f"'{attr}' is not driven")
+        node, _, plug = src[0].partition(".")
+        rgb = cmds.colorAtPoint(node, output="RGB", u=u, v=v)
+        if plug in ("outColorR", "outColorG", "outColorB"):
+            return rgb["RGB".index(plug[-1])]
+        if plug == "outAlpha":
+            if cmds.getAttr(f"{node}.alphaIsLuminance"):
+                return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+            return cmds.colorAtPoint(node, output="A", u=u, v=v)[0]
+        raise AssertionError(f"'{attr}' is driven by {src[0]}, not a scalar plug")
+
+    def assertSkinIntact(self, mesh: str, msg: str = None):
+        """Assert *mesh* is still driven by a skinCluster."""
+        shape = self.live_shape(mesh)
+        found = cmds.ls(cmds.listHistory(shape) or [], type="skinCluster")
+        if not found:
+            raise AssertionError(
+                msg or f"'{mesh}' lost its skinCluster (deformer history deleted)."
+            )
+        return found[0]
+
+    def get_test_callback(self):
+        """Get a test callback function that captures messages."""
+
+        def callback(msg, progress=None):
+            self.test_messages.append(msg)
+
+        return callback
+
+
+class QuickTestCase(MayaTkTestCase):
+    """
+    Quick test case that skips the per-test scene reset.
+    Use for tests that don't need a clean scene.
+    """
+
+    def setUp(self):
+        """Skip the scene reset, but still arm the FBX-hook guard.
+
+        ``tearDown`` restores the session-global export-preparer registry from
+        ``_fbx_state_at_setup``, and a ``setUp`` that never records it makes
+        that guard a silent no-op -- so every QuickTestCase suite leaked the
+        preparer a ShotStore mutation installs, which is exactly the failure
+        the guard exists to prevent.  Two attribute reads, no scene work, so
+        the speed this class exists for is untouched.
+        """
+        self.open_throwaway_project()
+        self._fbx_state_at_setup = self._fbx_export_hook_state()
+
+
+def skip_if_no_maya(func):
+    """Decorator to skip test if Maya is not available."""
+
+    def wrapper(*args, **kwargs):
+        try:
+            import maya.cmds as cmds
+
+            cmds.about(version=True)
+            return func(*args, **kwargs)
+        except Exception:
+            import unittest
+
+            raise unittest.SkipTest("Maya not available")
+
+    return wrapper

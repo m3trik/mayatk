@@ -210,15 +210,15 @@ upload_errors.txt
 API_RUNTIME.json
 
 # Anchored to the repo root by its slash, so a package-internal copy
-# (mayatk/test/temp_tests/) escaped it -- and an untracked probe there
+# (mayatk/tests/temp_tests/) escaped it -- and an untracked probe there
 # failed the documented `ruff check . --select E9,F82` pre-flight gate.
-**/test/temp_tests/
+**/tests/temp_tests/
 
 # Test runner output (regenerated each run)
-test/logs/
-test/debug_*.fbx
-test/test_output/
-test/test_output.txt
-test/test_stderr.txt
-test/test_stdout.txt
-test/cmds_syntax_report.txt
+tests/logs/
+tests/debug_*.fbx
+tests/test_output/
+tests/test_output.txt
+tests/test_stderr.txt
+tests/test_stdout.txt
+tests/cmds_syntax_report.txt

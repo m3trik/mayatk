@@ -1,0 +1,1237 @@
+# !/usr/bin/python
+# coding=utf-8
+"""Tests for SegmentKeys class.
+
+This test module verifies the shared segmentation and grouping logic used by
+both ScaleKeys and StaggerKeys.
+
+Run with Maya command port on 7002:
+    python tests/run_tests.py segment_keys
+"""
+
+import unittest
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from PySide2.QtWidgets import QApplication
+except ImportError:
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        QApplication = None
+
+# Ensure QApplication exists before any Maya imports that might need it
+if QApplication and not QApplication.instance():
+    app = QApplication(sys.argv)
+
+_HAS_MAYA = False
+try:
+    import maya.cmds as _probe_cmds
+
+    # Detect if cmds is a mock (e.g. when collected alongside controller tests
+    # that inject sys.modules["maya.cmds"] = MagicMock()).
+    if hasattr(_probe_cmds, "__file__"):
+        _HAS_MAYA = True
+except ImportError:
+    pass
+
+# Force reload of modules to pick up changes.
+# Only do this when running against real Maya — the delete pollutes
+# sys.modules when other test files have already imported these modules
+# with mocked Maya dependencies.
+if _HAS_MAYA:
+    if "mayatk.anim_utils.segment_keys" in sys.modules:
+        del sys.modules["mayatk.anim_utils.segment_keys"]
+    if "mayatk.anim_utils._anim_utils" in sys.modules:
+        del sys.modules["mayatk.anim_utils._anim_utils"]
+    if "mayatk.anim_utils" in sys.modules:
+        del sys.modules["mayatk.anim_utils"]
+
+# Import directly from module
+from mayatk.anim_utils.segment_keys import SegmentKeys
+import maya.cmds as cmds
+
+
+# --- pymel migration shims (auto-injected by _convert_pm_to_cmds.py) ---
+from contextlib import contextmanager as _contextmanager
+
+
+def _pm_open_file(*args, **kw):
+    kw.setdefault("open", True)
+    return cmds.file(*args, **kw)
+
+
+def _pm_new_file(**kw):
+    kw.setdefault("new", True)
+    return cmds.file(**kw)
+
+
+def _pm_rename_file(path):
+    return cmds.file(rename=path)
+
+
+@_contextmanager
+def _pm_undo_chunk():
+    cmds.undoInfo(openChunk=True)
+    try:
+        yield
+    finally:
+        cmds.undoInfo(closeChunk=True)
+
+
+# --- end shims ---
+# Conditional import of base test class
+try:
+    from base_test import MayaTkTestCase
+except ImportError:
+    MayaTkTestCase = unittest.TestCase
+
+
+class TestSegmentKeysBasic(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """Basic tests for SegmentKeys functionality."""
+
+    def test_collect_segments_empty_list(self):
+        """collect_segments with empty list returns empty."""
+        result = SegmentKeys.collect_segments([])
+        self.assertEqual(result, [])
+
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
+    def test_segment_keyframe_isolation_default_absorbs_trailing_holds(self):
+        """Verify trailing holds are absorbed into segments by default.
+
+        New default behavior (ignore_holds=False): when split_static=True, trailing
+        hold keys up to the next segment start are included in the earlier segment.
+        This prevents overlap/collapses during downstream shifting/staggering.
+        """
+        cube = cmds.polyCube(name="TestCube")[0]
+
+        # Create two distinct segments: 0-10 and 20-30
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+
+        # Static gap 10-20 (flat)
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
+
+        # Collect segments (default behavior absorbs trailing holds)
+        # We set exclude_next_start=False to ensure the boundary key at 20 is included
+        segments = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=False
+        )
+
+        self.assertEqual(len(segments), 2, "Should find 2 segments")
+
+        # Segment 1: 0-20 (absorbs the trailing hold key at 20)
+        seg1 = segments[0]
+        self.assertEqual(seg1["start"], 0)
+        self.assertEqual(seg1["end"], 20)
+        # Includes the trailing hold boundary key (20)
+        self.assertEqual(
+            seg1["keyframes"],
+            [0.0, 10.0, 20.0],
+            f"Segment 1 should have keys [0, 10, 20], got {seg1['keyframes']}",
+        )
+
+        # Segment 2: 20-30
+        seg2 = segments[1]
+        self.assertEqual(seg2["start"], 20)
+        self.assertEqual(seg2["end"], 30)
+        # Boundary key 20 is also included here (segment start)
+        self.assertEqual(
+            seg2["keyframes"],
+            [20.0, 30.0],
+            f"Segment 2 should only have keys [20, 30], got {seg2['keyframes']}",
+        )
+
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
+    def test_segment_keyframe_isolation_ignore_holds_active_only(self):
+        """Verify ignore_holds=True keeps active-only segments (no trailing holds)."""
+        cube = cmds.polyCube(name="TestCubeIgnoreHolds")[0]
+
+        # Create two distinct segments: 0-10 and 20-30
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+
+        # Static gap 10-20 (flat)
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
+
+        segments = SegmentKeys.collect_segments(
+            [cube], split_static=True, ignore_holds=True
+        )
+        self.assertEqual(len(segments), 2, "Should find 2 segments")
+
+        seg1 = segments[0]
+        self.assertEqual(seg1["start"], 0)
+        self.assertEqual(seg1["end"], 10)
+        self.assertEqual(seg1["keyframes"], [0.0, 10.0])
+
+        seg2 = segments[1]
+        self.assertEqual(seg2["start"], 20)
+        self.assertEqual(seg2["end"], 30)
+        self.assertEqual(seg2["keyframes"], [20.0, 30.0])
+
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
+    def test_print_scene_info(self):
+        """Test print_scene_info runs without error."""
+        cube = cmds.polyCube(name="print_test")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+
+        # Should run without error
+        SegmentKeys.print_scene_info([cube])
+
+    def test_group_segments_empty_list(self):
+        """group_segments with empty list returns empty."""
+        result = SegmentKeys.group_segments([])
+        self.assertEqual(result, [])
+
+    def test_group_segments_per_segment_mode(self):
+        """per_segment mode creates one group per segment."""
+        # Create mock segment data
+        segments = [
+            {
+                "obj": "cube1",
+                "curves": [],
+                "keyframes": [1, 10],
+                "start": 1,
+                "end": 10,
+                "duration": 9,
+                "segment_range": (1, 10),
+            },
+            {
+                "obj": "cube2",
+                "curves": [],
+                "keyframes": [20, 30],
+                "start": 20,
+                "end": 30,
+                "duration": 10,
+                "segment_range": (20, 30),
+            },
+        ]
+
+        result = SegmentKeys.group_segments(segments, mode="per_segment")
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["start"], 1)
+        self.assertEqual(result[1]["start"], 20)
+
+    def test_group_segments_single_group_mode(self):
+        """single_group mode combines all segments."""
+        segments = [
+            {
+                "obj": "cube1",
+                "curves": [],
+                "keyframes": [1, 10],
+                "start": 1,
+                "end": 10,
+                "duration": 9,
+                "segment_range": (1, 10),
+            },
+            {
+                "obj": "cube2",
+                "curves": [],
+                "keyframes": [20, 30],
+                "start": 20,
+                "end": 30,
+                "duration": 10,
+                "segment_range": (20, 30),
+            },
+        ]
+
+        result = SegmentKeys.group_segments(segments, mode="single_group")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["start"], 1)
+        self.assertEqual(result[0]["end"], 30)
+        self.assertEqual(len(result[0]["objects"]), 2)
+
+    def test_group_segments_overlap_groups_mode_no_overlap(self):
+        """overlap_groups mode keeps non-overlapping segments separate."""
+        segments = [
+            {
+                "obj": "cube1",
+                "curves": [],
+                "keyframes": [1, 10],
+                "start": 1,
+                "end": 10,
+                "duration": 9,
+                "segment_range": (1, 10),
+            },
+            {
+                "obj": "cube2",
+                "curves": [],
+                "keyframes": [20, 30],
+                "start": 20,
+                "end": 30,
+                "duration": 10,
+                "segment_range": (20, 30),
+            },
+        ]
+
+        result = SegmentKeys.group_segments(segments, mode="overlap_groups")
+
+        self.assertEqual(len(result), 2)
+
+    def test_group_segments_overlap_groups_mode_with_overlap(self):
+        """overlap_groups mode merges overlapping segments."""
+        segments = [
+            {
+                "obj": "cube1",
+                "curves": [],
+                "keyframes": [1, 10],
+                "start": 1,
+                "end": 10,
+                "duration": 9,
+                "segment_range": (1, 10),
+            },
+            {
+                "obj": "cube2",
+                "curves": [],
+                "keyframes": [5, 15],
+                "start": 5,
+                "end": 15,
+                "duration": 10,
+                "segment_range": (5, 15),
+            },
+        ]
+
+        result = SegmentKeys.group_segments(segments, mode="overlap_groups")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["start"], 1)
+        self.assertEqual(result[0]["end"], 15)
+
+    def test_group_segments_touching_keys_not_overlapping(self):
+        """Touching keys (end == start) are treated as separate groups."""
+        segments = [
+            {
+                "obj": "cube1",
+                "curves": [],
+                "keyframes": [1, 10],
+                "start": 1,
+                "end": 10,
+                "duration": 9,
+                "segment_range": (1, 10),
+            },
+            {
+                "obj": "cube2",
+                "curves": [],
+                "keyframes": [10, 20],
+                "start": 10,
+                "end": 20,
+                "duration": 10,
+                "segment_range": (10, 20),
+            },
+        ]
+
+        result = SegmentKeys.group_segments(segments, mode="overlap_groups")
+
+        # Touching keys should NOT be merged
+        self.assertEqual(len(result), 2)
+
+    def test_group_segments_per_object_mode(self):
+        """per_object mode groups segments from the same object."""
+        segments = [
+            {
+                "obj": "cube1",
+                "curves": [],
+                "keyframes": [1, 10],
+                "start": 1,
+                "end": 10,
+                "duration": 9,
+                "segment_range": (1, 10),
+            },
+            {
+                "obj": "cube1",
+                "curves": [],
+                "keyframes": [20, 30],
+                "start": 20,
+                "end": 30,
+                "duration": 10,
+                "segment_range": (20, 30),
+            },
+            {
+                "obj": "cube2",
+                "curves": [],
+                "keyframes": [5, 15],
+                "start": 5,
+                "end": 15,
+                "duration": 10,
+                "segment_range": (5, 15),
+            },
+        ]
+
+        result = SegmentKeys.group_segments(segments, mode="per_object")
+
+        self.assertEqual(len(result), 2)  # One for cube1, one for cube2
+
+
+class TestSegmentKeysFilters(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """Tests for filtering methods."""
+
+    def test_filter_curves_by_ignore_empty_ignore(self):
+        """Empty ignore returns all curves (that exist)."""
+        # With ignore=None, all curves should be returned
+        # But non-existent curve names won't convert to PyNodes
+        result = SegmentKeys._filter_curves_by_ignore([], None)
+        self.assertEqual(len(result), 0)
+
+    def test_filter_curves_by_ignore_empty_curves(self):
+        """Empty curves returns empty."""
+        result = SegmentKeys._filter_curves_by_ignore([], "visibility")
+        self.assertEqual(result, [])
+
+    def test_filter_curves_by_channel_box_empty(self):
+        """Empty channel_box_attrs returns all curves."""
+        curves = ["curve1", "curve2"]
+        result = SegmentKeys._filter_curves_by_channel_box(curves, None)
+        self.assertEqual(len(result), 2)
+
+    def test_filter_curves_by_channel_box_short_names_match(self):
+        """Channel Box SHORT names ('tx') must match long-named curves.
+
+        Curve nodes are named with LONG attrs ('pCube1_translateX') — suffix
+        matching against short names filtered out everything. Matching must
+        go through the connected plugs' normalized name set.
+        """
+        cube = cmds.polyCube(name="cb_filter_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=5)
+        curves = cmds.keyframe(f"{cube}.translateX", query=True, name=True)
+        self.assertTrue(curves)
+
+        result = SegmentKeys._filter_curves_by_channel_box(curves, ["tx"])
+        self.assertEqual(result, curves)
+
+    def test_filter_curves_by_channel_box_non_matching_attr(self):
+        """A non-matching Channel Box attr filters the curve out."""
+        cube = cmds.polyCube(name="cb_filter_cube2")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        curves = cmds.keyframe(f"{cube}.translateX", query=True, name=True)
+        self.assertTrue(curves)
+
+        result = SegmentKeys._filter_curves_by_channel_box(curves, ["ty"])
+        self.assertEqual(result, [])
+
+
+class TestSegmentKeysMaya(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """Maya-specific tests for SegmentKeys (require Maya connection)."""
+
+    def setUp(self):
+        """Set up test scene."""
+        if not _HAS_MAYA:
+            self.skipTest("PyMEL not available")
+        super().setUp()
+        _pm_new_file(force=True)
+
+    def test_collect_segments_no_animation(self):
+        """collect_segments with no animation returns empty."""
+        cube = cmds.polyCube(name="testCube")[0]
+        result = SegmentKeys.collect_segments([cube])
+        self.assertEqual(result, [])
+
+    def test_collect_segments_single_object(self):
+        """collect_segments with single animated object."""
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)
+
+        result = SegmentKeys.collect_segments([cube])
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["start"], 1)
+        self.assertEqual(result[0]["end"], 10)
+        self.assertIn(cube, [result[0]["obj"]])
+
+    def test_collect_segments_multiple_objects(self):
+        """collect_segments with multiple animated objects."""
+        cube1 = cmds.polyCube(name="cube1")[0]
+        cube2 = cmds.polyCube(name="cube2")[0]
+
+        cmds.setKeyframe(cube1, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube1, attribute="translateX", time=10, value=10)
+
+        cmds.setKeyframe(cube2, attribute="translateY", time=20, value=0)
+        cmds.setKeyframe(cube2, attribute="translateY", time=30, value=20)
+
+        result = SegmentKeys.collect_segments([cube1, cube2])
+
+        self.assertEqual(len(result), 2)
+
+    def test_collect_segments_with_ignore(self):
+        """collect_segments respects ignore parameter."""
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)
+        cmds.setKeyframe(cube, attribute="visibility", time=1, value=1)
+        cmds.setKeyframe(cube, attribute="visibility", time=10, value=0)
+
+        # Collect without ignore - should have segments
+        result_all = SegmentKeys.collect_segments([cube])
+        self.assertGreater(len(result_all), 0)
+
+        # Collect with ignore - visibility curves excluded
+        result_filtered = SegmentKeys.collect_segments([cube], ignore="visibility")
+        self.assertGreater(len(result_filtered), 0)
+
+        # Verify visibility curves are excluded
+        for seg in result_filtered:
+            for curve in seg["curves"]:
+                curve_name = str(curve).lower()
+                self.assertNotIn("visibility", curve_name)
+
+    def test_collect_segments_split_static(self):
+        """collect_segments with split_static splits on static gaps."""
+        cube = cmds.polyCube(name="testCube")[0]
+
+        # First animation segment
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=10)
+
+        # Static gap (same value)
+        cmds.setKeyframe(cube, attribute="translateX", time=20, value=10)
+
+        # Second animation segment
+        cmds.setKeyframe(cube, attribute="translateX", time=30, value=20)
+
+        # We set exclude_next_start=False to include the boundary key
+        result = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=False
+        )
+
+        # Default behavior absorbs trailing holds, so segments become (1-20) and (20-30)
+        self.assertEqual(len(result), 2)
+
+        self.assertEqual(result[0]["start"], 1)
+        self.assertEqual(result[0]["end"], 20)
+        self.assertEqual(result[1]["start"], 20)
+        self.assertEqual(result[1]["end"], 30)
+
+    def test_collect_segments_split_static_ignore_holds_trailing_hold_after_last_segment(
+        self,
+    ):
+        """When the final segment has a trailing hold, ignore_holds controls inclusion.
+
+        Setup:
+        - Active change from 0->10
+        - Trailing hold key at 20 (same value as at 10)
+
+        Expectation:
+        - Default (ignore_holds=False): segment expands to end at 20 and includes key 20
+        - ignore_holds=True: segment stays active-only (ends at 10) and excludes key 20
+        """
+        cube = cmds.polyCube(name="hold_last_seg")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+
+        segs_default = SegmentKeys.collect_segments([cube], split_static=True)
+        self.assertEqual(len(segs_default), 1)
+        self.assertEqual(segs_default[0]["start"], 0)
+        self.assertEqual(segs_default[0]["end"], 20)
+        self.assertEqual(segs_default[0]["keyframes"], [0.0, 10.0, 20.0])
+
+        segs_ignore = SegmentKeys.collect_segments(
+            [cube], split_static=True, ignore_holds=True
+        )
+        self.assertEqual(len(segs_ignore), 1)
+        self.assertEqual(segs_ignore[0]["start"], 0)
+        self.assertEqual(segs_ignore[0]["end"], 10)
+        self.assertEqual(segs_ignore[0]["keyframes"], [0.0, 10.0])
+
+    def test_hold_only_object_visible_when_ignore_holds_false(self):
+        """Hold-only objects produce a segment when ignore_holds=False.
+
+        Bug: An object with flat keys (no motion) produced 0 segments even
+        with ignore_holds=False because _get_active_animation_segments
+        returned no active segments and the hold-absorption code required
+        at least one active segment to exist.
+        Fixed: 2026-04-04
+        """
+        cube = cmds.polyCube(name="holdOnlyCube")[0]
+        cmds.setKeyframe(cube, t=1, v=5, at="tx")
+        cmds.setKeyframe(cube, t=10, v=5, at="tx")
+        cmds.setKeyframe(cube, t=20, v=5, at="tx")
+
+        # With ignore_holds=True and motion_only=True: no segments (correct)
+        segs_ignore = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=True,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_ignore), 0)
+
+        # With ignore_holds=False and motion_only=True: hold-only object
+        # should produce a single segment spanning all keys
+        segs_show = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=False,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_show), 1, "Hold-only object must be visible")
+        self.assertEqual(segs_show[0]["start"], 1)
+        self.assertEqual(segs_show[0]["end"], 20)
+        self.assertEqual(segs_show[0]["keyframes"], [1.0, 10.0, 20.0])
+
+    def test_motion_then_hold_extends_with_motion_only(self):
+        """Trailing hold extends segment when ignore_holds=False + motion_only=True.
+
+        Bug: Show Internal Holds toggle had no effect when collect_object_segments
+        hardcoded ignore_holds=True. Even after threading the parameter, holds on
+        motion_only segments weren't absorbed because active_segments was empty
+        for the hold portion.
+        Fixed: 2026-04-04
+        """
+        cube = cmds.polyCube(name="motionHold")[0]
+        cmds.setKeyframe(cube, t=1, v=0, at="tx")
+        cmds.setKeyframe(cube, t=5, v=5, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=15, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+
+        segs_no = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=True,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_no), 1)
+        self.assertEqual(segs_no[0]["end"], 10)
+
+        segs_yes = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_holds=False,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+        self.assertEqual(len(segs_yes), 1)
+        self.assertEqual(
+            segs_yes[0]["end"],
+            20,
+            "Segment must absorb trailing hold when ignore_holds=False",
+        )
+
+    def test_collect_segments_visibility_holds_can_bridge_static_gaps(self):
+        """Visibility curves can merge segments unless ignore_visibility_holds=True.
+
+        If a visibility curve spans the full range, and ignore_visibility_holds=False
+        (default), it is treated as always active and can bridge static gaps in other
+        channels, producing a single merged segment.
+        """
+        cube = cmds.polyCube(name="vis_bridge")[0]
+
+        # Two translateX active segments with a static gap
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
+
+        # Visibility holds across the entire range (no change)
+        cmds.setKeyframe(cube, t=0, v=1, at="visibility")
+        cmds.setKeyframe(cube, t=30, v=1, at="visibility")
+
+        segs_bridge = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_visibility_holds=False,
+            exclude_next_start=False,
+        )
+        self.assertEqual(len(segs_bridge), 1)
+        self.assertEqual(segs_bridge[0]["start"], 0)
+        self.assertEqual(segs_bridge[0]["end"], 30)
+
+        segs_no_bridge = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            ignore_visibility_holds=True,
+            exclude_next_start=False,
+        )
+        # Without visibility bridging, we expect 2 segments (with trailing-hold absorption)
+        self.assertEqual(len(segs_no_bridge), 2)
+        self.assertEqual(segs_no_bridge[0]["start"], 0)
+        self.assertEqual(segs_no_bridge[0]["end"], 20)
+        self.assertEqual(segs_no_bridge[1]["start"], 20)
+        self.assertEqual(segs_no_bridge[1]["end"], 30)
+
+    def test_full_pipeline(self):
+        """Test full collect -> group pipeline."""
+        cube1 = cmds.polyCube(name="cube1")[0]
+        cube2 = cmds.polyCube(name="cube2")[0]
+
+        # Overlapping animation
+        cmds.setKeyframe(cube1, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube1, attribute="translateX", time=10, value=10)
+
+        cmds.setKeyframe(cube2, attribute="translateY", time=5, value=0)
+        cmds.setKeyframe(cube2, attribute="translateY", time=15, value=20)
+
+        # Collect
+        segments = SegmentKeys.collect_segments([cube1, cube2])
+        self.assertEqual(len(segments), 2)
+
+        # Group by overlap
+        groups = SegmentKeys.group_segments(segments, mode="overlap_groups")
+        self.assertEqual(len(groups), 1)  # Should merge overlapping
+        self.assertEqual(groups[0]["start"], 1)
+        self.assertEqual(groups[0]["end"], 15)
+
+    def test_filter_curves_by_ignore_with_real_curves(self):
+        """Test filtering with real animation curves."""
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result = SegmentKeys._filter_curves_by_ignore(curves, None)
+        self.assertEqual(len(result), len(curves))
+
+    def test_filter_curves_by_ignore_visibility(self):
+        """Test filtering visibility curves."""
+        cube = cmds.polyCube(name="testCube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=0, v=1, at="visibility")
+        cmds.setKeyframe(cube, t=10, v=0, at="visibility")
+
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result = SegmentKeys._filter_curves_by_ignore(curves, "visibility")
+
+        # Should have 1 curve (tx), visibility filtered out
+        self.assertEqual(len(result), 1)
+        self.assertNotIn("visibility", str(result[0]).lower())
+
+    def test_group_by_overlap_no_overlap(self):
+        """Test grouping non-overlapping segments creates separate groups."""
+        obj1 = cmds.polyCube(name="obj1")[0]
+        obj2 = cmds.polyCube(name="obj2")[0]
+
+        data = [
+            {
+                "obj": obj1,
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "curves": [],
+            },
+            {
+                "obj": obj2,
+                "keyframes": [20, 30],
+                "start": 20,
+                "end": 30,
+                "duration": 10,
+                "curves": [],
+            },
+        ]
+
+        result = SegmentKeys._group_by_overlap(data)
+        self.assertEqual(len(result), 2)
+
+    def test_group_by_overlap_touching_inclusive(self):
+        """Test grouping touching segments with inclusive=True."""
+        obj1 = cmds.polyCube(name="obj1")[0]
+        obj2 = cmds.polyCube(name="obj2")[0]
+
+        data = [
+            {
+                "obj": obj1,
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "curves": [],
+            },
+            {
+                "obj": obj2,
+                "keyframes": [10, 20],
+                "start": 10,
+                "end": 20,
+                "duration": 10,
+                "curves": [],
+            },
+        ]
+
+        # Default (inclusive=False) -> 2 groups
+        result_exclusive = SegmentKeys._group_by_overlap(data, inclusive=False)
+        self.assertEqual(len(result_exclusive), 2)
+
+        # Inclusive=True -> 1 group
+        result_inclusive = SegmentKeys._group_by_overlap(data, inclusive=True)
+        self.assertEqual(len(result_inclusive), 1)
+        self.assertEqual(result_inclusive[0]["start"], 0)
+        self.assertEqual(result_inclusive[0]["end"], 20)
+
+    def test_group_by_overlap_with_overlap(self):
+        """Test grouping overlapping segments into single group."""
+        obj1 = cmds.polyCube(name="obj1")[0]
+        obj2 = cmds.polyCube(name="obj2")[0]
+
+        data = [
+            {
+                "obj": obj1,
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "curves": [],
+            },
+            {
+                "obj": obj2,
+                "keyframes": [5, 15],
+                "start": 5,
+                "end": 15,
+                "duration": 10,
+                "curves": [],
+            },
+        ]
+
+        result = SegmentKeys._group_by_overlap(data)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(len(result[0]["objects"]), 2)
+
+    def test_get_active_animation_segments_with_static_gap(self):
+        """Test detecting active segments with static gaps."""
+        cube = cmds.polyCube(name="testCube")[0]
+
+        # Animated segment 1
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        # Static gap
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        # Animated segment 2
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
+
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result, stepped, _kf = SegmentKeys._get_active_animation_segments(curves)
+
+        # Should have 2 segments
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], (0, 10))
+        self.assertEqual(result[1], (20, 30))
+
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
+    def test_stepped_tangent_emits_full_interval(self):
+        """Stepped tangent with value change emits full [t1, t2] interval.
+
+        The rate-based check is skipped for stepped tangents (no gradual
+        motion). Instead, a simple value-change check determines whether the
+        interval is active. Pass-through pruning in collect_segments handles
+        the case where both boundary keys are outside the shot range.
+        Fixed: 2025-07-17
+        """
+
+        cube = cmds.polyCube(name="steppedCube")[0]
+
+        # Wide stepped interval: value holds at 37.35 until t=18388, then
+        # jumps to -40.  Rate-based check would have used
+        # abs(-40 - 37.35) / 17988 ≈ 0.0043 > 0.001, but stepped tangent
+        # handling skips that and uses a simple value-change check instead.
+        cmds.setKeyframe(cube, t=400, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=18388, v=-40, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(400, 400), ott="step")
+
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result, _, _kf = SegmentKeys._get_active_animation_segments(
+            curves,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+
+        # Should be a full [400, 18388] interval.
+        self.assertEqual(len(result), 1, f"Expected 1 segment, got {result}")
+        start, end = result[0]
+        self.assertAlmostEqual(start, 400, places=0)
+        self.assertAlmostEqual(end, 18388, places=0)
+
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
+    def test_stepped_pass_through_pruned_by_collect(self):
+        """Stepped interval fully outside shot range is pruned by collect_segments.
+
+        Bug: A distant stepped interval (e.g. rotateY [400, 18388]) was
+        clamped to the shot range, producing a full-shot clip with no real
+        keyframes. collect_segments now drops pass-through intervals whose
+        original boundary keys are both outside the time range AND have no
+        in-range keyframes.
+        Fixed: 2025-07-17
+        """
+
+        cube = cmds.polyCube(name="steppedPassCube")[0]
+
+        cmds.setKeyframe(cube, t=400, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=18388, v=-40, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(400, 400), ott="step")
+
+        # Collect with a shot range that excludes both keys.
+        segments = SegmentKeys.collect_segments(
+            [cube],
+            split_static=True,
+            time_range=(1560, 1800),
+            ignore_holds=True,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+
+        # No segments — the stepped interval passes through the range
+        # but neither key is inside it.
+        self.assertEqual(len(segments), 0, f"Expected 0 segments, got {segments}")
+
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
+    def test_stepped_partial_pass_through_emits_point(self):
+        """Stepped interval with one key outside range emits only the in-range key.
+
+        Bug: A stepped visibility interval like [1434, 1785] where t1 is
+        before the shot produced a wide clip [shot_start, 1785] after
+        clamping. The pre-shot hold (constant value) should not create a
+        clip; only the in-range jump at t2 matters.
+        Fixed: 2025-07-17
+        """
+
+        cube = cmds.polyCube(name="steppedPartialCube")[0]
+
+        # Stepped interval: t1=1434 outside [1560,1800], t2=1785 inside.
+        cmds.setKeyframe(cube, t=1434, v=0, at="ry")
+        cmds.setKeyframe(cube, t=1785, v=1, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(1434, 1434), ott="step")
+
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result, _, _kf = SegmentKeys._get_active_animation_segments(
+            curves,
+            motion_only=True,
+            motion_rate=1e-3,
+            time_range=(1560, 1800),
+        )
+
+        # Should be a single zero-duration point at t2=1785 (the in-range key).
+        self.assertEqual(len(result), 1, f"Expected 1 segment, got {result}")
+        start, end = result[0]
+        self.assertAlmostEqual(start, 1785, places=0)
+        self.assertAlmostEqual(end, 1785, places=0)
+
+    @unittest.skipIf(not _HAS_MAYA, "Requires Maya")
+    def test_stepped_same_value_is_pure_hold(self):
+        """Stepped interval with same start/end value is a pure hold — no segment.
+
+        Bug: Same as stepped tangent bug — a stepped interval where v1 == v2
+        should produce no active segment at all.
+        Fixed: 2025-07-17
+        """
+
+        cube = cmds.polyCube(name="stepHoldCube")[0]
+
+        # Stepped hold: value stays 37.35 for entire interval.
+        cmds.setKeyframe(cube, t=0, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=400, v=37.35, at="ry")
+        cmds.setKeyframe(cube, t=18388, v=37.35, at="ry")
+        cmds.keyTangent(str(cube), e=True, t=(0, 400), ott="step")
+
+        curves = cmds.listConnections(cube, type="animCurve", s=True, d=False) or []
+        result, _, _kf = SegmentKeys._get_active_animation_segments(
+            curves,
+            motion_only=True,
+            motion_rate=1e-3,
+        )
+
+        # No value changes anywhere → zero active segments.
+        self.assertEqual(len(result), 0, f"Expected 0 segments, got {result}")
+
+
+class TestSegmentKeysEdgeCases(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """Edge case tests for SegmentKeys."""
+
+    def setUp(self):
+        if not _HAS_MAYA:
+            self.skipTest("Maya not available")
+        super().setUp()
+        _pm_new_file(force=True)
+
+    def test_collect_segments_time_range(self):
+        """collect_segments respects time_range parameter."""
+        cube = cmds.polyCube(name="time_range_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=20, at="tx")
+        cmds.setKeyframe(cube, t=30, v=30, at="tx")
+
+        # Range excluding 0 and 30
+        segments = SegmentKeys.collect_segments([cube], time_range=(5, 25))
+
+        self.assertEqual(len(segments), 1)
+        # Should only include keys 10 and 20
+        self.assertEqual(segments[0]["keyframes"], [10.0, 20.0])
+        self.assertEqual(segments[0]["start"], 10.0)
+        self.assertEqual(segments[0]["end"], 20.0)
+
+    def test_collect_segments_selected_keys(self):
+        """collect_segments respects selected_keys_only parameter."""
+        cube = cmds.polyCube(name="sel_keys_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        cmds.setKeyframe(cube, t=20, v=20, at="tx")
+
+        # Select only the key at frame 10
+        cmds.selectKey(cube, t=(10, 10))
+
+        segments = SegmentKeys.collect_segments([cube], selected_keys_only=True)
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0]["keyframes"], [10.0])
+        self.assertEqual(segments[0]["start"], 10.0)
+        self.assertEqual(segments[0]["end"], 10.0)
+
+    def test_collect_segments_channel_box(self):
+        """collect_segments respects channel_box_attrs parameter."""
+        cube = cmds.polyCube(name="cb_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=0, v=0, at="ty")
+
+        # Filter for tx only
+        segments = SegmentKeys.collect_segments(
+            [cube], channel_box_attrs=["translateX"]
+        )
+
+        self.assertEqual(len(segments), 1)
+        curves = segments[0]["curves"]
+        self.assertEqual(len(curves), 1)
+        self.assertTrue(str(curves[0]).endswith("_translateX"))
+
+    def test_collect_segments_exclude_next_start(self):
+        """collect_segments respects exclude_next_start parameter."""
+        cube = cmds.polyCube(name="exclude_next_cube")[0]
+        # Segment 1: 0-10
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=10, at="tx")
+        # Static gap 10-20
+        cmds.setKeyframe(cube, t=20, v=10, at="tx")
+        # Segment 2: 20-30
+        cmds.setKeyframe(cube, t=30, v=20, at="tx")
+
+        # Default: exclude_next_start=True
+        # Segment 1 should end at 20 (trailing hold) but exclude next start if it was adjacent?
+        # Here next start is 20.
+        # If exclude_next_start=True, upper bound is 20 - eps. So key at 20 is NOT included in seg 1.
+
+        segs_exclude = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=True
+        )
+        # Seg 1: 0-10 (key at 20 excluded)
+        self.assertEqual(segs_exclude[0]["end"], 10.0)
+        self.assertNotIn(20.0, segs_exclude[0]["keyframes"])
+
+        # exclude_next_start=False
+        # Upper bound is 20. Key at 20 IS included in seg 1.
+        segs_include = SegmentKeys.collect_segments(
+            [cube], split_static=True, exclude_next_start=False
+        )
+        # Seg 1: 0-20 (key at 20 included)
+        self.assertEqual(segs_include[0]["end"], 20.0)
+        self.assertIn(20.0, segs_include[0]["keyframes"])
+
+    def test_collect_segments_static_tolerance(self):
+        """collect_segments respects static_tolerance."""
+        cube = cmds.polyCube(name="tol_cube")[0]
+
+        # Case 1: Flat curve (change = 0)
+        cmds.cutKey(cube)
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=0, at="tx")
+
+        segs_flat = SegmentKeys.collect_segments(
+            [cube], split_static=True, static_tolerance=1e-4
+        )
+        self.assertEqual(len(segs_flat), 0, "Flat curve should be static")
+
+        # Case 2: Small change (0.1), Large tolerance (1.0) -> Static
+        cmds.cutKey(cube)
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube, t=10, v=0.1, at="tx")
+
+        segs_static = SegmentKeys.collect_segments(
+            [cube], split_static=True, static_tolerance=1.0
+        )
+        # Debug info if it fails
+        if len(segs_static) > 0:
+            print(
+                f"Failed Static Check: Found {len(segs_static)} segments: {segs_static}"
+            )
+
+        self.assertEqual(len(segs_static), 0, "Change < Tolerance should be static")
+
+        # Case 3: Small change (0.1), Small tolerance (0.01) -> Active
+        segs_active = SegmentKeys.collect_segments(
+            [cube], split_static=True, static_tolerance=0.01
+        )
+        self.assertEqual(len(segs_active), 1, "Change > Tolerance should be active")
+
+    def test_merge_groups_sharing_curves(self):
+        """merge_groups_sharing_curves merges groups sharing an animation curve."""
+        cube1 = cmds.polyCube(name="c1")[0]
+        cube2 = cmds.polyCube(name="c2")[0]
+
+        # Create a curve and connect to both
+        cmds.setKeyframe(cube1, t=0, v=0, at="tx")
+        cmds.setKeyframe(cube1, t=10, v=10, at="tx")
+        curve = cmds.listConnections(f"{cube1}.tx", type="animCurve")[0]
+        cmds.connectAttr(f"{curve}.output", f"{cube2}.tx", force=True)
+
+        # Create separate groups with overlapping time ranges
+        groups = [
+            {
+                "obj": cube1,
+                "curves": [curve],
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "sub_groups": [],
+            },
+            {
+                "obj": cube2,
+                "curves": [curve],
+                "keyframes": [0, 10],
+                "start": 0,
+                "end": 10,
+                "duration": 10,
+                "sub_groups": [],
+            },
+        ]
+
+        merged = SegmentKeys.merge_groups_sharing_curves(groups)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged[0]["objects"]), 2)
+
+    def test_shift_curves_locked(self):
+        """shift_curves handles locked curves gracefully."""
+        cube = cmds.polyCube(name="locked_cube")[0]
+        cmds.setKeyframe(cube, t=0, v=0, at="tx")
+        curve = cmds.listConnections(f"{cube}.tx", type="animCurve")[0]
+
+        cmds.lockNode(curve, lock=True)
+
+        # Should not raise exception
+        try:
+            SegmentKeys.shift_curves([curve], 10)
+        except Exception as e:
+            self.fail(f"shift_curves raised exception on locked curve: {e}")
+        finally:
+            cmds.lockNode(curve, lock=False)
+
+
+class TestAuditRegressionFixes(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """Regression tests for the 2026-07 anim_utils audit fixes."""
+
+    def _make_keyed_group(self, name, start, end):
+        cube = cmds.polyCube(name=name)[0]
+        cmds.setKeyframe(cube, t=start, v=0, at="tx")
+        cmds.setKeyframe(cube, t=end, v=10, at="tx")
+        curves = cmds.keyframe(cube, query=True, name=True) or []
+        return {
+            "obj": cube,
+            "start": float(start),
+            "end": float(end),
+            "duration": float(end - start),
+            "curves": curves,
+        }
+
+    def test_execute_stagger_avoid_overlap_zero_spacing_terminates(self):
+        """use_intervals + avoid_overlap with spacing=0 spun forever in
+        the overlap-resolution loop (hard Maya hang). With the fix,
+        an overlapping group butts against the previous group's end."""
+        g1 = self._make_keyed_group("stagger_zero_a", 0, 20)
+        g2 = self._make_keyed_group("stagger_zero_b", 0, 20)
+
+        SegmentKeys.execute_stagger(
+            [g1, g2],
+            start_frame=0,
+            spacing=0,
+            use_intervals=True,
+            avoid_overlap=True,
+        )
+        t2 = cmds.keyframe(g2["obj"], query=True, timeChange=True)
+        self.assertEqual(min(t2), 20.0)
+
+    def test_execute_stagger_avoid_overlap_positive_spacing(self):
+        """Positive spacing still skips forward whole intervals."""
+        g1 = self._make_keyed_group("stagger_pos_a", 0, 25)
+        g2 = self._make_keyed_group("stagger_pos_b", 0, 25)
+
+        SegmentKeys.execute_stagger(
+            [g1, g2],
+            start_frame=0,
+            spacing=10,
+            use_intervals=True,
+            avoid_overlap=True,
+        )
+        # g2's interval slot is 10, overlapping g1 (0-25) -> skips to 30.
+        t2 = cmds.keyframe(g2["obj"], query=True, timeChange=True)
+        self.assertEqual(min(t2), 30.0)
+
+
+class TestShiftCurvesHooks(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """``shift_curves`` reports the keys it moves (``on_move``): every key
+    travels the full offset (``option="over"``, past unmoved keys), so each
+    ``(old, old + offset)`` pair is where that key landed."""
+
+    def setUp(self):
+        super().setUp()
+        if not _HAS_MAYA:
+            self.skipTest("Maya not available")
+        obj = cmds.polyCube(name="shift_hooks_cube")[0]
+        for t in (0, 10, 20):
+            cmds.setKeyframe(obj, attribute="translateX", time=t, value=t)
+        self.crv = cmds.keyframe(obj, attribute="translateX", query=True, name=True)[0]
+        self.moved = []
+
+    def _on_move(self, crv, pairs):
+        self.moved.append((crv, sorted((round(o, 4), round(n, 4)) for o, n in pairs)))
+
+    def test_a_range_shift_reports_each_key_it_moved(self):
+        SegmentKeys.shift_curves([self.crv], 5, (10, 20), on_move=self._on_move)
+
+        self.assertEqual(self.moved, [(self.crv, [(10.0, 15.0), (20.0, 25.0)])])
+
+    def _pairs(self):
+        times = cmds.keyframe(self.crv, query=True, timeChange=True) or []
+        values = cmds.keyframe(self.crv, query=True, valueChange=True) or []
+        return [(round(t, 4), round(v, 4)) for t, v in zip(times, values)]
+
+    def test_a_shift_onto_an_unmoved_key_replaces_it(self):
+        """Maya's default move STACKED the mover on the unmoved key it landed
+        on (two keys on frame 20, measured 2026-10-05) -- what Stagger's
+        end-to-start placement does at every seam of a split curve.  The key
+        landed on is cut first, as every key edit here replaces."""
+        replaced = []
+        SegmentKeys.shift_curves(
+            [self.crv],
+            10,
+            (10, 10),
+            on_replace=lambda crv, frames: replaced.append((crv, list(frames))),
+            on_move=self._on_move,
+        )
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(replaced, [(self.crv, [20.0])])
+        self.assertEqual(self.moved, [(self.crv, [(10.0, 20.0)])])
+
+    def test_a_shift_travels_past_an_unmoved_key(self):
+        """The default move stopped a key at the unmoved one it would pass
+        and stacked it there (10 moved +15 stopped ON 20): the shift now goes
+        where it was told, as every other range move here does."""
+        SegmentKeys.shift_curves([self.crv], 15, (10, 10), on_move=self._on_move)
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 20.0), (25.0, 10.0)])
+        self.assertEqual(self.moved, [(self.crv, [(10.0, 25.0)])])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

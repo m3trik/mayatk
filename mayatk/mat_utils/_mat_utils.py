@@ -1175,7 +1175,7 @@ class MatUtils(_MatUtilsInternal):
         ``.ftn`` back to absolute as soon as it resolves on scene load, and
         the next save writes that absolute path back (measured across three
         save/open generations,
-        ``test/temp_tests/probe_root_relative_reopen.py``). So the relative
+        ``tests/temp_tests/probe_root_relative_reopen.py``). So the relative
         form survives exactly one save; a scene reopened and re-saved carries
         absolute paths until Normalize Paths is run again — which is
         idempotent, and is what the exporter's ``convert_to_relative_paths``

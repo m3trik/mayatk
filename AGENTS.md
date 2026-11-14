@@ -44,14 +44,14 @@ $MAYAPY = "C:\Program Files\Autodesk\Maya2025\bin\mayapy.exe"
 $env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk"
 ```
 
-- **Pre-flight (no Maya)** — `ruff check . --select E9,F82` (syntax + undefined names, tests included) is green — keep it so. Bare `ruff check .` still reports legacy errors — fix only what you introduce. **Command-name check (mayapy)** — `& $MAYAPY mayatk/test/check_cmds_syntax.py` validates every `cmds.*` / `mel.eval` name against the live registry (`--report` writes a file; append paths to scope).
-- **Base classes** `test/base_test.py` → `MayaTkTestCase` (scene reset in `setUp`) / `QuickTestCase` (no reset); interactive-only tests `@skipIfBatch`. **Runner** `test/run_tests.py` (in-session harness `test/_suite_driver.py`). **Connection** `env_utils/maya_connection.py` (Port / Standalone / Interactive).
+- **Pre-flight (no Maya)** — `ruff check . --select E9,F82` (syntax + undefined names, tests included) is green — keep it so. Bare `ruff check .` still reports legacy errors — fix only what you introduce. **Command-name check (mayapy)** — `& $MAYAPY mayatk/tests/check_cmds_syntax.py` validates every `cmds.*` / `mel.eval` name against the live registry (`--report` writes a file; append paths to scope).
+- **Base classes** `tests/base_test.py` → `MayaTkTestCase` (scene reset in `setUp`) / `QuickTestCase` (no reset); interactive-only tests `@skipIfBatch`. **Runner** `tests/run_tests.py` (in-session harness `tests/_suite_driver.py`). **Connection** `env_utils/maya_connection.py` (Port / Standalone / Interactive).
 
 | Test kind | How to tell | Run |
 |:---|:---|:---|
 | Standalone repro | has `maya.standalone.initialize()` + `__main__` | `& $MAYAPY <script.py>` |
-| Production module | uses `MayaTkTestCase` / `QuickTestCase` | Pointed: `python mayatk/test/run_tests.py edit_utils -k mirror` (`--list`); `--all` = review / release. Headless: chunked fresh-mayapy processes; modules that native-crash mayapy defer to one GUI pass (`GUI_REQUIRED`) |
-| GUI-dependent | needs Qt / viewport (→ `GUI_REQUIRED`) | auto GUI pass, or `--gui` to force the whole run through a launched GUI Maya. In-session (Script Editor): `import mayatk.test.run_tests as r; r.MayaTestRunner().run_tests(['core_utils'])` |
+| Production module | uses `MayaTkTestCase` / `QuickTestCase` | Pointed: `python mayatk/tests/run_tests.py edit_utils -k mirror` (`--list`); `--all` = review / release. Headless: chunked fresh-mayapy processes; modules that native-crash mayapy defer to one GUI pass (`GUI_REQUIRED`) |
+| GUI-dependent | needs Qt / viewport (→ `GUI_REQUIRED`) | auto GUI pass, or `--gui` to force the whole run through a launched GUI Maya. In-session (Script Editor), `mayatk/tests` on `sys.path`: `import run_tests as r; r.MayaTestRunner().run_tests(['core_utils'])` |
 
 Runner notes: the console shows non-passing modules + SUMMARY + `SLOWEST MODULES` (`--full-results`: all); the badge only updates on a full `--all`; `--jobs N` runs chunks concurrently — drop to 1 if a run stalls at init (FlexLM reclaim after a killed mayapy).
 
@@ -64,6 +64,6 @@ Every tool's panel is tentacle's (`ui/tools/<tool>.ui` + one shared Slots class 
 ## Style
 
 - PySide6 via `qtpy`; OpenMaya API 2.0.
-- Temp / debug tests: `test/temp_tests/` (gitignored).
+- Temp / debug tests: `tests/temp_tests/` (gitignored).
 
 See [CHANGELOG.md](CHANGELOG.md) for history.

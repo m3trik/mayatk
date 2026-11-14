@@ -59,7 +59,7 @@ Constraints on ``perform_operation`` authors:
     preview (an un-check or a failed pass; never a commit), recorded nowhere
     on the undo queue. blendertk's Preview takes the same hook.
 
-Verification: see ``test/temp_tests/verify_preview_*.py`` for the 60+
+Verification: see ``tests/temp_tests/verify_preview_*.py`` for the 60+
 empirical tests this design passes.
 """
 

@@ -9,7 +9,7 @@
 -- access-violates 2020.1 (probed) -- so this preset is version-gated
 -- (hidden from the panel combo and refused by the bridge below the gate).
 -- Effect verification on a >= 2022 install is still owed -- probe it with
--- test/rizom_headless_probe.py.
+-- tests/rizom_headless_probe.py.
 -- @min_rizom: 2022.0
 
 -- 0. Weld First (default on): weld ALL existing seams so the auto-seam

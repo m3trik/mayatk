@@ -151,7 +151,7 @@ that skips that step (the Game Exporter's `FBXExport`, which fires no scene
 event) ships the playback range as its window, and the cues stamped before it
 count from there too. The cues are the source's; what a Unity user adds in the
 model importer's Events tab is Unity's. Verified by
-`test/test_audio_clips_export.py` (`TestAudioClipsRealExport`: real Scene
+`tests/test_audio_clips_export.py` (`TestAudioClipsRealExport`: real Scene
 Exporter, `FbxUtils.export` and raw `cmds.file` writes read back with
 `ptk.FbxFile`).
 
@@ -173,7 +173,7 @@ line; the package's README gives it).
 Verified end-to-end by unitytk's Shots sample tests (`ShotsSampleTests`) on the
 Maya-made sample, and on a Blender-made delivery of the same scene and on one
 exported from a Maya assembly by the workspace's end-to-end suite
-(`m3trik/test/unity_e2e/test_sample_twins.py`): one clip per shot, named after
+(`m3trik/tests/unity_e2e/test_sample_twins.py`): one clip per shot, named after
 it, as long as the shot and in its place, joined to its description.
 
 Each record entry names its clip; the importer resolves it to the clip itself

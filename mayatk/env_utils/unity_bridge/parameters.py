@@ -10,7 +10,7 @@ here. The delivery's rows -- the Assets subfolder, the asset name -- and the
 scripts' are the app's. Never substituted into a template.
 
 This copy is the SSoT: blendertk's ``env_utils.unity_bridge.parameters`` is the
-same text, host names in prose aside, and ``extapps/test/test_vendor_sync.py``
+same text, host names in prose aside, and ``extapps/tests/test_vendor_sync.py``
 fails the moment the two differ. Edit here, then mirror.
 """
 

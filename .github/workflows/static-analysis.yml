@@ -52,7 +52,7 @@ jobs:
         # mayatk package (which requires pythontk) or test package; only needs
         # stdlib + pyflakes already installed above.
         run: |
-          python test/test_static_analysis.py
+          python tests/test_static_analysis.py
 
   api-retirements:
     # A retirement past its window fails: a ptk.Deprecation alias or retired

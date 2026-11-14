@@ -9,7 +9,7 @@
 -- Auto.* key is SharpEdges (NOT HardEdge) -- RizomUV silently drops any
 -- unknown key inside Auto={...}, so a typo here makes the cutter no-op.
 -- Verify any Lua change against a live run:
--- test/rizom_headless_probe.py (2020.1 access-violates on
+-- tests/rizom_headless_probe.py (2020.1 access-violates on
 -- fields it doesn't know).
 
 -- 0. Weld First (default on): weld ALL existing seams so the auto-seam
