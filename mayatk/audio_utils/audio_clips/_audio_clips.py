@@ -950,8 +950,8 @@ class AudioClips(ptk.LoggingMixin):
         :meth:`export_record`, which reads the takes the shots producer built
         in the same assembly.
 
-        Clips: each track's spans are cut into cues per clip -- one per shot
-        take, or the shotless file's one take (``clip: ""``) -- in seconds
+        Clips: each track's spans are cut into cues per clip -- one per take
+        a shot holds, or the shotless file's one take (``clip: ""``) -- in seconds
         from the clip's start, with the offset into the sound and its stop
         (:meth:`export_record`). A sound no clip plays is dropped with a
         warning.

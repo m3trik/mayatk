@@ -18,6 +18,7 @@ import pythontk as ptk
 # From this package:
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.node_utils._node_utils import NodeUtils
 
 
 class _TaskDataMixin:
@@ -26,8 +27,8 @@ class _TaskDataMixin:
     The base of each phase mixin (``_task_scene``, ``_task_textures``,
     ``_task_animation``, ``_task_checks``): the run's modes, the markers one
     task leaves for a later one, the caches derived from the export set, and
-    the texture-pass resolvers (container, size clamp, assessment) a task and
-    its paired check judge through.
+    what a task and its paired check judge through: the texture-pass resolvers
+    (container, size clamp, assessment) and the orig-shape faults.
     """
 
     #: The modes of the run in flight -- adopted by :meth:`begin_run` from
@@ -659,3 +660,90 @@ class _TaskDataMixin:
             dict.fromkeys(cmds.ls(history, type="file") or [])
         )
         return self._cached_export_file_nodes
+
+    # ------------------------------------------------------------ orig shapes
+    #: The kinds of :meth:`_orig_faults`: an orig listed ahead of its
+    #: transform's real shape, and one riding transforms whose real meshes it
+    #: does not feed.
+    _ORIG_AHEAD = "ahead"
+    _ORIG_RIDING = "riding"
+
+    def _orig_faults(self, shape: str) -> List[Tuple[str, List[str], str]]:
+        """Each way intermediate *shape* reaches the FBX, as ``(kind,
+        parents, reason)`` -- none for an orig that never leaves Maya. The one
+        definition ``check_default_materials`` reports and
+        ``repair_orig_shapes`` repairs by.
+
+        :attr:`_ORIG_RIDING`: under transforms carrying real meshes it does
+        not feed; *parents* are those foreign ones, empty when no transform's
+        history holds it (none can be told apart as its own).
+        :attr:`_ORIG_AHEAD`: listed ahead of a real mesh, where FBX takes the
+        transform's material from it; *parents* are the transforms it leads.
+        Several parents alone are NOT a fault: instancing a deformed mesh
+        shares its orig across every instance.
+        """
+        parents = cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+        uuid = cmds.ls(shape, uuid=True)
+        faults = []
+        if len(parents) >= 2:
+            # By UUID, not by path: an instanced shape is ONE node with many
+            # paths, and every path is the same geometry.
+            real = {
+                found
+                for parent in parents
+                for sibling in self._real_meshes(parent)
+                for found in cmds.ls(sibling, uuid=True) or []
+            }
+            if len(real) > 1:
+                owners = [p for p in parents if self._feeds(uuid, p)]
+                foreign = [p for p in parents if p not in owners] if owners else []
+                reason = f"orig shape riding {len(real)} different meshes"
+                faults.append((self._ORIG_RIDING, foreign, reason))
+        leading = [p for p in parents if self._leads_real_shape(p, uuid)]
+        if leading:
+            reason = "orig shape ahead of the real shape"
+            faults.append((self._ORIG_AHEAD, leading, reason))
+        return faults
+
+    @staticmethod
+    def _real_meshes(parent: str) -> List[str]:
+        """*parent*'s non-intermediate mesh shapes."""
+        return (
+            cmds.listRelatives(
+                parent, shapes=True, type="mesh", fullPath=True, noIntermediate=True
+            )
+            or []
+        )
+
+    @classmethod
+    def _feeds(cls, uuid: list, parent: str) -> bool:
+        """Whether the shape with *uuid* is upstream of one of *parent*'s real
+        meshes."""
+        for mesh in cls._real_meshes(parent):
+            upstream = cmds.listHistory(mesh, pruneDagObjects=False) or []
+            if uuid and uuid[0] in set(cmds.ls(upstream, uuid=True) or []):
+                return True
+        return False
+
+    @staticmethod
+    def _shape_path_under(parent: str, uuid: list) -> Optional[str]:
+        """The path of the shape with *uuid* under *parent* (an instanced
+        shape's path there is not the one the caller holds)."""
+        for child in cmds.listRelatives(parent, shapes=True, fullPath=True) or []:
+            if cmds.ls(child, uuid=True) == uuid:
+                return child
+        return None
+
+    @staticmethod
+    def _leads_real_shape(parent: str, uuid: list) -> bool:
+        """Whether the shape with *uuid* is *parent*'s first mesh child while a
+        real (non-intermediate) mesh follows it. By UUID: an instanced shape's
+        path under *parent* is not the path the caller holds."""
+        children = (
+            cmds.listRelatives(parent, shapes=True, type="mesh", fullPath=True) or []
+        )
+        return (
+            bool(children)
+            and cmds.ls(children[0], uuid=True) == uuid
+            and any(not NodeUtils.is_intermediate(c) for c in children[1:])
+        )

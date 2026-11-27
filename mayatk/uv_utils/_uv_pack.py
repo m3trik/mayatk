@@ -56,11 +56,14 @@ from mayatk.core_utils.plugins._plugins import Plugins
 # rigidly misses by 1e-01 or more — three orders apart, so 1e-03 separates them
 # with a 5x margin over noise and a 100x margin under a real failure.
 #
-# That failure is real and has one cause: Maya UV shells are VERTEX-connected
-# while xatlas charts are EDGE-connected, so a shell pinched to another at a
-# single shared UV point is two charts to the engine. It packs them apart
-# without duplicating the shared vertex, and no rigid per-shell move can
-# reproduce that. Such a mesh is rejected and restored rather than half-applied.
+# Its causes -- Maya UV shells are VERTEX-connected while xatlas charts are
+# EDGE-connected (a shell pinched at a lone shared UV is two charts to it), and
+# the engine drops a zero-area face (a shell held together only through one
+# comes back in pieces) -- are pythontk's to prevent: ``ptk.UvPack`` packs such
+# a shell by its bounds, so it moves as one piece (2026-11-24: a production
+# lightmap layout this check used to refuse, shell 14, now packs). The check
+# stays the guard: a mesh with a shell still not rigid is refused before any
+# of its shells is written.
 RESIDUAL_TOLERANCE = 1e-3
 
 
@@ -82,6 +85,12 @@ class PackUvsResult:
     # engine clamps a grid that would run past the end of the UDIM row, and a
     # caller reporting the run needs to say so. Always (1, 1) under xatlas.
     tiles: Tuple[int, int] = (1, 1)
+    # The meshes xatlas packed after the u3d engine left shells on each
+    # other (a folded shell: u3dLayout misjudges its footprint), in
+    # ``succeeded`` too, and why (``fallback_reason``): every mesh of that
+    # pack is redone, together, for one cause. Empty under xatlas.
+    fallbacks: List[str] = field(default_factory=list)
+    fallback_reason: str = ""
 
     def __bool__(self) -> bool:
         return bool(self.succeeded)
@@ -210,12 +219,17 @@ class _UvPackInternal:
         return found[(found >= 0) & (found < face_count)].tolist()
 
     @classmethod
-    def _uv_arrays(cls, mesh: str, faces: Optional[Sequence[str]] = None):
+    def _uv_arrays(
+        cls, mesh: str, faces: Optional[Sequence[str]] = None, areas: bool = False
+    ):
         """Current-UV-set geometry of *mesh* as plain arrays, optionally scoped.
 
         Returns ``(uvs (N,2) float64, triangles (M,3) uint32, shell_ids (N,),
-        uv_ids (N,))``, where ``uv_ids`` maps each returned row back to the
-        mesh's own UV index. Triangles are fan-triangulated per polygon over
+        uv_ids (N,), world areas (M,) or None)``, where ``uv_ids`` maps each
+        returned row back to the mesh's own UV index and, with *areas*, each
+        triangle's world area is what the pack evens texel density by
+        (``ptk.UvPack.pack_islands(surface_areas=)``), walked over the same
+        fan. Triangles are fan-triangulated per polygon over
         the assigned UV ids — exact for convex faces, and only
         chart-connectivity/coverage input for the packer, so concave n-gons
         cost at most slight pack looseness.
@@ -243,15 +257,24 @@ class _UvPackInternal:
         # engine's own scale search.)
         starts = [0, *np.cumsum(np.asarray(counts, dtype=np.int64)).tolist()]
         uv_ids = list(uv_ids)
+        if areas:
+            # A mapped face maps every corner, in its vertices' order: one walk
+            # gives each triangle its UVs and its points.
+            vcounts, vids = fn.getVertices()
+            vstarts = [0, *np.cumsum(np.asarray(vcounts, dtype=np.int64)).tolist()]
+            vids = list(vids)
 
         face_ids = (
             range(len(counts)) if faces is None else cls._face_ids(faces, len(counts))
         )
-        tris = []
+        tris, corners = [], []
         for face in face_ids:
             ids = uv_ids[starts[face] : starts[face + 1]]
             for k in range(1, len(ids) - 1):
                 tris.append((ids[0], ids[k], ids[k + 1]))
+            if areas and ids:
+                vs = vids[vstarts[face] : vstarts[face + 1]]
+                corners.extend((vs[0], vs[k], vs[k + 1]) for k in range(1, len(vs) - 1))
         if not tris:
             raise ValueError(
                 "no UV-mapped faces in the pack scope"
@@ -268,12 +291,27 @@ class _UvPackInternal:
         remap = np.full(len(uvs), -1, dtype=np.int64)
         remap[used] = np.arange(len(used))
         _, shell_ids = fn.getUvShellsIds()
+        world = None
+        if areas:
+            points = np.asarray(fn.getPoints(om.MSpace.kWorld), dtype=np.float64)[:, :3]
+            p = points[np.asarray(corners, dtype=np.int64)]
+            world = np.linalg.norm(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]), axis=1) / 2.0
         return (
             uvs[used],
             remap[tris].astype(np.uint32),
             np.asarray(shell_ids)[used],
             used,
+            world,
         )
+
+    @classmethod
+    def _shape_key(cls, mesh: str) -> str:
+        """The shape node *mesh* reads, by its UUID: every path of an instance
+        reads one shape, so one layout. *mesh* itself when it names no mesh."""
+        try:
+            return om.MFnDependencyNode(cls._fn_mesh(mesh).object()).uuid().asString()
+        except RuntimeError:
+            return str(mesh)
 
     @staticmethod
     def _component_ranges(
@@ -321,14 +359,39 @@ class _UvPackInternal:
         the rows *are* the UV indices), which is what lets a component-scoped
         pack address its compacted subset.
         """
+        solved, _placed = cls._solve_shells(old_uvs, new_uvs, shell_ids, written)
+        cls._write_shells(mesh, solved, uv_ids)
+
+    @staticmethod
+    def _solve_shells(
+        old_uvs: np.ndarray,
+        new_uvs: np.ndarray,
+        shell_ids: np.ndarray,
+        written: Optional[np.ndarray] = None,
+    ) -> Tuple[list, np.ndarray]:
+        """Each shell's one move from *old_uvs* to *new_uvs*, and where those
+        moves put every row -- what :meth:`_write_shells` will write, so a
+        layout can be judged before anything is written.
+
+        Returns:
+            ``(solved, placed)``: ``(rows, (scale, angle, mirrored, c0, c1))``
+            per shell that moves, and the ``(N, 2)`` rows after the moves.
+
+        Raises:
+            RuntimeError: A shell the engine did not move as one piece.
+        """
         fit_mask = None
         if written is not None:
             fit_mask = np.zeros(len(old_uvs), dtype=bool)
             fit_mask[written] = True
 
         solved = []
-        for shell in np.unique(shell_ids):
-            indices = np.flatnonzero(shell_ids == shell)
+        placed = np.array(old_uvs, dtype=np.float64)
+        # One stable sort groups the rows by shell, each group ascending (a
+        # mask per shell is shells x UVs on a dense mesh).
+        order = np.argsort(shell_ids, kind="stable")
+        cuts = np.flatnonzero(np.diff(np.asarray(shell_ids)[order])) + 1
+        for indices in np.split(order, cuts):
             fit_on = indices if fit_mask is None else indices[fit_mask[indices]]
             if not len(fit_on):
                 # The engine placed none of this shell's UVs, so there is no
@@ -336,18 +399,27 @@ class _UvPackInternal:
                 # UV is still usable: the solve degenerates to a pure
                 # translation, which is exactly right for a lone point.)
                 continue
-            scale, angle, mirrored, c0, c1, residual = ptk.UvPack.solve_similarity(
+            *transform, residual = ptk.UvPack.solve_similarity(
                 old_uvs[fit_on], new_uvs[fit_on]
             )
             if residual > RESIDUAL_TOLERANCE:
                 raise RuntimeError(
-                    f"shell {int(shell)} is pinched to another shell at a single "
-                    f"UV point, so the engine could not move it as one piece "
-                    f"(residual {residual:.2e}). Split or merge the shells at "
-                    f"that point, or pack this mesh with the Standard method"
+                    f"shell {int(shell_ids[indices[0]])} is pinched to another "
+                    f"shell at a single UV point, so the engine could not move "
+                    f"it as one piece (residual {residual:.2e}). Split or merge "
+                    f"the shells at that point, or pack this mesh with the "
+                    f"Standard method"
                 )
-            solved.append((indices, scale, angle, mirrored, c0, c1))
+            solved.append((indices, tuple(transform)))
+            placed[indices] = ptk.UvPack.apply_similarity(old_uvs[indices], transform)
+        return solved, placed
 
+    @classmethod
+    def _write_shells(
+        cls, mesh: str, solved: list, uv_ids: Optional[np.ndarray] = None
+    ) -> None:
+        """Write :meth:`_solve_shells`' moves onto *mesh* through polyEditUV
+        (undoable; *uv_ids* as :meth:`_apply_shell_transforms` takes it)."""
         from mayatk.uv_utils._uv_utils import UvUtils
 
         moves = [
@@ -355,39 +427,30 @@ class _UvPackInternal:
                 cls._component_ranges(
                     mesh, np.sort(indices if uv_ids is None else uv_ids[indices])
                 ),
-                scale,
-                angle,
-                mirrored,
-                c0,
-                c1,
+                *transform,
             )
-            for indices, scale, angle, mirrored, c0, c1 in solved
+            for indices, transform in solved
         ]
         # A pinned UV refuses polyEditUV, which tore a shell carrying pins: its
         # pinned UVs stayed where they were while the rest were packed.
         with UvUtils.pins_lifted([c for comps, *_ in moves for c in comps]):
             for comps, scale, angle, mirrored, c0, c1 in moves:
-                if mirrored:
-                    # Maya's own Flip-U mechanism; centroid pivot keeps c0 fixed.
-                    cmds.polyEditUV(
-                        comps, pivotU=c0[0], pivotV=c0[1], scaleU=-1, scaleV=1
-                    )
+                # One call a shell: Maya scales (a negative U scale mirrors)
+                # and rotates about the pivot, then offsets -- the similarity's
+                # own order (measured equal to a call per part within 1.2e-7;
+                # a call per part was a quarter of a production door's pack).
+                edit = {}
+                if mirrored or abs(scale - 1.0) > 1e-9:
+                    edit.update(scaleU=-scale if mirrored else scale, scaleV=scale)
                 if abs(angle) > 1e-6:
-                    cmds.polyEditUV(
-                        comps, pivotU=c0[0], pivotV=c0[1], angle=angle, relative=True
-                    )
-                if abs(scale - 1.0) > 1e-9:
-                    cmds.polyEditUV(
-                        comps,
-                        pivotU=c0[0],
-                        pivotV=c0[1],
-                        scaleU=scale,
-                        scaleV=scale,
-                        relative=True,
-                    )
+                    edit["angle"] = angle
                 du, dv = float(c1[0] - c0[0]), float(c1[1] - c0[1])
                 if abs(du) > 1e-9 or abs(dv) > 1e-9:
-                    cmds.polyEditUV(comps, uValue=du, vValue=dv, relative=True)
+                    edit.update(uValue=du, vValue=dv)
+                if edit:
+                    cmds.polyEditUV(
+                        comps, pivotU=c0[0], pivotV=c0[1], relative=True, **edit
+                    )
 
     @classmethod
     def run(
@@ -410,58 +473,37 @@ class _UvPackInternal:
             raise ValueError("No mesh objects to pack.")
 
         result = PackUvsResult(engine="xatlas")
-        # Per mesh, what the density pre-pass and the caller's density readout
-        # measure: the scoped faces, or the mesh itself when it packs whole.
+        # Per mesh, what the caller's density readout measures: the scoped
+        # faces, or the mesh itself when it packs whole.
         targets = {mesh: faces or [mesh] for mesh, faces in scope}
 
-        # Snapshot BEFORE the density pre-pass: that pass already rewrites the
-        # scene's UVs, so a mesh rejected further down is not "untouched" unless
-        # it is explicitly put back. Without this a rejected mesh keeps its
-        # equalized-but-unpacked layout and lands on top of the packed ones.
-        pre_pass = {}
-        if preserve_3d:
-            for mesh, _ in scope:
-                try:
-                    pre_pass[mesh] = cls._uv_positions(mesh)
-                except (RuntimeError, ValueError):
-                    pass  # unreadable here fails again below, with its reason
-
-            # Equalize per-shell texel density (u3dLayout -preScaleMode 1
-            # equivalent). xatlas preserves relative input scale, so equal
-            # density in = equal density out. Runs against the pack scope, so a
-            # faces-only pack neither measures nor rescales the rest of the map.
-            in_scope = [t for group in targets.values() for t in group]
-            density = uv_utils.get_texel_density(in_scope, map_size)
-            if density:
-                uv_utils.set_texel_density(in_scope, density=density, map_size=map_size)
-
-        arrays, per_mesh = [], []
+        # Nothing is written before the per-shell write-back: the density
+        # evening (u3dLayout -preScaleMode 1 equivalent) is the engine's, from
+        # each triangle's world area (``surface_areas``), folded into each
+        # shell's one move. It was a per-shell host pass before the pack --
+        # 15 of a production door's 27.5 s (6,347 polyEvaluate calls). Against
+        # the pack scope, so a faces-only pack measures nothing outside it.
+        arrays, per_mesh, areas = [], [], []
         for mesh, faces in scope:
             try:
-                uvs, tris, shell_ids, uv_ids = cls._uv_arrays(mesh, faces)
+                uvs, tris, shell_ids, uv_ids, world = cls._uv_arrays(
+                    mesh, faces, areas=preserve_3d
+                )
             except (RuntimeError, ValueError) as error:
                 result.failed.append((CoreUtils.short_name(mesh), str(error)))
-                cls._restore(mesh, pre_pass.get(mesh))
                 continue
             arrays.append((uvs, tris))
             per_mesh.append((mesh, uvs, shell_ids, uv_ids))
+            areas.append(world)
         if not arrays:
             return result
 
-        # Fixed-page pack (measured rationale): in content-driven mode the
-        # engine picks the atlas aspect freely, and uniform-fitting that atlas
-        # into the box wasted the mismatch — a 6-shell cube filled only 0.50 of
-        # a Full tile, 0.25 of Half-V. Instead the box is tiled with square
-        # cells (Full/Quarter = 1, halves = 2 stacked) and the engine packs
-        # square pages of exactly the cell's real pixel size, scale-searched to
-        # fill them edge-to-edge. Padding is then exact pixels, since a page
-        # texel is a texture pixel.
-        cov_u, cov_v = coverage
-        short_side, long_side = min(cov_u, cov_v), max(cov_u, cov_v)
-        if short_side <= 0:
-            raise ValueError(f"coverage must be positive, got {coverage}")
-        pages = max(1, int(round(long_side / short_side)))
-        resolution = max(64, int(round(map_size * short_side)))
+        # Fixed-page pack: the box is square pages of exactly its cells' pixel
+        # size, scale-searched to fill them edge to edge (ptk.UvPack.box_pages;
+        # the margin is the native u3dLayout path's rule).
+        pages, resolution, place = ptk.UvPack.box_pages(
+            map_size, coverage, ptk.MathUtils.uv_tile_margin(map_size)
+        )
         if padding is None:
             padding = uv_utils.calculate_uv_padding(map_size)  # pixels
         packed = cls._engine_pack(
@@ -471,59 +513,101 @@ class _UvPackInternal:
             brute_force=brute_force,
             resolution=resolution,
             pages=pages,
+            **({"surface_areas": areas} if preserve_3d else {}),
         )
         result.atlas_width, result.atlas_height = packed.width, packed.height
-
-        # Cells: the margin-inset box split into `pages` near-square cells
-        # along its long axis (same margin rule as the native u3dLayout path).
         u_tile, v_tile = ptk.MathUtils.udim_to_tile(udim)
-        margin = ptk.MathUtils.uv_tile_margin(map_size)
-        inner_origin = np.array([u_tile + margin, v_tile + margin])
-        inner_size = np.array(
-            [max(cov_u - 2 * margin, 1e-6), max(cov_v - 2 * margin, 1e-6)]
-        )
-        axis = 0 if cov_u >= cov_v else 1  # the long axis the cells stack along
-        step = np.zeros(2)
-        step[axis] = inner_size[axis] / pages
-        cell_size = inner_size.copy()
-        cell_size[axis] = step[axis]
-        fit = float(cell_size.min())  # square page -> uniform fit into the cell
+        corner = np.array([u_tile, v_tile], dtype=np.float64)
 
-        for (mesh, old_uvs, shell_ids, uv_ids), unit_uvs, written, page_arr in zip(
-            per_mesh, packed.uvs, packed.written, packed.pages
+        # Every mesh's write is planned, the planned layout checked, and only
+        # then is anything written: no texel where two islands meet, across
+        # every mesh (they share the page). A refused layout writes nothing,
+        # so no restore can fail half-way. A fold inside one island is the
+        # input's own -- each island moves as one piece -- and is not judged.
+        planned = []  # (mesh, solved moves, placed rows, triangles, uv ids)
+        for (mesh, old_uvs, shell_ids, uv_ids), (_, tris), unit_uvs, written, page_arr in zip(
+            per_mesh, arrays, packed.uvs, packed.written, packed.pages
         ):
-            origins = inner_origin + np.asarray(page_arr).reshape(-1, 1) * step
             try:
-                cls._apply_shell_transforms(
-                    mesh,
-                    old_uvs,
-                    unit_uvs * fit + origins,
-                    shell_ids,
-                    written,
-                    uv_ids,
+                solved, placed = cls._solve_shells(
+                    old_uvs, place(unit_uvs, page_arr) + corner, shell_ids, written
                 )
-                result.succeeded.append(mesh)
-                result.targets.extend(targets[mesh])
             except RuntimeError as error:
                 result.failed.append((CoreUtils.short_name(mesh), str(error)))
-                cls._restore(mesh, pre_pass.get(mesh))
+                continue
+            planned.append((mesh, solved, placed, tris, uv_ids))
+        overlap = ptk.UvPack.island_overlaps(
+            [(placed - corner, tris) for _m, _s, placed, tris, _i in planned], map_size
+        )
+        if overlap:
+            why = (
+                f"the pack put {overlap} texel(s) of islands on each other; "
+                "nothing written"
+            )
+            result.failed.extend((CoreUtils.short_name(m), why) for m, *_ in planned)
+            return result
+        for mesh, solved, _placed, _tris, uv_ids in planned:
+            cls._write_shells(mesh, solved, uv_ids)
+            result.succeeded.append(mesh)
+            result.targets.extend(targets[mesh])
         return result
 
     @classmethod
-    def _restore(cls, mesh: str, original_uvs: Optional[np.ndarray]) -> None:
-        """Undo the density pre-pass on a mesh that failed to pack.
+    def _island_overlaps(
+        cls,
+        scope: Sequence[Tuple[str, Optional[Sequence[str]]]],
+        map_size: int = 1024,
+        corner: Tuple[float, float] = (0.0, 0.0),
+        extent: int = 1,
+    ) -> int:
+        """Texels where two islands of *scope*'s current UVs meet, across every
+        mesh of it (``ptk.UvPack.island_overlaps``) -- what no pack may leave.
 
-        That pass scales each shell about its own bounding-box center, so the
-        move back is a per-shell similarity — the same machinery the pack
-        write-back uses, run in reverse. Best-effort: a mesh that can't be
-        restored is left as-is rather than aborting the surviving packs.
+        Parameters:
+            scope: ``(mesh, faces or None)`` pairs; *faces* limits a mesh to
+                what a component-scoped pack placed (the rest of its map stays
+                where the caller left it, and the scope may land on it). The
+                paths of one instanced shape are one layout, judged once
+                (their faces together).
+            map_size: The map's texels per side, the probe's within
+                ``ptk.UvPack.OVERLAP_PROBE``.
+            corner: The region's lower-left UV corner (a UDIM tile's).
+            extent: The region's tiles per side (a tile grid's larger side).
+        """
+        shapes: dict = {}  # shape -> (mesh, faces or None)
+        for mesh, faces in scope:
+            key = cls._shape_key(mesh)
+            held = shapes.get(key)
+            if held is None:
+                shapes[key] = (mesh, faces)
+            elif held[1] is not None:
+                shapes[key] = (held[0], None if faces is None else [*held[1], *faces])
+        meshes = []
+        for mesh, faces in shapes.values():
+            try:
+                uvs, tris, _shells, _ids, _areas = cls._uv_arrays(mesh, faces)
+            except (RuntimeError, ValueError):  # nothing mapped there
+                continue
+            meshes.append(((uvs - np.asarray(corner)) / float(extent), tris))
+        return ptk.UvPack.island_overlaps(meshes, map_size * extent)
 
-        Always whole-mesh, even after a component-scoped pack: the snapshot is
-        whole-mesh, and a shell the pre-pass left alone solves to the identity
-        and is skipped, so the untouched part of the map costs nothing.
+    @classmethod
+    def _restore(cls, mesh: str, original_uvs: Optional[np.ndarray]) -> Optional[str]:
+        """Put a mesh's UVs back as *original_uvs* (a whole-mesh
+        :meth:`_uv_positions` snapshot): a u3d layout the overlap check
+        refused.
+
+        Each shell moved by one similarity, so the move back is a per-shell
+        similarity -- the same machinery the pack write-back uses, run in
+        reverse. Best-effort: a mesh that can't be restored is left as-is
+        rather than aborting the surviving packs. A shell that did not move
+        solves to the identity and is skipped.
+
+        Returns:
+            None once restored, else why not (for the caller's report).
         """
         if original_uvs is None:
-            return
+            return "no snapshot"
         try:
             current = cls._uv_positions(mesh)
             _, shell_ids = cls._fn_mesh(mesh).getUvShellsIds()
@@ -536,7 +620,8 @@ class _UvPackInternal:
                 )
             cls._apply_shell_transforms(mesh, current, original_uvs, shell_ids)
         except (RuntimeError, ValueError) as error:
-            print(f"# pack_uvs: could not restore {mesh}: {error} #")
+            return str(error)
+        return None
 
 
 class _U3dPackInternal:
@@ -796,10 +881,107 @@ class _U3dPackInternal:
             pack_kwargs["tileAssignMode"] = 1
 
         result = PackUvsResult(engine="u3d", tiles=(tiles_u, tiles_v))
+        guard = _UvPackInternal
+        # The meshes the pack reaches -- a group opened, an instance's paths
+        # one (they read one shape), a component scope its faces -- and their
+        # UVs as they were: what the check judges and puts back. A mesh with
+        # no UVs has nothing to snapshot, and is left out of it.
+        original = {}
+        for mesh, _faces in guard._resolve_scope(meshes):
+            try:
+                original[mesh] = guard._uv_positions(mesh)
+            except (RuntimeError, ValueError):
+                continue
         if distribute:
             cls.distribute_to_grid(uv_utils, all_uvs, u_tile, v_tile, tiles_u, tiles_v)
         cls._pack(all_uvs, meshes, pack_kwargs, result)
         # u3dLayout packs exactly the components it was given, so what packed
         # is what succeeded (a face range under a component-scoped pack).
         result.targets = list(result.succeeded)
+        cls._hold_to_the_check(
+            uv_utils,
+            result,
+            original,
+            map_size=map_size,
+            udim=udim,
+            coverage=coverage,
+            preserve_3d=preserve_3d,
+            padding=padding,
+            region=(u_tile, v_tile, tiles_u, tiles_v),
+        )
         return result
+
+    @staticmethod
+    def _hold_to_the_check(
+        uv_utils,
+        result: PackUvsResult,
+        original: dict,
+        map_size: int,
+        udim: int,
+        coverage: Tuple[float, float],
+        preserve_3d: bool,
+        padding: Optional[float],
+        region: Tuple[int, int, int, int],
+    ) -> None:
+        """Hold what u3dLayout packed to the xatlas path's own check.
+
+        u3dLayout misjudges a FOLDED shell's footprint and packs its
+        neighbours onto it (production door: 15 of its 16 folded shells in an
+        overlap, 1,982 texels). The meshes of one pack share its box, so they
+        are judged together -- one mesh's shell on another's shows in
+        neither alone. A layout with islands on each other is packed again by
+        xatlas, every mesh of the pack together, which places such shells by
+        their bounds; what xatlas cannot pack, or a tile grid (xatlas packs
+        one tile), is put back as it was. *original* holds each mesh the pack
+        reaches that had UVs to snapshot: only those are judged.
+        """
+        guard = _UvPackInternal
+        u_tile, v_tile, tiles_u, tiles_v = region
+        # What packed, as the meshes it reaches: a component-scoped pack is
+        # judged on what it placed.
+        packed = [
+            (mesh, faces)
+            for mesh, faces in guard._resolve_scope(result.succeeded or [])
+            if mesh in original
+        ]
+        overlap = guard._island_overlaps(
+            packed, map_size, corner=(u_tile, v_tile), extent=max(tiles_u, tiles_v)
+        )
+        if not overlap:
+            return
+        why = f"u3dLayout put {overlap} texel(s) of shells on each other"
+        result.succeeded, result.targets = [], []  # every packed mesh is redone
+        reasons = {mesh: why for mesh, _faces in packed}
+        if (tiles_u, tiles_v) == (1, 1) and ptk.UvPack.available():
+            redo = guard.run(
+                uv_utils,
+                objects=[entry for mesh, faces in packed for entry in faces or [mesh]],
+                map_size=map_size,
+                udim=udim,
+                coverage=coverage,
+                preserve_3d=preserve_3d,
+                padding=padding,
+            )
+            result.succeeded.extend(redo.succeeded)
+            result.targets.extend(redo.targets)
+            # The engine reports a failure by its short name: each is matched
+            # by the shape it reads.
+            key = guard._shape_key
+            done = {key(m) for m in redo.objects}
+            failed = {key(m): reason for m, reason in redo.failed}
+            for mesh in list(reasons):
+                if key(mesh) in done:
+                    result.fallbacks.append(mesh)
+                    del reasons[mesh]
+                else:
+                    reasons[mesh] = (
+                        f"{why}; xatlas could not either "
+                        f"({failed.get(key(mesh), 'no result')})"
+                    )
+            if result.fallbacks:
+                result.fallback_reason = why
+        for mesh, reason in reasons.items():
+            stuck = guard._restore(mesh, original[mesh])
+            result.failed.append(
+                (mesh, f"{reason}; " + (f"NOT restored ({stuck})" if stuck else "restored"))
+            )

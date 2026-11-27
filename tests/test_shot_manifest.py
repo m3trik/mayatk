@@ -1244,7 +1244,7 @@ class TestSetClipBehavior(unittest.TestCase):
             name="narration_A01", kind="audio", behaviors=["set_clip"]
         )
         step.objects.append(audio_obj)
-        builder = ShotManifest(store)
+        builder = ShotManifest(store, disabled_behaviors=())
         builder.update([step])
 
         results = builder.assess(
@@ -1271,7 +1271,7 @@ class TestSetClipBehavior(unittest.TestCase):
             name="narration_A01", kind="audio", behaviors=["set_clip"]
         )
         step.objects.append(audio_obj)
-        builder = ShotManifest(store)
+        builder = ShotManifest(store, disabled_behaviors=())
         builder.update([step])
 
         results = builder.assess(

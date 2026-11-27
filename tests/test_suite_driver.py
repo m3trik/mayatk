@@ -593,8 +593,8 @@ class TestTheRunGivesTheShotsPrefsBack(DriverTestCase):
         self.during = []
 
     def _remove_scratch(self):
-        if self.driver._sandbox_dir:
-            shutil.rmtree(self.driver._sandbox_dir, ignore_errors=True)
+        if self.driver._sandbox_store is not None:
+            self.driver._sandbox_store.cleanup()
 
     def _run_modules(self, config):
         self.during.append(self.store._prefs_dir_override)

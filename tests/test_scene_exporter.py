@@ -4015,6 +4015,54 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertFalse(passed, "the copy's own baseline must be compared")
         self.assertTrue(any("CopyTorus" in m for m in messages))
 
+    def test_new_nodes_pass_the_check_at_its_additions_level_and_are_said(self):
+        """The row's dial: helpers added to a module a project already built on
+        pass "New Nodes Pass" (an engine still finds every node it imported) and
+        the run says so; a node gone fails at every level; OFF checks nothing.
+        A real course's re-export stopped on its new helpers with only a
+        strict check to pick."""
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        self._check_with_output("module.fbx")  # the baseline
+
+        cmds.parent(cmds.spaceLocator(name="VIEW_HELPER")[0], str(self.group))
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, "module.fbx"))
+        passed, messages = tm.check_hierarchy_vs_existing_fbx("strict")
+        self.assertFalse(passed, "strict: any change fails")
+        with self.assertLogs(self.exporter.logger, level="WARNING") as captured:
+            passed, messages = tm.check_hierarchy_vs_existing_fbx("additions")
+        self.assertTrue(passed, messages)
+        self.assertTrue(any("VIEW_HELPER" in m for m in captured.output), "the run is told what was added")
+        self.assertTrue(tm.check_hierarchy_vs_existing_fbx(True)[0] is False, "a saved checkbox's true is strict")
+        self.assertEqual(tm.check_hierarchy_vs_existing_fbx(None), (True, []), "OFF")
+
+        cmds.delete(str(self.sphere))
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        passed, messages = tm.check_hierarchy_vs_existing_fbx("additions")
+        self.assertFalse(passed, "a node gone breaks what was built on it")
+        self.assertTrue(any("ExportSphere" in m for m in messages))
+
+    def test_a_moved_node_is_said_moved_at_the_additions_level(self):
+        """A node moved under a new group fails New Nodes Pass on its old
+        path, and its new path is said as the move it is -- never as a name
+        that "would find two": the node that held the name is gone.
+        Added: 2026-11-26"""
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        self._check_with_output("module.fbx")  # the baseline
+
+        holder = cmds.group(empty=True, name="SPHERE_HOLDER", parent=str(self.group))
+        cmds.parent(str(self.sphere), holder)
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        passed, messages = tm.check_hierarchy_vs_existing_fbx("additions")
+        self.assertFalse(passed, "the old path is gone")
+        self.assertTrue(
+            any("SPHERE_HOLDER|ExportSphere" in m and "moved here" in m for m in messages),
+            messages,
+        )
+        self.assertFalse(any("would find two" in m for m in messages), messages)
+
     def test_a_version_up_still_diffs_the_deliverable_it_continues(self):
         """A version-up (v001 kept, v002 saved) is a Save As copy too, so the
         record is v001's -- but v002 exports the deliverable v001 exported, and
@@ -4561,6 +4609,26 @@ class TestSceneExporter(MayaTkTestCase):
             "reparenting" in joined or "missing" in joined,
             f"Expected reparenting/missing diff, got: {messages}",
         )
+
+
+class TestExportAtRest(MayaTkTestCase):
+    """An export writes the scene as it rests (``XformUtils.at_rest``), whatever frame it was saved on: a production
+    export ran at frame 1054 and delivered its doors swung open as their rest pose (2026-11-25)."""
+
+    def test_an_export_runs_at_the_animations_first_frame_and_puts_the_frame_back(self):
+        cmds.playbackOptions(animationStartTime=1, animationEndTime=1200)
+        cmds.currentTime(1054)
+        exporter = SceneExporter(log_level="ERROR")
+        seen = []
+
+        def resolve(export_dir):
+            seen.append(cmds.currentTime(query=True))
+            return None  # refused: the run stops here, before any write
+
+        with patch.object(exporter, "resolve_export_dir", side_effect=resolve):
+            self.assertIs(exporter.perform_export(export_dir="", objects=[]), False)
+        self.assertEqual(seen, [1.0], "the export ran at rest")
+        self.assertEqual(cmds.currentTime(query=True), 1054.0, "and the frame is put back")
 
 
 class TestExportDataNodeOption(MayaTkTestCase):
@@ -5823,6 +5891,29 @@ class TestExcludeRigHelpersOption(MayaTkTestCase):
         self.assertNotIn("drop_rig_apparatus", self.exporter.task_manager.TASK_ORDER)
         self.assertIn("drop_rig_apparatus", ptk.ExportRun.MODE_KEYS)
 
+    def test_the_exclude_rows_name_only_what_they_drop(self):
+        """The panel lays these out under one Exclude title, so each row
+        names what it leaves out alone; its tooltip keeps the whole name.
+        Added: 2026-11-25"""
+        defs = self.exporter.task_manager.task_definitions
+        labels = {
+            # A line edit's setText is its default text; its label is the row's.
+            name: defs[name].get("set_row_label") or defs[name].get("setText")
+            for name in ("ignore_groups", "exclude_hdr", "drop_rig_apparatus", "exclude_audio")
+        }
+        self.assertEqual(
+            labels,
+            {
+                "ignore_groups": "Groups",
+                "exclude_hdr": "HDR Environment",
+                "drop_rig_apparatus": "Rig Helpers",
+                "exclude_audio": "Audio",
+            },
+        )
+        self.assertIn("Exclude Rig Helpers", defs["drop_rig_apparatus"]["setToolTip"])
+        self.assertNotIn("exclude_audio", self.exporter.task_manager.TASK_ORDER)
+        self.assertIn("exclude_audio", ptk.ExportRun.MODE_KEYS)
+
     def test_the_written_file_ships_without_the_rig(self):
         kept = self._export("with_rig")
         dropped = self._export("without_rig", drop_rig_apparatus=True)
@@ -6235,7 +6326,7 @@ class TestMangledNameGuards(MayaTkTestCase):
 
 
 class TestIgnoreGroupsCaseMode(MayaTkTestCase):
-    """``ignore_groups`` match mode — the Ignore row's option-box "Aa" toggle.
+    """``ignore_groups`` match mode — the Groups row's option-box "Aa" toggle.
 
     Insensitive is the default and the behavior the task shipped with, so the
     first test pins the contract every existing caller relies on. The dict form
@@ -8151,6 +8242,154 @@ class TestTexturePathPipeline(MayaTkTestCase):
         status, msgs = self.tm.check_default_materials()
         self.assertTrue(status, f"an ordinary orig shape was flagged: {msgs}")
 
+    def _instanced_wall_with_leading_orig(self):
+        """The production office's ``WALL_A``, small: a modelled mesh whose
+        real shape is instanced under a second wall, with its orig shape
+        listed ahead of it. Returns ``(wall_a, wall_b, orig)``."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        wall_a = cmds.ls(cmds.polyCube(name="pipe_wall_a")[0], long=True)[0]
+        cmds.delete(wall_a, constructionHistory=True)
+        MatUtils.assign_mat(wall_a, MatUtils.create_mat("lambert", name="pipe_wall_mat"))
+        # Modelling on a mesh with no history leaves an orig shape behind it.
+        cmds.polyExtrudeFacet(f"{wall_a}.f[0]", localTranslateZ=0.1)
+        shapes = cmds.listRelatives(wall_a, shapes=True, fullPath=True)
+        real = [s for s in shapes if not NodeUtils.is_intermediate(s)][0]
+        orig = [s for s in shapes if NodeUtils.is_intermediate(s)][0]
+        wall_b = cmds.ls(cmds.createNode("transform", name="pipe_wall_b"), long=True)[0]
+        cmds.parent(real, wall_b, shape=True, addObject=True, relative=True)
+        cmds.reorder(orig, front=True)
+        return wall_a, wall_b, orig
+
+    def _fbx_materials_by_model(self, objects, name):
+        """{model name: [material names]} of a real ASCII FBX write of *objects*."""
+        import re
+
+        import maya.mel as mel
+
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        path = os.path.join(self.temp_dir, f"{name}.fbx").replace("\\", "/")
+        self.addCleanup(mel.eval, "FBXExportInAscii -v false")
+        mel.eval("FBXResetExport")
+        mel.eval("FBXExportInAscii -v true")
+        cmds.select(objects, replace=True)
+        cmds.file(path, force=True, options="v=0;", type="FBX export", exportSelected=True)
+        text = open(path, encoding="utf-8", errors="replace").read()
+        names = {
+            m.group(2): (m.group(1), m.group(3))
+            for m in re.finditer(
+                r'^\s*(Model|Material): (\d+), "(?:Model|Material)::([^"]*)"', text, re.M
+            )
+        }
+        out = {}
+        for child, parent in re.findall(r'C: "OO",(\d+),(\d+)', text):
+            c, p = names.get(child), names.get(parent)
+            if c and p and c[0] == "Material" and p[0] == "Model":
+                out.setdefault(p[1], []).append(c[1])
+        return out
+
+    def test_repair_orig_shapes_moves_an_orig_behind_an_instanced_real_shape(self):
+        """The production office's ``WALL_A`` shipped on ``Default_Material``:
+        its orig shape was listed ahead of a real shape instanced over 24
+        walls. The repair moves the orig back -- moving the instanced real
+        shape forward silently keeps the order, and deleting history refuses
+        an instanced shape -- and the FBX then carries the authored material,
+        with the modelling history untouched.
+        Added: 2026-11-24
+        """
+        wall_a, wall_b, orig = self._instanced_wall_with_leading_orig()
+        self.assertEqual(
+            self._fbx_materials_by_model([wall_a, wall_b], "orig_ahead").get("pipe_wall_a"),
+            ["Default_Material"],
+            "the fixture no longer reproduces the shipped fault",
+        )
+        self.tm.objects = [wall_a, wall_b]
+        self.assertFalse(self.tm.check_default_materials()[0])
+
+        self.tm.repair_orig_shapes()
+
+        status, msgs = self.tm.check_default_materials()
+        self.assertTrue(status, msgs)
+        first = cmds.listRelatives(wall_a, shapes=True, fullPath=True)[0]
+        self.assertFalse(cmds.getAttr(first + ".intermediateObject"), "the real shape leads")
+        self.assertTrue(cmds.objExists(orig), "the history keeps its orig")
+        self.assertTrue(cmds.ls(cmds.listHistory(first), type="polyExtrudeFace"), "history kept")
+        self.assertEqual(
+            self._fbx_materials_by_model([wall_a, wall_b], "orig_behind"),
+            {"pipe_wall_a": ["pipe_wall_mat"], "pipe_wall_b": ["pipe_wall_mat"]},
+        )
+        self.assertEqual(self.tm.kept_edits, ["orig shapes moved behind their meshes"])
+
+    def test_repair_orig_shapes_moves_an_orig_no_mesh_owns_behind_its_real_shape(self):
+        """An orig instanced under two transforms with different meshes that
+        no history holds cannot be taken off either (neither can be told its
+        own), but where it leads a real shape it still moves behind it: the
+        fault the check cannot repair never hides the one it can.
+        Added: 2026-11-26
+        """
+        t1 = cmds.ls(cmds.polyCube(name="pipe_unowned_a")[0], long=True)[0]
+        t2 = cmds.ls(cmds.polySphere(name="pipe_unowned_b")[0], long=True)[0]
+        orig = cmds.createNode("mesh", name="pipe_unownedOrig", parent=t1)
+        cmds.setAttr(orig + ".intermediateObject", True)
+        orig = cmds.ls(orig, long=True)[0]
+        cmds.parent(orig, t2, shape=True, addObject=True, relative=True)
+        cmds.reorder(orig, front=True)
+        self.tm.objects = [t1, t2]
+        status, msgs = self.tm.check_default_materials()
+        self.assertTrue(any("ahead of the real shape" in m for m in msgs), msgs)
+
+        self.tm.repair_orig_shapes()
+
+        first = cmds.listRelatives(t1, shapes=True, fullPath=True)[0]
+        self.assertFalse(cmds.getAttr(first + ".intermediateObject"), "the real shape leads")
+        status, msgs = self.tm.check_default_materials()
+        self.assertFalse(status, "the orig still rides two meshes: said, not guessed")
+        self.assertTrue(any("orig shape riding" in m for m in msgs), msgs)
+        self.assertFalse(any("ahead of the real shape" in m for m in msgs), msgs)
+        self.assertEqual(self.tm.kept_edits, ["orig shapes moved behind their meshes"])
+
+    def test_repair_orig_shapes_takes_an_orig_off_a_mesh_it_does_not_feed(self):
+        """An orig riding another transform's geometry (the case the check was
+        written for) comes off that transform; its own mesh keeps it."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        orig = self._deformed_cube_orig("riding_fix")
+        host = cmds.ls(cmds.polySphere(name="pipe_orig_host_fix")[0], long=True)[0]
+        MatUtils.assign_mat(host, MatUtils.create_mat("lambert", name="pipe_host_fix_mat"))
+        cmds.parent(orig, host, shape=True, addObject=True, relative=True)
+        self.tm.objects = [self.cube_long, host]
+        self.assertFalse(self.tm.check_default_materials()[0])
+
+        self.tm.repair_orig_shapes()
+
+        status, msgs = self.tm.check_default_materials()
+        self.assertTrue(status, msgs)
+        uuid = cmds.ls(orig, uuid=True)
+        parents = cmds.listRelatives(cmds.ls(uuid, long=True)[0], allParents=True, fullPath=True)
+        self.assertEqual(parents, [self.cube_long], "the orig stays with its own mesh only")
+        self.assertTrue(cmds.ls(cmds.listHistory(self.cube_long), type="cluster"), "its deformer kept")
+        self.assertEqual(
+            self.tm.kept_edits, ["orig shapes taken off meshes they do not feed"], "what was done"
+        )
+
+    def test_repair_orig_shapes_leaves_instancing_and_ordinary_origs_alone(self):
+        """A deformed mesh's instances share its orig, and every deformed mesh
+        has one: neither is a fault, so the repair changes nothing."""
+        self._deformed_cube_orig("left_alone")
+        instance = cmds.ls(cmds.instance(self.cube_long)[0], long=True)[0]
+        before = {
+            p: cmds.listRelatives(p, shapes=True, fullPath=True) for p in (self.cube_long, instance)
+        }
+        self.tm.objects = [self.cube_long, instance]
+
+        self.tm.repair_orig_shapes()
+
+        after = {
+            p: cmds.listRelatives(p, shapes=True, fullPath=True) for p in (self.cube_long, instance)
+        }
+        self.assertEqual(after, before)
+
     def test_check_default_materials_passes_an_assigned_mesh(self):
         """Assigning any real material is what makes it pass."""
         from mayatk.mat_utils._mat_utils import MatUtils
@@ -8568,6 +8807,57 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
                 tasks={"output_format": "fbx", "smart_bake": False},
             )
         self.assertFalse(mel.eval("FBXExportTangents -q"))
+
+    def test_exclude_audio_turns_a_presets_audio_include_off(self):
+        """Exclude Audio over a preset that writes the Time Editor's audio
+        clips: the include goes off, and the log says so; the preset's content
+        choices stand. Added: 2026-11-26"""
+        import maya.mel as mel
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cube = cmds.polyCube(name="preset_audio_probe")[0]
+        preset = os.path.join(self.out, "p.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def _load(*_args, **_kwargs):
+            mel.eval("FBXExportAudio -v true")
+            mel.eval("FBXExportCameras -v true")
+
+        with (
+            patch.object(SceneExporter, "load_fbx_export_preset", side_effect=_load),
+            patch.object(TaskManager, "run_tasks", return_value=False),
+            self.assertLogs(self.exporter.logger, level="INFO") as said,
+        ):
+            self.exporter.perform_export(
+                export_dir=self.out,
+                objects=[cube],
+                preset_file=preset,
+                tasks={"output_format": "fbx", "smart_bake": False, "exclude_audio": True},
+            )
+        self.assertFalse(mel.eval("FBXExportAudio -q"), "the include is off")
+        self.assertTrue(mel.eval("FBXExportCameras -q"), "a content choice stands")
+        self.assertTrue(
+            any("FBXExportAudio turned off" in m for m in said.output), said.output
+        )
+
+    def test_exclude_audio_on_a_usd_run_leaves_the_fbx_plugin_alone(self):
+        """A USD layer is no FBX write: Exclude Audio pins no FBX option there
+        (the audio record stays off the layer through the publish,
+        ``ExportRun.excluded_records``). Added: 2026-11-26"""
+        import maya.mel as mel
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        mel.eval("FBXExportAudio -v true")
+        cube = cmds.polyCube(name="usd_audio_probe")[0]
+        with patch.object(TaskManager, "run_tasks", return_value=False):
+            self.exporter.perform_export(
+                export_dir=self.out,
+                objects=[cube],
+                tasks={"output_format": "usd", "smart_bake": False, "exclude_audio": True},
+            )
+        self.assertTrue(mel.eval("FBXExportAudio -q"), "the FBX plug-in's state untouched")
 
     def _ascii_preset_export(self, name, with_carrier):
         """A real FBX write under a preset that asks for ASCII; the file."""

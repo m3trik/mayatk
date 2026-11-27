@@ -2,7 +2,7 @@
 # coding=utf-8
 """Animation-phase export tasks: the smart bake and its restore, key
 optimization / snap / tie, the bake range, the data_export carrier and the
-declared takes (one per shot).
+declared takes (the ones the shots hold).
 """
 
 import math
@@ -678,6 +678,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 scope=tuple(self._live_objects()) or None,
                 # Most Detailed Only: the levels the write leaves out ship no record.
                 omit=self.lod_omitted(),
+                # Exclude Audio: the deliverable carries no audio record.
+                excluded=self.run.excluded_records,
             )
             if not FbxUtils._export_depth:
                 staged = dict(FbxUtils._session_stagers)
@@ -694,6 +696,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
                     key
                     for key in snapshot.scene_wide
                     if not ptk.SceneRecords.resolve(key).transient
+                    and key not in ctx.excluded
                 ]
                 if narrowed:
                     self.logger.info(
@@ -851,7 +854,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 self._realized_takes = tuple(realized)
                 self._require_range_coverage(*realized)
             self.logger.info(
-                f"Animation takes: {count} take(s), one per shot; shot "
+                f"Animation takes: {count} take(s), the ones the shots hold; shot "
                 "descriptions and metadata embedded on data_export."
             )
         else:

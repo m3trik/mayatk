@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.34.1"
+__version__ = "0.35.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -87,6 +87,8 @@ DEFAULT_INCLUDE = {
     "core_utils.undo_recorder": "UndoRecorder",
     # Lengths and angles by the kind of query that read them (internal vs working).
     "core_utils.units": "Units",
+    # Rays through the scene's meshes (a ptk.ProbeRays), for what any tool asks by sight.
+    "core_utils.mesh_rays": "MeshRays",
     "core_utils.diagnostics->Diagnostics": "*",
     "core_utils.diagnostics.scene_diag": "SceneDiagnostics",
     "core_utils.diagnostics.mesh_diag": "MeshDiagnostics",
@@ -831,6 +833,25 @@ MOVED_NAMES = {
     "MayaEmissiveGroups.merge_stores": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.copies", "0.32.0"),
     "MayaEmissiveGroups.discard_stores": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.remove_legacy", "0.32.0"),
     "MayaEmissiveGroups.publish": ("mayatk.mat_utils.emissive_groups.MayaEmissiveGroups.stage_emission_proxy", "0.32.0"),
+    # Retired aliases whose window closed (2026-11-26). The flat names
+    # (``mtk.scene_source``, ``mtk.get_bounding_box``) reach the owners still.
+    "CoreUtils.get_bounding_box": ("mayatk.XformUtils.get_bounding_box (its 'box' value)", "0.35.0"),
+    "EnvUtils.set_scene_source": ("mayatk.DataNodes.set_scene_source", "0.35.0"),
+    "EnvUtils.twin_save_target": ("mayatk.DataNodes.twin_save_target", "0.35.0"),
+    "EnvUtils.scene_source": ("mayatk.DataNodes.scene_source", "0.35.0"),
+    "EnvUtils.scene_project_root": ("mayatk.DataNodes.scene_project_root", "0.35.0"),
+    "EnvUtils.scene_workspace": ("mayatk.DataNodes.scene_workspace", "0.35.0"),
+    "EnvUtils.scene_source_images_dir": ("mayatk.DataNodes.scene_source_images_dir", "0.35.0"),
+    # A record's key and version are its declaration's.
+    "DataNodes.SHOT_METADATA": ("pythontk.SceneRecords.SHOTS.key", "0.35.0"),
+    "DataNodes.FBX_TAKES": ("pythontk.SceneRecords.SHOTS (each shot's range rides its clip)", "0.35.0"),
+    "ShadowRig.SHADOW_METADATA": ("pythontk.SceneRecords.SHADOWS.key", "0.35.0"),
+    "LightmapBaker.LIGHTMAP_METADATA": ("pythontk.SceneRecords.LIGHTMAPS.key", "0.35.0"),
+    "LightmapBaker.LIGHTMAP_METADATA_VERSION": ("pythontk.SceneRecords.LIGHTMAPS.version", "0.35.0"),
+    "LightmapRecords.LIGHTMAP_METADATA": ("pythontk.SceneRecords.LIGHTMAPS.key", "0.35.0"),
+    "LightmapRecords.LIGHTMAP_METADATA_VERSION": ("pythontk.SceneRecords.LIGHTMAPS.version", "0.35.0"),
+    # The Lightmap Baker saves no Bake Set (2026-10-22).
+    "LightmapBakeSet": ("mayatk.LightmapBaker (its Manage page selects and re-bakes each map's objects)", "0.35.0"),
 }
 
 bootstrap_package(

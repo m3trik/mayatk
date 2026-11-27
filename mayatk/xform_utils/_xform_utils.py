@@ -20,7 +20,7 @@ methods themselves never move):
 from __future__ import annotations
 
 import contextlib
-from typing import List
+from typing import Iterator, List, Optional
 
 import pythontk as ptk
 
@@ -53,6 +53,129 @@ class _XformUtilsInternal(
 
 class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
     """Transform utilities for Maya objects."""
+
+    @staticmethod
+    @contextlib.contextmanager
+    def at_rest() -> Iterator[None]:
+        """The scene posed as it rests for the block, then the frame it stood at put back.
+
+        What a deliverable shows before anything plays: the animation's first
+        frame (``animationStartTime``, the authored extent, as
+        ``AnimUtils.scene_animation_range`` reads it), whatever frame the scene
+        was saved on.
+        A lightmap bake renders there and its record is read there, and an
+        export writes its rest transforms there: a production export ran with
+        its scene saved at frame 1054 and delivered its doors swung open as
+        their rest pose, and a re-bake baked them open (2026-11-25). Nested, it
+        stays put. A playing timeline is stopped for the block (its next tick
+        would move the frame) and plays on after, from the frame put back. As a
+        decorator (``@XformUtils.at_rest()``) it brackets each call.
+        """
+        try:
+            import maya.cmds as cmds
+        except ImportError:
+            yield
+            return
+        playing = cmds.play(query=True, state=True)
+        if playing:
+            forward = cmds.play(query=True, forward=True)
+            cmds.play(state=False)
+        now = cmds.currentTime(query=True)
+        rest = cmds.playbackOptions(query=True, animationStartTime=True)
+        try:
+            if now != rest:
+                cmds.currentTime(rest, edit=True)
+            yield
+        finally:
+            if now != rest:
+                cmds.currentTime(now, edit=True)
+            if playing:
+                cmds.play(forward=forward)
+
+    #: The channels whose driving moves a transform, and everything under it:
+    #: each compound and its children (a curve keys ``shearXY``, not ``shear``).
+    MOVING_CHANNELS = frozenset(
+        ["offsetParentMatrix"]
+        + [
+            c + a
+            for c in ("translate", "rotate", "scale", "rotatePivot", "scalePivot")
+            for a in ("", "X", "Y", "Z")
+        ]
+        + ["shear" + a for a in ("", "XY", "XZ", "YZ")]
+    )
+
+    @classmethod
+    def moving(cls, objects: Optional[List[str]] = None) -> List[str]:
+        """The transforms among *objects* the scene's animation moves, as long names.
+
+        One moves where its own transform or an ancestor's is driven so that it
+        changes: a channel of :attr:`MOVING_CHANNELS` fed by an animation curve
+        whose value changes (one that holds a single value moves nothing), a
+        constraint, an expression, a driven key or any other driver; or where
+        its mesh's points are moved under it: its deformation history holds a
+        changing curve or an expression (a blendShape's keyed weight, a bend's
+        keyed curvature), or a transform feeding it moves (a skin's joints, a
+        cluster's, a lattice's or a nonlinear deformer's handle). What a
+        lightmap bake leaves out: a map baked in one pose is wrong in every
+        other (a door baked shut shows the cabinet's dark on its inside once it
+        opens), so a moving part is lit by the room's probe instead.
+
+        Parameters:
+            objects: Transforms, joints included (or their shapes). ``None``:
+                every mesh transform in the scene.
+        """
+        import maya.cmds as cmds
+
+        if objects is None:
+            shapes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []
+            nodes = list(dict.fromkeys(cmds.listRelatives(shapes, parent=True, fullPath=True) or [])) if shapes else []
+        else:
+            nodes = []
+            for node in cmds.ls(objects, long=True) or []:
+                if not cmds.objectType(node, isAType="transform"):
+                    node = (cmds.listRelatives(node, parent=True, fullPath=True) or [node])[0]
+                if node not in nodes:
+                    nodes.append(node)
+        driven = {}
+
+        def holds(curve: str) -> bool:
+            # A curve keyed to one value moves nothing.
+            values = cmds.keyframe(curve, query=True, valueChange=True) or []
+            return bool(values) and max(values) - min(values) <= 1e-6
+
+        def drives(node: str) -> bool:
+            if node not in driven:
+                pairs = cmds.listConnections(
+                    node, source=True, destination=False, plugs=True, connections=True, skipConversionNodes=True
+                ) or []
+                driven[node] = any(
+                    dst.rpartition(".")[2] in cls.MOVING_CHANNELS
+                    and not (cmds.nodeType(src.partition(".")[0]).startswith("animCurve") and holds(src.partition(".")[0]))
+                    for dst, src in zip(pairs[::2], pairs[1::2])
+                )
+            return driven[node]
+
+        def chain(node: str) -> List[str]:
+            parts = node.split("|")[1:]
+            return ["|" + "|".join(parts[: i + 1]) for i in range(len(parts))]
+
+        def deformed(shape: str) -> bool:
+            # Its deformers, what feeds them (a bend's keyed curvature is outside its history), the transforms they read.
+            history = cmds.listHistory(shape, pruneDagObjects=True) or []
+            feeds = (cmds.listConnections(history, source=True, destination=False, skipConversionNodes=True) or []) if history else []
+            near = list(set(history + feeds))
+            if cmds.ls(near, type="expression") or any(not holds(c) for c in cmds.ls(near, type="animCurve")):
+                return True
+            return any(drives(n) for t in cmds.ls(feeds, type="transform", long=True) for n in chain(t))
+
+        def moves(node: str) -> bool:
+            if any(drives(n) for n in chain(node)):
+                return True
+            shapes = cmds.listRelatives(node, shapes=True, noIntermediate=True, fullPath=True, type="mesh") or []
+            return any(deformed(shape) for shape in shapes)
+
+        return [node for node in nodes if moves(node)]
+
 
     @staticmethod
     def convert_axis(value, invert=False, ortho=False, to_integer=False):

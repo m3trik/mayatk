@@ -925,69 +925,6 @@ class EnvUtils(ptk.HelpMixin):
         ws = EnvUtils.current_workspace(path)
         return ws.root if ws else ""
 
-    # The scene-source family's one owner is DataNodes (2026-10-25); these
-    # retired doors forward there for one release.
-    @staticmethod
-    @ptk.Deprecation.symbol(
-        "DataNodes.set_scene_source", remove_in="0.30.0", since="2026-10-25"
-    )
-    def set_scene_source(scene: str, source: Optional[str] = None) -> Optional[str]:
-        """Moved to :meth:`DataNodes.set_scene_source`, which records the stand-in
-        and arms its save."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return DataNodes.set_scene_source(scene, source)
-
-    @staticmethod
-    @ptk.Deprecation.symbol(
-        "DataNodes.twin_save_target", remove_in="0.30.0", since="2026-10-25"
-    )
-    def twin_save_target(scene: Optional[str] = None) -> Optional[str]:
-        """Moved to :meth:`DataNodes.twin_save_target`."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return DataNodes.twin_save_target(scene)
-
-    @staticmethod
-    @ptk.Deprecation.symbol(
-        "DataNodes.scene_source", remove_in="0.30.0", since="2026-10-25"
-    )
-    def scene_source(scene: Optional[str] = None) -> Optional[str]:
-        """Moved to :meth:`DataNodes.scene_source`."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return DataNodes.scene_source(scene)
-
-    @staticmethod
-    @ptk.Deprecation.symbol(
-        "DataNodes.scene_project_root", remove_in="0.30.0", since="2026-10-25"
-    )
-    def scene_project_root() -> Optional[str]:
-        """Moved to :meth:`DataNodes.scene_project_root`."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return DataNodes.scene_project_root()
-
-    @staticmethod
-    @ptk.Deprecation.symbol(
-        "DataNodes.scene_workspace", remove_in="0.30.0", since="2026-10-25"
-    )
-    def scene_workspace() -> Optional[ptk.Workspace]:
-        """Moved to :meth:`DataNodes.scene_workspace`."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return DataNodes.scene_workspace()
-
-    @staticmethod
-    @ptk.Deprecation.symbol(
-        "DataNodes.scene_source_images_dir", remove_in="0.30.0", since="2026-10-25"
-    )
-    def scene_source_images_dir(subfolder: str = "", create: bool = False) -> str:
-        """Moved to :meth:`DataNodes.scene_source_images_dir`."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return DataNodes.scene_source_images_dir(subfolder, create=create)
-
     @staticmethod
     def scenes_dir(path: Optional[str] = None) -> str:
         """The workspace's scene folder — its ``scene`` rule → an existing ``scenes/`` →

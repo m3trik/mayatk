@@ -808,21 +808,11 @@ class TestXformBoundingBoxDelegation(MayaTkTestCase):
             self.assertAlmostEqual(got[axis], want.min[axis], places=5)
             self.assertAlmostEqual(got[axis + 3], want.max[axis], places=5)
 
-    def test_the_retired_core_utils_query_warns_and_forwards(self):
+    def test_the_flat_query_is_xform_utils(self):
         """``CoreUtils.get_bounding_box`` was a second query beside XformUtils',
-        with another signature, and ``mtk.get_bounding_box`` reached XformUtils'
-        by module order alone. It forwards, with a warning, until 0.30.0.
-        Consolidated: 2026-10-25."""
-        cube = cmds.polyCube(name="xfRetired", width=2, height=4, depth=6)[0]
-        cmds.xform(cube, translation=(1, 2, 3), worldSpace=True)
-        for world in (True, False):
-            with self.subTest(world=world):
-                with self.assertWarns(DeprecationWarning):
-                    old = CoreUtils.get_bounding_box(cube, world=world)
-                new = mtk.XformUtils.get_bounding_box(cube, "box", world_space=world)
-                self.assertEqual(
-                    (tuple(old.min), tuple(old.max)), (tuple(new.min), tuple(new.max))
-                )
+        with another signature (consolidated 2026-10-25, removed 2026-11-26):
+        the flat ``mtk.get_bounding_box`` is the one query."""
+        self.assertFalse(hasattr(CoreUtils, "get_bounding_box"))
         self.assertIs(mtk.get_bounding_box, mtk.XformUtils.get_bounding_box)
 
     def test_multiple_objects_in_object_space_is_refused(self):

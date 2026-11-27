@@ -1703,20 +1703,11 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(len(payload["planes"]), 1)
 
 
-    def test_the_records_old_key_name_is_a_deprecated_alias(self):
-        """``ShadowRig.SHADOW_METADATA`` held the shadows record's key under
-        its old name: retired, it warns and answers the declaration's.
-        Added: 2026-10-20"""
-        with self.assertWarns(DeprecationWarning):
-            key = ShadowRig.SHADOW_METADATA
-        self.assertEqual(key, ptk.SceneRecords.SHADOWS.key)
-
-
 class TestDetachPlanes(MayaTkTestCase):
     """``ShadowRig.detach_planes``: a rig becomes a plain unlit textured plane.
 
-    For a shadow whose links were broken on purpose (a static prop's, the
-    production SOL_REPLACE_ASSEMBLY floor shadow, 2026-10-15): one quad, one
+    For a shadow whose links were broken on purpose (a static prop's, a
+    production scene's floor shadow, 2026-10-15): one quad, one
     ``surfaceShader``, one PNG with the fade multiplied in -- no expression,
     no drivers, no stamps for an exporter to carry.
     """
@@ -1884,8 +1875,8 @@ class TestIntensityAndGround(MayaTkTestCase):
     and the floor's height, on a plane whatever drives it.
 
     A live rig's expression reads both stamps. A plane it no longer drives --
-    baked to keys, or its links broken on purpose (the production
-    SOL_REPLACE_ASSEMBLY floor shadow, 2026-10-15) -- carries its fade and
+    baked to keys, or its links broken on purpose (a production
+    scene's floor shadow, 2026-10-15) -- carries its fade and
     its height itself, so the change is carried into those: the fade
     rescaled (it already holds the old intensity), the height moved.
     """

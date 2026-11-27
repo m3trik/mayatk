@@ -131,14 +131,6 @@ class ShadowRig(ptk.LoggingMixin):
         "scaleX",
         "scaleZ",
     )
-    #: The shadows record's key under its old name, retired here: read the
-    #: declaration's (``ptk.SceneRecords.SHADOWS.key``).
-    SHADOW_METADATA = ptk.Deprecation.class_attribute(
-        ptk.SceneRecords.SHADOWS.key,
-        "ptk.SceneRecords.SHADOWS.key",
-        remove_in="0.29.0",
-        since="2026-10-24",
-    )
     # Multi message attr on the plane linking every support node this rig
     # created — delete_rigs' rename-proof teardown manifest.
     _MEMBER_ATTR = "shadowRigMembers"

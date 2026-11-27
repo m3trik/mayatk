@@ -1698,6 +1698,17 @@ class UvUtils(ptk.HelpMixin):
           together. A tile grid (*tiles*) is dealt here, area-balanced, and each
           tile packed in place: u3dLayout's own Distribute mode stacks shells.
 
+        Both are held to one check: no texel where two shells meet, across
+        every mesh of the pack (``ptk.UvPack.island_overlaps``; a fold inside
+        one shell is the input's own and not judged). xatlas checks the layout
+        before writing it and writes nothing when it fails. A u3dLayout layout
+        that fails (it misjudges a folded shell's footprint) is packed again
+        by xatlas, every mesh of the pack together, said in ``fallbacks`` and
+        ``fallback_reason``; on a tile grid, or without xatlas, it is put back
+        as it was. The paths of one instanced shape are one layout, judged
+        once; an object with nothing to snapshot (a group, a mesh with no UVs)
+        is left out of the check.
+
         Parameters:
             objects (str/obj/list): Mesh(es) *or* components to pack. None uses
                 the selection. Instances collapse to one representative (they
@@ -1722,10 +1733,11 @@ class UvUtils(ptk.HelpMixin):
                 rotation at all. Like u3dLayout, the engine may still mirror
                 shells either way; every case is honored on write-back.
             brute_force (bool): Exhaustive placement search — tighter, slower.
-            preserve_3d (bool): Equalize per-shell texel density first
-                (u3dLayout -preScaleMode 1 equivalent; the engine preserves
-                relative input scale). False keeps the shells' current
-                relative UV scale (Preserve UV).
+            preserve_3d (bool): Equalize per-shell texel density (u3dLayout
+                -preScaleMode 1 equivalent; xatlas evens it from each
+                triangle's world area, ``ptk.UvPack.pack_islands``
+                ``surface_areas``). False keeps the shells' current relative
+                UV scale (Preserve UV; xatlas keeps it approximately).
             padding (float): Island gutter in pixels. None derives it from
                 *map_size* via :meth:`calculate_uv_padding`.
             engine (str): ``"xatlas"`` or ``"u3d"`` (see above); ``"standard"``
@@ -1752,10 +1764,12 @@ class UvUtils(ptk.HelpMixin):
         Returns:
             (PackUvsResult): ``engine``, ``succeeded``, ``failed``
             ``(mesh, reason)`` pairs, the packed atlas dimensions (xatlas),
-            ``tiles`` (the grid actually packed), and ``targets`` — what
+            ``tiles`` (the grid actually packed), ``targets`` — what
             actually packed (the scoped face components, or the mesh) for the
             meshes that succeeded, ready to measure the resulting texel density
-            against. Truthy when at least one mesh packed.
+            against — and ``fallbacks``, the meshes xatlas packed after
+            u3dLayout, with ``fallback_reason`` saying why. Truthy when at
+            least one mesh packed.
 
         Raises:
             RuntimeError: The xatlas Python package isn't installed in this

@@ -235,7 +235,8 @@ engine wiring.
 material. Each object gets a rect: its cell in the atlas. The rect is the
 engine binding (Unity `lightmapScaleOffset` / glTF `KHR_texture_transform`),
 stored per transform, so every instance of a shared mesh keeps its own rect and
-its own lighting. UVs are never edited. It is what an engine wants: fewer
+its own lighting. The rect never goes into the UVs; the only UV edit is a fresh
+pack re-laying a layout the baker made itself (below). It is what an engine wants: fewer
 textures, no per-object naming collisions, and the texels spent where the
 surface area is.
 
@@ -274,6 +275,25 @@ The atlas layout is planned before any ray is traced, and it is **packed**
   order, every bake. Maya measures their areas in single precision, and the
   tiled layout ordered cells by that noise, so the same room's baseboards
   took different cells in each bake.
+- **Layouts it made are re-laid to fill the atlas.** Fixed cell shapes leave
+  part of a square empty whatever the density: a production cabinet's four
+  cells filled 54% of their atlas. On a fresh pack (never a cell written in
+  place), a lightmap layout the baker made (`create_lightmap_uvs`, or one the
+  Blender bridge applied), on a mesh no instance shares, may take any
+  whole-number shape from 1:3 to 3:1. The plan picks the shapes that pack
+  densest (`ptk.ImgUtils.pack_atlas_shapes`). Each layout is then re-packed
+  into its cell by xatlas (`UvUtils.pack_uvs`, pages side by side, one
+  density from world areas, nothing on anything, 3 texels between one
+  object's islands at 2048, scaled with the atlas and at least 2
+  (`ptk.UvPack.cell_box`) -- narrower than the gutter between objects, and
+  clear of bleed through the first mip), and the atlas is planned again from the layouts
+  as they now are. A re-lay that would not make its object denser is put
+  back, and so is one whose render is cancelled or fails: that object keeps
+  the map it had, and the layout it was baked on. Measured on the production module: the cabinet's density +24% (its
+  body and red door re-laid), the tools +5%. An object of a few thousand
+  small parts (the gray door, 2,115 shells) spends most of its cell on those
+  gutters however it is cut: xatlas's own charts cover 21% of it, its box
+  projection 18%. Off: `LightmapBaker.refit_layouts = False`.
 
 A group too big to fit even at 4 px per cell falls back to the tiled layout,
 with a warning: bake it at a higher Resolution, or split it across materials.
@@ -460,8 +480,15 @@ their mesh.
 
 ### What the render holds
 
-A bake renders the static scene: what it bakes, what was baked before (any
-object with a lightmap), and the Exclude set. Any other visible mesh is taken
+A bake renders the static scene as it rests: at the animation's first frame
+(the Time Slider's animation start, the authored extent an export reads),
+whatever frame the scene was saved on, which it puts back after. A door that
+opens during the animation is baked shut, as a reader shows it before anything
+plays. The record a later re-bake compares against is read there too -- the
+objects and the lighting (a keyed light as the maps saw it) -- so the frame
+the scene stands at is never a change. Every render rests there, a script's
+direct `bake_atlas`, `bake_separated` or `bake_probe` too. It renders what it bakes, what was
+baked before (any object with a lightmap), and the Exclude set. Any other visible mesh is taken
 to move -- an interactive prop that is never baked -- and is out of the render
 for the bake, then switched back on. It casts no shadow and bounces no light
 into the maps: a shadow it left would stay on the cart, the table or the floor
@@ -492,12 +519,18 @@ The Isolate set is a plain `objectSet` named `lightmapBaker_isolate`
 (`mayatk.mat_utils.bake_sets.LightmapIsolateSet`), for parts that move against
 what is baked around them: a locker door on its cabinet, a lid, a drawer.
 
-An isolated object still gets a map, lit by the static scene at the pose it has
-when you bake. But it bakes in a pass of its own, and every other pass -- and
+An isolated object still gets a map, lit by the static scene at its rest pose
+(see [What the render holds](#what-the-render-holds)). But it bakes in a pass of its own, and every other pass -- and
 the reflection probe -- renders without it, so the cabinet keeps no
 door-shaped shadow wherever the door swings. No isolated part shades another
-either. A member brings everything parented under it (the door's glass), and
-isolated objects still pack into their material's atlas. Taking a door out of
+either, except the part that carries it: a small locker door set in a larger
+door bakes with that door around it, since wherever the small door goes the
+large one is there. A part carries another when everything that moves it
+(its keys, constraints and drivers, and its parents') moves the other too.
+The large door still bakes without the small one: what lies behind the small
+door is seen only with it open. A member brings everything parented under it
+(the door's glass), and isolated objects still pack into their material's
+atlas. Taking a door out of
 the bake's scope is not the same thing: once it has a map it counts as static
 and shadows the rest, unless it is in this set.
 
@@ -507,8 +540,7 @@ Retired 2026-10-22: the panel no longer saves a Bake set. The Manage page
 selects each map's objects and re-bakes them the way they were baked, which
 is what selecting the set and baking again approximated (and only while the
 panel's settings had not moved). `mayatk.mat_utils.bake_sets.LightmapBakeSet`
-still resolves, with a deprecation notice, until mayatk 0.30.0; a set a scene
-already holds is left as it is.
+is gone as of mayatk 0.35.0; a set a scene already holds is left as it is.
 
 ## Re-baking what changed
 
@@ -531,7 +563,8 @@ that, and **Fix All** does both. Scripted, `LightmapBaker.rebake_changed()`. Wha
   a changed object, or a static one that arrived, left or changed (the
   Exclude set's included). Near enough is the changed object's own size, at
   least 1% and at most 25% of the room's. An Isolate member's changes reach
-  no neighbour.
+  only the Isolate members it carries (the small door in it), at any
+  distance.
 - **The lighting**: each map's lights are read again by the rule its bake
   recorded, so a light moved, re-coloured, dimmed, switched, renamed or
   deleted, one added where the rule reaches (anywhere with Include Scene

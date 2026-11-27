@@ -615,7 +615,8 @@ class RenderEffects(ptk.LoggingMixin):
         at each frame inside it, linear between. ``visibility`` is the boolean
         Maya draws (:meth:`_stepped_track`), stepped. Each animated
         emissive-group copy's weight rides as its material's ``emission``
-        (``EmissiveGroups.weight_curves``).
+        (``EmissiveGroups.weight_curves``), a keyed tint as its ``tint_r``,
+        ``tint_g`` and ``tint_b`` (``EmissiveGroups.tint_curves``).
 
         ``start`` is the frame an animated write of the same nodes puts at its
         clip's t=0: the first key of every curve it ships (the converter opens
@@ -649,6 +650,7 @@ class RenderEffects(ptk.LoggingMixin):
         curves += EmissiveGroups.weight_curves(
             lambda copy: cls._segment_keys(emission_channel(copy)), ctx
         )
+        curves += EmissiveGroups.tint_curves(cls._segment_keys, ctx)
         if not curves:
             return {}
         span = cls._first_key(ctx)

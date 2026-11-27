@@ -8,7 +8,7 @@ entry allows.
 import os
 import math
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 
 try:
     import maya.cmds as cmds
@@ -1130,44 +1130,24 @@ class _TaskChecksMixin(_TaskDataMixin):
         separated the single genuine offender from the five false ones.
 
         Order under the transform matters too, even for its own single-parent
-        orig: FBX takes a transform's FIRST mesh child for its material, so an
-        orig listed ahead of the real shape ships the right geometry on
-        ``Default_Material`` (probed 2026-10-01; the production office's
-        ``WALL_A``, the same history deleted = clean). FBX2glTF reads the shared
-        mesh's material instead, so only FBX consumers -- the Blender bridge,
-        Unity -- get it.
+        orig: FBX takes a transform's FIRST mesh child for its material when
+        the real shape is instanced, so an orig listed ahead of it ships the
+        right geometry on ``Default_Material`` (probed 2026-10-01 and
+        2026-11-24 on the production office's ``WALL_A``, whose real shape is
+        instanced over 24 walls). FBX2glTF reads the shared mesh's material
+        instead, so only FBX consumers -- the Blender bridge, Unity -- get it.
+
+        Both orig faults come from :meth:`_orig_faults`, the definition the
+        **Fix Orig Shapes** task (``repair_orig_shapes``) repairs by.
         """
         offenders = []
         for shape in NodeUtils.get_shapes(
             self._live_objects(), descend=True, type="mesh", no_intermediate=False
         ):
             if NodeUtils.is_intermediate(shape):
-                parents = (
-                    cmds.listRelatives(shape, allParents=True, fullPath=True) or []
-                )
-                uuid = cmds.ls(shape, uuid=True)
-                if any(self._leads_real_shape(p, uuid) for p in parents):
-                    offenders.append((shape, "orig shape ahead of the real shape"))
-                    continue
-                if len(parents) < 2:
-                    continue  # an ordinary orig shape never leaves Maya
-                # By UUID, not by path: an instanced shape is ONE node with many
-                # paths, and every path is the same geometry.
-                real = {
-                    uuid
-                    for parent in parents
-                    for sibling in (
-                        cmds.listRelatives(
-                            parent, shapes=True, fullPath=True, noIntermediate=True
-                        )
-                        or []
-                    )
-                    for uuid in cmds.ls(sibling, uuid=True) or []
-                }
-                if len(real) > 1:
-                    offenders.append(
-                        (shape, f"orig shape riding {len(real)} different meshes")
-                    )
+                # None for an ordinary orig shape: it never leaves Maya.
+                for _kind, _parents, reason in self._orig_faults(shape):
+                    offenders.append((shape, reason))
                 continue
             engines = set(cmds.listConnections(shape, type="shadingEngine") or [])
             if not engines:
@@ -1188,20 +1168,6 @@ class _TaskChecksMixin(_TaskDataMixin):
                 for shape, reason in offenders
             ]
         return True, []
-
-    @staticmethod
-    def _leads_real_shape(parent: str, uuid: list) -> bool:
-        """Whether the shape with *uuid* is *parent*'s first mesh child while a
-        real (non-intermediate) mesh follows it. By UUID: an instanced shape's
-        path under *parent* is not the path the caller holds."""
-        children = (
-            cmds.listRelatives(parent, shapes=True, type="mesh", fullPath=True) or []
-        )
-        return (
-            bool(children)
-            and cmds.ls(children[0], uuid=True) == uuid
-            and any(not NodeUtils.is_intermediate(c) for c in children[1:])
-        )
 
     def check_referenced_objects(self) -> tuple:
         """Check if any referenced objects are present in the scene."""
@@ -1589,7 +1555,9 @@ class _TaskChecksMixin(_TaskDataMixin):
 
         return True, log_messages
 
-    def check_hierarchy_vs_existing_fbx(self) -> tuple:
+    def check_hierarchy_vs_existing_fbx(
+        self, level: Union[str, bool, None] = "strict"
+    ) -> tuple:
         """Check export objects against the hierarchy manifest of the previous export.
 
         Compares namespace-stripped DAG paths of the current export objects
@@ -1603,7 +1571,22 @@ class _TaskChecksMixin(_TaskDataMixin):
         changes.  A mismatch is stashed for the post-export sidecar write
         (``hierarchy.last_diff``) and its full report goes to a temp artifact
         linked from the log — never into the export folder.
+
+        Parameters:
+            level: How much of a change it lets through
+                (``ptk.HierarchyBaseline.LEVELS``): ``"strict"`` fails any;
+                ``"additions"`` passes new nodes, said as a warning, and fails a
+                node gone, renamed or moved, or a new one taking a shipped
+                node's name. Falsy (or ``"OFF"``) checks nothing; ``True`` is
+                ``"strict"``, what the row's old checkbox did.
         """
+        if not level or str(level).upper() == "OFF":
+            return True, []
+        level = "strict" if level is True else str(level).lower()
+        if level not in ptk.HierarchyBaseline.LEVELS:
+            # Loud, never a quiet pass at a level nobody chose.
+            valid = ", ".join(ptk.HierarchyBaseline.LEVELS)
+            return False, [f"Unknown hierarchy check level {level!r}. Valid: {valid}."]
         self._hierarchy_check_ran = True
         self._hierarchy_last_diff = None
 
@@ -1682,19 +1665,34 @@ class _TaskChecksMixin(_TaskDataMixin):
             SceneDataSidecar.clean_stale_diff(export_path, **self._sidecar_kwargs())
             return True, messages
 
+        failing_missing, failing_extra = ptk.HierarchyBaseline.blocking(
+            level, missing, extra, current_paths
+        )
         # Detect reparenting patterns for a cleaner summary
         reparented = SceneDataSidecar.detect_reparenting(missing, extra)
 
-        # Stash for the post-export sidecar write: if the user proceeds,
-        # the manifest records the diff they accepted.  Tagged with the
-        # export path so a cancelled export's diff can never attach to a
-        # different asset exported later in the same session.
+        # Stash for the post-export sidecar write: if the user proceeds (or
+        # the level passes the diff), the manifest records the diff accepted.
+        # Tagged with the export path so a cancelled export's diff can never
+        # attach to a different asset exported later in the same session.
         self._hierarchy_last_diff = {
             "export_path": export_path,
             "missing": missing,
             "extra": extra,
             "reparented": reparented,
         }
+        if not failing_missing and not failing_extra:
+            # New nodes only, at a level that passes them: the run goes on, and is
+            # told -- a passing check's messages never reach the user.
+            top_new = ptk.HierarchyBaseline.top_level(extra)
+            more = len(top_new) - 20
+            message = (
+                f"{len(extra)} new node(s) since the previous export, passed "
+                f"(New Nodes Pass): {', '.join(top_new[:20])}"
+                + (f" … and {more} more" if more > 0 else "")
+            )
+            self.logger.warning(message)
+            return True, messages + [message]
 
         diff_path = self._write_temp_diff_report(
             export_path, missing, extra, reparented, **self._sidecar_kwargs()
@@ -1731,6 +1729,31 @@ class _TaskChecksMixin(_TaskDataMixin):
                 messages.append(f"  − {p}")
             if len(top_missing) > 20:
                 messages.append(f"  … and {len(top_missing) - 20} more")
+
+        if level != "strict":
+            # New nodes pass at this level but for those taking a shipped name.
+            taken = set(failing_extra)
+            passed_new = [p for p in remaining_extra if p not in taken]
+            remaining_extra = [p for p in remaining_extra if p in taken]
+            if passed_new:
+                messages.append(
+                    f"{len(passed_new)} new node(s) passed (New Nodes Pass)."
+                )
+            # A node that moved: its old path fails above as missing; its new
+            # one takes no name a shipped node still holds.
+            moved = ptk.HierarchyBaseline.moved(remaining_missing, passed_new)
+            for old, new in moved[:20]:
+                messages.append(f"  + {new}: '{old}' moved here")
+            if len(moved) > 20:
+                messages.append(f"  … and {len(moved) - 20} more")
+            for p in remaining_extra[:20]:
+                messages.append(
+                    f"  + {p}: takes the name of a node that shipped, so that "
+                    "name would find two"
+                )
+            if len(remaining_extra) > 20:
+                messages.append(f"  … and {len(remaining_extra) - 20} more")
+            remaining_extra = []
 
         if remaining_extra:
             top_extra = ptk.HierarchyBaseline.top_level(remaining_extra)

@@ -56,23 +56,6 @@ class DataNodes(ptk.SceneStoreBase):
     EXPORT = "data_export"
     NAMES: Dict[ptk.Scope, str] = {_Scope.PRIVATE: INTERNAL, _Scope.DELIVERABLE: EXPORT}
 
-    #: The shot record's key under its old name, retired here: read the
-    #: declaration's (``ptk.SceneRecords.SHOTS.key``).
-    SHOT_METADATA = ptk.Deprecation.class_attribute(
-        ptk.SceneRecords.SHOTS.key,
-        "ptk.SceneRecords.SHOTS.key",
-        remove_in="0.29.0",
-        since="2026-10-24",
-    )
-    #: The retired take list's key (``ptk.SceneRecords.RETIRED``): an opened
-    #: scene's migration removes the channel, and nothing reads it.
-    FBX_TAKES = ptk.Deprecation.class_attribute(
-        "fbx_takes",
-        "ptk.SceneRecords.SHOTS -- each shot's range rides its clip",
-        remove_in="0.29.0",
-        since="2026-10-24",
-    )
-
     _LOCATOR_ATTR = "data_export_locator"
     #: Message attr on ``data_internal`` fed by an undeletable default node.
     #: Maya deletes a ``network`` node when the source of its ONLY input

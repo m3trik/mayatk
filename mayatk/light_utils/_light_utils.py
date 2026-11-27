@@ -27,10 +27,9 @@ class _LightUtilsInternal:
         The reference an ``auto`` aim points at, so a ceiling plate faces down
         and a wall plate faces inward with no per-object setup.
 
-        ``exactWorldBoundingBox`` rather than either bbox helper next door:
-        ``XformUtils.get_center_point`` averages component POSITIONS (so it
-        cannot be handed shapes), and ``CoreUtils.get_bounding_box`` takes a
-        single node. This wants the combined box of a whole set.
+        ``exactWorldBoundingBox`` rather than ``XformUtils.get_center_point``,
+        which averages component POSITIONS (so it cannot be handed shapes):
+        this wants the combined box of a whole set.
 
         ``allPaths=True`` is load-bearing: ``ls`` otherwise reports ONE dag path
         per shape NODE, so in a room assembled from instanced modules -- the

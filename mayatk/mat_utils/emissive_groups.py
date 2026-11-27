@@ -23,10 +23,18 @@ the base's colour kept on the copy (``emissiveGroupColour``) as what the
 weight scales. A base with no emission at all (black incandescence, an
 emission weight of 0) or a mapped incandescence, which no weight can scale,
 is refused by name.
+
+A tint multiplies a scalar-weight shader's emission colour (its unmapped
+constant, ``ShaderAttributeMap.constant_attr``: ``emissionColor``,
+StingrayPBS's ``emissive``): the copy keeps the base's colour
+(``emissiveGroupColour``) and its colour channels are that colour times the
+tint, keyed per channel; ``emissiveGroupStates`` holds its named states as
+JSON. A colour with a black channel is refused a tint: no tint lights it.
 """
 
 import contextlib
-from typing import Any, Dict, List, Optional
+import json
+from typing import Any, Dict, List, Optional, Sequence
 
 try:
     import maya.cmds as cmds
@@ -46,8 +54,12 @@ class _MayaEmissiveGroupsInternal:
     TAG_GROUP = "emissiveGroup"
     TAG_BASE = "emissiveGroupBase"
     TAG_STRENGTH = "emissiveGroupStrength"
-    #: A colour shader's copy: the base's incandescence the weight scales.
+    #: What a copy's colour channels scale: a colour shader's base
+    #: incandescence (by the weight), a tinted copy's base emission colour
+    #: (by the tint).
     TAG_COLOUR = "emissiveGroupColour"
+    #: A copy's named states, ``{name: {"tint", "weight"}}`` as JSON.
+    TAG_STATES = "emissiveGroupStates"
     #: The colour a Lambert, Blinn or Phong glows by.
     COLOUR_ATTR = "incandescence"
     #: Marks the weight proxies this tool stages (beside the transport's own
@@ -57,6 +69,12 @@ class _MayaEmissiveGroupsInternal:
     SG_INPUTS = ("displacementShader", "volumeShader", "aiSurfaceShader", "aiVolumeShader")
     #: Attributes no copy compares with its base (the node's own bookkeeping).
     UNCOMPARED = ("caching", "frozen", "nodeState", "isHistoricallyInteresting")
+    #: Inputs a renderer fills at render time (camera-space geometry, the ray),
+    #: and the viewport's colour: never a value a base sets.
+    RUNTIME_PREFIXES = (
+        "normalCamera", "pointCamera", "rayDirection", "tangentUCamera",
+        "triangleNormalCamera", "hardwareShader",
+    )
 
     @staticmethod
     def _transform(node: str) -> Optional[str]:
@@ -193,6 +211,77 @@ class _MayaEmissiveGroupsInternal:
         return lead[0] if lead else None
 
     @staticmethod
+    def _tint_attr(material: str) -> Optional[str]:
+        """The emission colour a tint multiplies: a scalar-weight shader's
+        constant (``ShaderAttributeMap.constant_attr``), else ``None``."""
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        attr = ShaderAttributeMap.constant_attr(cmds.nodeType(material), "emission")
+        if not attr or not cmds.attributeQuery(attr, node=material, exists=True):
+            return None
+        return attr
+
+    @classmethod
+    def _tint_plugs(cls, material: str) -> List[str]:
+        """The three channels of *material*'s tintable emission colour, else
+        none (a colour shader's glow is its weight's: :attr:`COLOUR_ATTR`)."""
+        if cls._colour_shader(material):
+            return []
+        attr = cls._tint_attr(material)
+        children = (cmds.attributeQuery(attr, node=material, listChildren=True) or []) if attr else []
+        return [f"{material}.{c}" for c in children] if len(children) == 3 else []
+
+    @classmethod
+    def _tint_mapped(cls, material: str) -> bool:
+        """Whether a map drives *material*'s emission colour (its map slot, or
+        anything but keys on the colour or a channel of it)."""
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        slot = ShaderAttributeMap.get_attr(cmds.nodeType(material), "emission")
+        if slot and cmds.attributeQuery(slot[0], node=material, exists=True):
+            if cmds.listConnections(f"{material}.{slot[0]}", source=True, destination=False):
+                return True
+        attr = cls._tint_attr(material)
+        plugs = ([f"{material}.{attr}"] if attr else []) + cls._tint_plugs(material)
+        return any(cls._mapped(plug) for plug in plugs)
+
+    @classmethod
+    def _tint_reference(cls, material: str) -> List[float]:
+        """What a tint multiplies: a tinted copy's stored base colour, else
+        (a base, a copy never tinted) its own emission colour now."""
+        if cmds.attributeQuery(cls.TAG_COLOUR, node=material, exists=True):
+            return [float(c) for c in cmds.getAttr(f"{material}.{cls.TAG_COLOUR}")[0]]
+        return [float(cmds.getAttr(plug)) for plug in cls._tint_plugs(material)]
+
+    @staticmethod
+    def _over(values: Sequence[float], reference: Sequence[float]) -> List[float]:
+        """*values* over *reference* per channel; a channel the reference
+        leaves black shows no tint, and reads 1."""
+        return [float(v) / r if r > 1e-9 else 1.0 for v, r in zip(values, reference)]
+
+    @staticmethod
+    def _set_key(plug: str, value: float, frame: Optional[float], stepped: bool) -> None:
+        """Key *plug* at *value*, at *frame* (``None``: now); *stepped* holds
+        it until the next key."""
+        time = float(cmds.currentTime(query=True)) if frame is None else float(frame)
+        cmds.setKeyframe(plug, value=float(value), time=time)
+        if stepped:
+            cmds.keyTangent(plug, time=(time, time), outTangentType="step")
+
+    @staticmethod
+    def _close(a, b) -> bool:
+        """Whether two colours (or ``None``) are the same, to float noise."""
+        if a is None or b is None:
+            return a is b
+        return len(a) == len(b) and all(abs(float(x) - float(y)) <= 1e-6 for x, y in zip(a, b))
+
+    @staticmethod
+    def _stepped_at(plug: str, frame: float) -> bool:
+        """Whether *plug*'s key at *frame* holds until the next."""
+        found = cmds.keyTangent(plug, time=(frame, frame), query=True, outTangentType=True) or []
+        return bool(found) and found[0] in ("step", "stepnext")
+
+    @staticmethod
     def _keys(plug: str) -> List[tuple]:
         flat = cmds.keyframe(plug, query=True, timeChange=True, valueChange=True) or []
         return [(float(flat[i]), float(flat[i + 1])) for i in range(0, len(flat), 2)]
@@ -203,11 +292,18 @@ class _MayaEmissiveGroupsInternal:
 
     @classmethod
     def _copy_keys(cls, src: str, dst: str, factor: float) -> None:
-        """*src*'s keys onto *dst*, their shape kept, values times *factor*."""
-        cmds.copyKey(src)
-        cmds.pasteKey(dst, option="replaceCompletely")
+        """*src*'s keys onto *dst*, their shape kept, values times *factor*,
+        through a copy of its curve: never the key clipboard, which every
+        export's proxy staging overwrote under the user."""
+        curves = cmds.listConnections(src, source=True, destination=False, type="animCurve") or []
+        if not curves:
+            return
+        for old in cmds.listConnections(dst, source=True, destination=False, type="animCurve") or []:
+            cmds.delete(old)  # replaced completely
+        dup = cmds.duplicate(curves[0])[0]
+        cmds.connectAttr(f"{dup}.output", dst, force=True)
         if abs(factor - 1.0) > 1e-12:
-            cmds.scaleKey(dst, valueScale=factor, valuePivot=0.0)
+            cmds.scaleKey(dup, valueScale=factor, valuePivot=0.0)
 
     @staticmethod
     def _carrier() -> Optional[str]:
@@ -256,6 +352,17 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
                 out.setdefault(obj, set()).update(indices)
         return {obj: sorted(i) for obj, i in out.items() if i}
 
+    def face_count(self, face_map: FaceMap) -> int:
+        """Faces by shape: an instanced mesh shows one shape's faces under
+        each of its transforms (blendertk's twin counts by mesh)."""
+        seen = set()
+        for obj, indices in face_map.items():
+            shapes = cmds.listRelatives(obj, shapes=True, fullPath=True, noIntermediate=True) or []
+            # A shape's UUID is the node's, whichever instance's path names it.
+            shape = (cmds.ls(shapes[0], uuid=True) or [obj])[0] if shapes else obj
+            seen.update((shape, int(i)) for i in indices)
+        return len(seen)
+
     def material(self, name: str) -> Optional[str]:
         if not name or not cmds.objExists(name):
             return None
@@ -286,6 +393,15 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
             if self._driven(plug):  # the base's own curve, shared by -ic
                 value = cmds.getAttr(plug)
                 for src in cmds.listConnections(plug, source=True, destination=False, plugs=True) or []:
+                    cmds.disconnectAttr(src, plug)
+                cmds.setAttr(plug, value)
+        for plug in self._tint_plugs(copy):
+            # A base's keyed colour: its curve, shared by -ic, never the copy's
+            # to key a tint on (a map stays shared: a tint refuses it).
+            curves = cmds.listConnections(plug, source=True, destination=False, type="animCurve", plugs=True) or []
+            if curves:
+                value = cmds.getAttr(plug)
+                for src in curves:
                     cmds.disconnectAttr(src, plug)
                 cmds.setAttr(plug, value)
         sg = self._sg(copy)
@@ -327,10 +443,23 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
         state: Dict[str, Any] = {}
         if colour:  # the colour the weight scales, compared as the scalar is not
             state["emission colour"] = self._reference(material)
-        for attr in cmds.listAttr(material, keyable=True, scalar=True) or []:
+        elif self._tint_plugs(material) and not self._tint_mapped(material):
+            # The colour a tint multiplies: a tinted copy's own channels are
+            # its base's colour times its tint, never a value out of step.
+            state["emission colour"] = self._tint_reference(material)
+            skip.update(plug.split(".", 1)[1] for plug in self._tint_plugs(material))
+        # Every visible value a user sets, not the keyable ones alone: an
+        # aiStandardSurface keys 3 attributes, so a check of its base colour,
+        # coat or emission compared nothing (standardSurface's thinWalled,
+        # a Lambert's refractions likewise).
+        attrs = set(cmds.listAttr(material, keyable=True, scalar=True) or [])
+        attrs |= set(cmds.listAttr(material, scalar=True, write=True, visible=True) or [])
+        for attr in sorted(attrs):
             # A multi's children (``lightDataArray.lightDirectionX``) name no
             # plug without an index: the node's runtime data, not a value.
             if attr in skip or "." in attr or attr.startswith(self.TAG_GROUP):
+                continue
+            if attr.startswith(self.RUNTIME_PREFIXES):
                 continue
             if colour and attr.startswith(self.COLOUR_ATTR):
                 continue
@@ -348,32 +477,66 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
             if colour and attr.startswith(self.COLOUR_ATTR):
                 continue
             state[f"<{attr}"] = src
+        # Its shading group's displacement and volume: a copy takes its base's
+        # when made, and keeps them in step after.
+        for sg in self._sgs(material)[:1]:
+            for attr in self.SG_INPUTS:
+                if not cmds.attributeQuery(attr, node=sg, exists=True):
+                    continue
+                found = cmds.listConnections(f"{sg}.{attr}", source=True, destination=False, plugs=True) or []
+                if found:
+                    state[f"sg<{attr}"] = found[0]
         return state
 
     def sync_copy(self, copy: str, base: str) -> None:
         want, have = self.material_state(base), self.material_state(copy)
+        sg = self._sg(copy)
         for key in sorted(set(want) | set(have)):
-            if not key.startswith("<"):
+            if key.startswith("<"):
+                plug = f"{copy}.{key[1:]}"
+            elif key.startswith("sg<"):
+                plug = f"{sg}.{key[3:]}"
+            else:
                 continue
-            plug = f"{copy}.{key[1:]}"
             if key in have and have[key] != want.get(key):
                 cmds.disconnectAttr(have[key], plug)
             if key in want and have.get(key) != want[key]:
                 cmds.connectAttr(want[key], plug, force=True)
         for key, value in want.items():
-            if key == "emission colour" or key.startswith("<") or self._driven(f"{copy}.{key}"):
+            if key == "emission colour" or "<" in key or self._driven(f"{copy}.{key}"):
                 continue
             if have.get(key) != value:
-                cmds.setAttr(f"{copy}.{key}", value)
-        if self._colour_shader(copy) and have.get("emission colour") != want.get("emission colour"):
+                if isinstance(value, str):
+                    cmds.setAttr(f"{copy}.{key}", value, type="string")
+                else:
+                    cmds.setAttr(f"{copy}.{key}", value)
+        colour_now, colour_wanted = have.get("emission colour"), want.get("emission colour")
+        if colour_wanted is None or self._close(colour_now, colour_wanted):
+            return
+        if self._colour_shader(copy):
             # The weight is kept, re-keyed against the base's new colour.
-            keys, weight = self.emission_keys(copy), self.emission(copy)
+            lead = self._plug(copy)
+            keys = [(f, v, bool(lead) and self._stepped_at(lead, f)) for f, v in self.emission_keys(copy)]
+            weight = self.emission(copy)
             self.clear_emission_keys(copy)
-            self._set_reference(copy, want["emission colour"])
-            for frame, value in keys:
-                self.key_emission(copy, value, frame)
+            self._set_reference(copy, colour_wanted)
+            for frame, value, stepped in keys:
+                self.key_emission(copy, value, frame, stepped)
             if not keys and weight is not None:
                 self.set_emission(copy, weight)
+        elif cmds.attributeQuery(self.TAG_COLOUR, node=copy, exists=True):
+            # A tinted copy: its tint is kept, re-keyed against the new colour.
+            keys, tint = self.emission_tint_keys(copy), self.emission_tint(copy)
+            self.clear_emission_tint_keys(copy)
+            self._set_reference(copy, colour_wanted)
+            for frame, value, stepped in keys:
+                self.key_emission_tint(copy, value, frame, stepped)
+            if not keys:
+                self.set_emission_tint(copy, tint)
+        else:
+            for plug, value in zip(self._tint_plugs(copy), colour_wanted):
+                if not self._driven(plug):
+                    cmds.setAttr(plug, float(value))
 
     # Emission ------------------------------------------------------------
 
@@ -401,6 +564,8 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
         slot = ShaderAttributeMap.get_attr(node_type, "emission")
         if slot and cmds.listConnections(f"{material}.{slot[0]}", source=True, destination=False):
             return None  # mapped
+        if cmds.attributeQuery(self.TAG_COLOUR, node=material, exists=True):
+            return self._tint_reference(material)  # a tinted copy: what its tint multiplies
         attr = ShaderAttributeMap.constant_attr(node_type, "emission")
         if not attr or not cmds.attributeQuery(attr, node=material, exists=True):
             return None
@@ -438,12 +603,15 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
             return 1.0 if float(strength) > 0.0 else 0.0
         return float(strength)
 
-    def key_emission(self, material: str, value: float, frame: Optional[float] = None) -> None:
+    def key_emission(
+        self, material: str, value: float, frame: Optional[float] = None, stepped: bool = False
+    ) -> None:
         for plug, ref in self._channels(material):
-            kwargs = {"value": ref * float(value)}
-            if frame is not None:
-                kwargs["time"] = frame
-            cmds.setKeyframe(plug, **kwargs)
+            self._set_key(plug, ref * float(value), frame, stepped)
+
+    def stepped_emission_frames(self, material: str) -> List[float]:
+        lead = self._plug(material)
+        return [f for f, _v in self._keys(lead) if self._stepped_at(lead, f)] if lead else []
 
     def clear_emission_keys(self, material: str) -> None:
         for plug, _ref in self._channels(material):
@@ -452,6 +620,97 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
             value = cmds.getAttr(plug)
             cmds.cutKey(plug, clear=True)
             cmds.setAttr(plug, value)
+
+    # Tint ----------------------------------------------------------------
+
+    def tint_refusal(self, material: str) -> Optional[str]:
+        if not cmds.objExists(material):
+            return f"{material!r} is in no scene"
+        node_type = cmds.nodeType(material)
+        if self._colour_shader(material):
+            return (
+                f"a {node_type} glows by its {self.COLOUR_ATTR} alone, which its "
+                "weight keys: tint a shader with an emission weight (Standard "
+                "Surface, OpenPBR, StingrayPBS)"
+            )
+        if not self._tint_plugs(material):
+            return f"a {node_type} has no emission colour to tint"
+        if self._tint_mapped(material):
+            return "its emission colour is a map, which no tint multiplies here"
+        if min(self._tint_reference(material)) <= 0.0:
+            # A tint multiplies it: a black channel shows no tint, and the tint
+            # it was given could never be read back.
+            return (
+                "its emission colour has a black channel, which no tint can light "
+                "(white shows each tint as named)"
+            )
+        return None
+
+    def _ensure_tint_reference(self, material: str) -> None:
+        """Keep *material*'s colour as what its tint multiplies, once."""
+        if not cmds.attributeQuery(self.TAG_COLOUR, node=material, exists=True):
+            self._set_reference(material, self._tint_reference(material))
+
+    def emission_tint(self, material: str) -> List[float]:
+        plugs = self._tint_plugs(material) if cmds.objExists(material) else []
+        if not plugs:
+            return [1.0, 1.0, 1.0]
+        return self._over([cmds.getAttr(plug) for plug in plugs], self._tint_reference(material))
+
+    def emission_tint_channels(self, material: str) -> List[str]:
+        """What keys each channel of *material*'s tint: its colour's plugs
+        (blendertk's twin names its fcurves), in shader units -- over
+        :meth:`emission_color`, the tint."""
+        return self._tint_plugs(material)
+
+    def set_emission_tint(self, material: str, tint: Sequence[float]) -> None:
+        self._ensure_tint_reference(material)
+        for plug, ref, value in zip(self._tint_plugs(material), self._tint_reference(material), tint):
+            if not self._driven(plug):
+                cmds.setAttr(plug, ref * float(value))
+
+    def key_emission_tint(
+        self, material: str, tint: Sequence[float], frame: Optional[float] = None, stepped: bool = False
+    ) -> None:
+        self._ensure_tint_reference(material)
+        for plug, ref, value in zip(self._tint_plugs(material), self._tint_reference(material), tint):
+            self._set_key(plug, ref * float(value), frame, stepped)
+
+    def emission_tint_keys(self, material: str):
+        plugs = self._tint_plugs(material) if cmds.objExists(material) else []
+        keys = {plug: self._keys(plug) for plug in plugs}
+        frames = sorted({f for found in keys.values() for f, _v in found})
+        if not frames:
+            return []
+        ref = self._tint_reference(material)
+        keyed = next(plug for plug in plugs if keys[plug])  # its keys say which hold
+        out = []
+        for frame in frames:
+            values = [cmds.getAttr(plug, time=frame) for plug in plugs]
+            out.append((frame, self._over(values, ref), self._stepped_at(keyed, frame)))
+        return out
+
+    def clear_emission_tint_keys(self, material: str) -> None:
+        for plug in self._tint_plugs(material):
+            if not self._keys(plug):
+                continue
+            value = cmds.getAttr(plug)
+            cmds.cutKey(plug, clear=True)
+            cmds.setAttr(plug, value)
+
+    def emission_states(self, material: str) -> Dict[str, Dict[str, Any]]:
+        if not cmds.objExists(material) or not cmds.attributeQuery(self.TAG_STATES, node=material, exists=True):
+            return {}
+        try:
+            found = json.loads(cmds.getAttr(f"{material}.{self.TAG_STATES}") or "{}")
+        except ValueError:
+            return {}
+        return found if isinstance(found, dict) else {}
+
+    def set_emission_states(self, material: str, states: Dict[str, Dict[str, Any]]) -> None:
+        if not cmds.attributeQuery(self.TAG_STATES, node=material, exists=True):
+            cmds.addAttr(material, longName=self.TAG_STATES, dataType="string")
+        cmds.setAttr(f"{material}.{self.TAG_STATES}", json.dumps(states), type="string")
 
     def copy_emission(self, src: str, dst: str, factor: float) -> None:
         lead = self._lead(src)
@@ -475,7 +734,9 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
 
     # Export --------------------------------------------------------------
 
-    def stage_emission_proxy(self, material: str, name: str, factor: float) -> Optional[str]:
+    def stage_emission_proxy(
+        self, material: str, name: str, factor: float, tint: Optional[int] = None
+    ) -> Optional[str]:
         if cmds.objExists(name):
             return None
         carrier = str(DataNodes.ensure_export())
@@ -484,8 +745,11 @@ class MayaEmissiveGroups(_MayaEmissiveGroupsInternal, ptk.PureEmissiveGroupsHost
         for marker in (ptk.MeshConvert.CURVE_PROXY_MARKER, self.PROXY_MARKER):
             cmds.addAttr(proxy, longName=marker, attributeType="bool")
             cmds.setAttr(f"{proxy}.{marker}", True)
-        lead = self._lead(material)
-        self._copy_keys(lead[0], f"{proxy}.scaleX", factor / lead[1])
+        if tint is None:
+            source, scale = self._lead(material)
+        else:  # the tint's channel: its colour channel over the base's
+            source, scale = self._tint_plugs(material)[tint], self._tint_reference(material)[tint]
+        self._copy_keys(source, f"{proxy}.scaleX", factor / scale)
         return proxy
 
     def emission_proxies(self) -> List[str]:

@@ -431,9 +431,10 @@ class TestAudioClipsRealExport(MayaTkTestCase):
 
     def _frames(self, fbx):
         """``(declared windows, key spans)`` of *fbx*'s takes, in frames."""
-        frames = lambda spans: {
-            take: tuple(round(t * self.fps, 3) for t in span) for take, span in spans.items()
-        }
+
+        def frames(spans):
+            return {take: tuple(round(t * self.fps, 3) for t in span) for take, span in spans.items()}
+
         return frames(fbx.take_windows()), frames(fbx.take_spans())
 
     def _cue_frames(self, path):
@@ -561,6 +562,56 @@ class TestAudioClipsRealExport(MayaTkTestCase):
         spans = fbx.take_spans()
         for clip, (start, _end) in windows.items():
             self.assertAlmostEqual(spans[clip][0], start, places=4, msg=clip)
+
+    def test_exclude_audio_ships_no_cue_and_no_sound_and_the_scene_keeps_them(self):
+        """Exclude Audio (a Settings mode, off by default): the FBX carries no
+        ``audio`` record and embeds no sound, the GLB built from it carries no
+        ``extras.audio``, the FBX plug-in's own Audio include is off for the
+        write (a reset turns it on), and the scene keeps its tracks and the
+        record it stored. Added: 2026-11-25"""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        spec = SceneExporter().task_manager.task_definitions["exclude_audio"]
+        self.assertEqual(
+            (spec["panel"], spec["setText"], spec["setChecked"]),
+            ("settings", "Audio", False),
+        )
+        box = cmds.polyCube(name="box")[0]
+        cmds.setKeyframe(box, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(box, attribute="translateX", time=48, value=10)
+        self._sound("hit", 10, 20)
+
+        # The default ships the sound: its cue, and its file embedded (RIFF).
+        _fbx, record = self._export("with_audio", [box])
+        self.assertEqual(sorted(record.get("media") or {}), ["hit.wav"])
+        with open(os.path.join(self.out, "with_audio.fbx"), "rb") as fh:
+            self.assertGreater(fh.read().count(b"RIFF"), 0)
+        self.assertTrue(FbxUtils.export_flag("FBXExportAudio"), "the reset's default")
+        stored = ptk.SceneRecords.AUDIO.read_text(DataNodes)
+        self.assertTrue(stored, "the export left the scene its record")
+
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False
+        written = exporter.perform_export(
+            export_dir=self.out,
+            objects=[box],
+            output_name="no_audio",
+            tasks={"output_format": "fbx_glb", "export_data_node": True, "exclude_audio": True},
+        )
+        self.assertTrue(written)
+        fbx = os.path.join(self.out, "no_audio.fbx")
+        self.assertIsNone(ptk.FbxMedia.record(fbx, ptk.SceneRecords.AUDIO.key))
+        with open(fbx, "rb") as fh:
+            self.assertEqual(fh.read().count(b"RIFF"), 0, "no sound is embedded")
+        with ptk.MeshConvert.open_glb(os.path.join(self.out, "no_audio.glb")) as edit:
+            self.assertNotIn(ptk.SceneRecords.AUDIO.key, edit.gltf.get("extras") or {})
+        self.assertFalse(FbxUtils.export_flag("FBXExportAudio"), "the include is off")
+        self.assertEqual(
+            ptk.SceneRecords.AUDIO.read_text(DataNodes), stored, "the scene keeps it"
+        )
+        self.assertEqual(audio_utils.list_tracks(), ["hit"])
 
 
 if __name__ == "__main__":

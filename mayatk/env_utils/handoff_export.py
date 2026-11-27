@@ -365,7 +365,7 @@ class MayaExportMixin:
         else over the scene's animation range -- and a static one does not.
 
         Decided before the bracket opens, from the takes the scene's shots
-        declare (``FbxUtils.declared_takes``: one per shot); the write
+        hold (``FbxUtils.declared_takes``); the write
         applies it (:meth:`FbxUtils.apply_write_plan`) and states it
         (``FbxUtils.export(plan=)``).
         """
@@ -526,7 +526,7 @@ class MayaExportMixin:
                     # carried 12 clips and the preview's carried one.
                     #
                     # Read, never regenerated: this realizes the takes the scene's
-                    # shot store declares (one per shot, ``FbxUtils.declared_takes``)
+                    # shots hold (``FbxUtils.declared_takes``)
                     # rather than running the producers, so a preview push stays
                     # free of scene side effects. Idempotent alongside the hook --
                     # ``apply_takes`` clears prior take state first.
@@ -819,7 +819,7 @@ class MayaExportMixin:
         tangent is ``step``.
 
         FBX carries the key, but Blender's importer makes every key LINEAR, so a
-        Maya hold arrived as a ramp to the next key (SOL_REPLACE_ASSEMBLY's
+        Maya hold arrived as a ramp to the next key (a production scene's
         SCREWDRIVER steps at 12 and holds to 731; pulled, it moved the whole
         way).  blendertk's ``MayaSceneImport`` makes the listed keys CONSTANT
         again.  *channel* is a transform family (``translate`` / ``rotate`` /

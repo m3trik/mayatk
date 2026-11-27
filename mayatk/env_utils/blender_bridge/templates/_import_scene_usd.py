@@ -861,7 +861,7 @@ def _action_fcurves(action, slot=None):
     """The fcurves of *action* -- *slot*'s own when given, else every slot's -- on
     any Blender.
 
-    Dependency-free copy of ``btk.AnimUtils._slot_fcurves`` (pinned by AST
+    Dependency-free copy of ``btk.CoreUtils._slot_fcurves`` (pinned by AST
     identity): 4.4+ actions are layered and 5.x drops the flat ``action.fcurves``
     entirely, so keys live in per-slot channelbags (read first: on 4.4-5.0 the flat
     list is a FIRST-slot proxy). Pass the object's
@@ -896,7 +896,7 @@ def collect_visibility(bpy):
     writes no visibility samples for them either: the same module's USD return leg
     delivered 83 show/hide-only objects static and not one visibility curve
     (2026-09-21). These are the plug and failed-component toggles, i.e. the content
-    of the training module.
+    of the module.
 
     The mirror of the send direction, which puts Maya's baked ``.visibility`` in this
     same section for ``btk.MayaSceneImport`` to replay as ``hide_*`` keys: same

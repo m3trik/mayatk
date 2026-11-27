@@ -558,16 +558,6 @@ class TestLightmapBakerComposition(MayaTkTestCase):
         self.assertIsNotNone(seen.get("tris"), "bake() resolved no UV layout")
         self.assertEqual(len(seen["tris"]), 12)  # 6 quads, fan-triangulated
 
-    def test_the_records_old_key_names_are_deprecated_aliases(self):
-        """``LIGHTMAP_METADATA`` held the lightmaps record's key under its
-        old name, on the records and the baker: retired, each warns and
-        answers the declaration's. Added: 2026-10-20"""
-        for owner in (LightmapRecords, LightmapBaker):
-            with self.subTest(owner=owner.__name__):
-                with self.assertWarns(DeprecationWarning):
-                    key = owner.LIGHTMAP_METADATA
-                self.assertEqual(key, ptk.SceneRecords.LIGHTMAPS.key)
-
 
 @unittest.skipUnless(
     HAVE_CV2 and _arnold_loadable(), "mtoa/arnoldRenderToTexture or cv2 unavailable"
@@ -3580,6 +3570,87 @@ class TestAtlasPlanFirst(MayaTkTestCase):
         reading = sorted(copies, key=lambda c: (cells[c][0], cells[c][2]))
         self.assertEqual(reading, sorted(copies))
 
+    def _generated(self, name, sg, size):
+        """A cube carrying the lightmap layout the baker itself makes."""
+        cube = self._cube(name, sg, size=size)
+        UvUtils.create_lightmap_uvs([cube], quiet=True)
+        return cube
+
+    @staticmethod
+    def _fill(entries):
+        return sum(rect[0] * rect[1] for _name, rect in entries)
+
+    def test_layouts_it_made_are_refit_so_their_cells_fill_the_atlas(self):
+        """Reported on a production cabinet: its four objects' cells filled 54%
+        of their atlas. Four cells of fixed shapes leave much of a square
+        empty whatever the density, and re-packing each layout inside its own
+        cell gained only 9%. A layout the baker made is its own to re-lay, so
+        a fresh pack gives each one a whole-number shape (1:3 to 3:1), picks
+        the shapes that fill the atlas best, and re-packs each layout to its
+        cell (xatlas, pages side by side): one density, every texel square on
+        the surface, nothing on anything."""
+        if not ptk.UvPack.available():
+            self.skipTest("xatlas not installed")
+        sg = self._sg("planRefit")
+        # The cabinet's proportions: one body, two doors, a small door.
+        objs = [
+            self._generated(name, sg, size)
+            for name, size in (
+                ("planRefitBody", 6.0),
+                ("planRefitGray", 2.5),
+                ("planRefitRed", 1.55),
+                ("planRefitLocker", 0.3),
+            )
+        ]
+        baker = LightmapBaker(resolution=512)
+        fixed = next(iter(baker.atlas_plan(objs).values()))
+        refit = baker.atlas_plan(objs, refit=True)
+        self.assertGreater(self._fill(next(iter(refit.values()))), self._fill(fixed))
+
+        self.assertEqual(sorted(baker._fit_layouts(refit)), sorted(objs))
+        # The bake plans again from the layouts as they now are: each cell
+        # takes its own layout's shape, and they still fill more of the atlas.
+        after = next(iter(baker.atlas_plan(objs).values()))
+        self.assertGreater(
+            self._fill(after), self._fill(fixed) + 0.1, (self._fill(fixed), self._fill(after))
+        )
+        for obj in objs:
+            shape = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+            lm = UvDiagnostics.find_lightmap_uv_set(shape)
+            self.assertTrue(UvDiagnostics.is_bakeable_lightmap(shape, lm), obj)
+
+    def test_an_instanced_or_unmarked_layout_keeps_its_cell_shape(self):
+        """A layout the baker did not make, or one instances share, is not its
+        to move: it keeps the cell its own box gives it, and nothing re-lays it."""
+        if not ptk.UvPack.available():
+            self.skipTest("xatlas not installed")
+        sg = self._sg("planKeep")
+        mine = self._generated("planKeepMine", sg, 4.0)
+        theirs = self._cube("planKeepTheirs", sg, size=1.0)
+        shape = cmds.listRelatives(theirs, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        copy = cmds.instance(mine, name="planKeepCopy")[0]
+        copy = cmds.ls(copy, long=True)[0]
+        cmds.sets(copy, edit=True, forceElement=sg)
+        baker = LightmapBaker(resolution=512)
+        self.assertFalse(baker._refittable(theirs))
+        self.assertFalse(baker._refittable(mine), "instanced: the copy shares it")
+        before = UvUtils.get_uv_triangles(shape, "lightmap")
+        plan = baker.atlas_plan([mine, theirs, copy], refit=True)
+        self.assertEqual(baker._fit_layouts(plan), [])
+        self.assertTrue((UvUtils.get_uv_triangles(shape, "lightmap") == before).all())
+        self.assertEqual(plan, baker.atlas_plan([mine, theirs, copy]))
+
+    def test_refit_is_off_when_asked(self):
+        if not ptk.UvPack.available():
+            self.skipTest("xatlas not installed")
+        sg = self._sg("planOff")
+        objs = [self._generated(f"planOff{i}", sg, s) for i, s in enumerate((5.0, 1.0))]
+        baker = LightmapBaker(resolution=512)
+        baker.refit_layouts = False
+        self.assertFalse(baker._refittable(objs[0]))
+        self.assertEqual(baker.atlas_plan(objs, refit=True), baker.atlas_plan(objs))
+
     def _plan_cell_aspect(self, obj, others):
         """Width over height of *obj*'s planned cell, packed beside *others*."""
         baker = LightmapBaker(resolution=512)
@@ -3841,6 +3912,98 @@ class TestAtlasPlanFirst(MayaTkTestCase):
 
         rendered = baker.atlas_plan(objects)  # the layouts as they now are
         self.assertEqual(seen["plan"], rendered)
+
+    def test_a_layout_the_refit_leaves_as_it_was_is_planned_as_it_is(self):
+        """A layout the refit re-lays nothing of (refused, or no denser) never
+        took its planned shape: the bake plans again from the layouts as they
+        are (Blender's twin baked to the guessed 1:3 / 1:1 / 2:1 shapes)."""
+        if not ptk.UvPack.available():
+            self.skipTest("xatlas not installed")
+        sg = self._sg("bakeKept")
+        objects = [self._generated(f"bakeKept{i}", sg, s) for i, s in enumerate((5.0, 1.5, 0.4))]
+        baker = LightmapBaker(resolution=256)
+        seen = {}
+
+        def fake_bake(_self, objects, output_dir=None, size=None, **kwargs):
+            return {o: os.path.join(self.tmp, f"{o.rsplit('|', 1)[-1]}.exr") for o in objects}
+
+        def fake_pack(_self, mapping, output_dir=None, plan=None, **kwargs):
+            seen["plan"] = plan
+            return {o: (p, [1.0, 1.0, 0.0, 0.0]) for o, p in mapping.items()}
+
+        with (
+            mock.patch.object(LightmapBaker, "_bake_white_card", fake_bake),
+            mock.patch.object(LightmapBaker, "pack_atlas", fake_pack),
+            mock.patch.object(LightmapBaker, "_fit_layouts", return_value=[]),
+        ):
+            baker.bake_atlas(objects, output_dir=self.tmp)
+
+        self.assertEqual(seen["plan"], baker.atlas_plan(objects))
+
+    def _layouts(self, objects):
+        """Each object's lightmap layout as it stands: its UV triangles."""
+        out = {}
+        for obj in objects:
+            shape = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+            out[obj] = UvUtils.get_uv_triangles(shape, UvDiagnostics.find_lightmap_uv_set(shape))
+        return out
+
+    def test_a_layout_refit_for_a_render_that_never_lands_is_put_back(self):
+        """bake() promises an object it does not finish keeps the map it had,
+        and that map intact: a layout re-laid for a render that is cancelled
+        or fails goes back to the layout its map was baked on, and one whose
+        map landed keeps its new layout. No snapshot is left behind."""
+        import numpy as np
+
+        if not ptk.UvPack.available():
+            self.skipTest("xatlas not installed")
+
+        def fake_pack(_self, mapping, output_dir=None, plan=None, **kwargs):
+            return {o: (p, [1.0, 1.0, 0.0, 0.0]) for o, p in mapping.items()}
+
+        for case in ("cancelled", "failed"):
+            with self.subTest(case=case):
+                sg = self._sg(f"lost{case}")
+                objects = [
+                    self._generated(f"lost{case}{i}", sg, s)
+                    for i, s in enumerate((5.0, 1.5, 0.4))
+                ]
+                before = self._layouts(objects)
+                refit = []
+                real_fit = LightmapBaker._fit_layouts
+
+                def spy_fit(_self, plan, held=None):
+                    fitted = real_fit(_self, plan, held=held)
+                    refit.extend(fitted)
+                    return fitted
+
+                def fake_bake(_self, objs, output_dir=None, size=None, **kwargs):
+                    if case == "failed":
+                        raise RuntimeError("the render failed")
+                    first = objs[0]  # the rest cancelled
+                    return {first: os.path.join(self.tmp, f"{case}.exr")}
+
+                with (
+                    mock.patch.object(LightmapBaker, "_bake_white_card", fake_bake),
+                    mock.patch.object(LightmapBaker, "pack_atlas", fake_pack),
+                    mock.patch.object(LightmapBaker, "_fit_layouts", spy_fit),
+                ):
+                    try:
+                        packed = LightmapBaker(resolution=256).bake_atlas(
+                            objects, output_dir=self.tmp
+                        )
+                    except RuntimeError:
+                        packed = {}
+                unbaked = [o for o in objects if o not in packed]
+                self.assertTrue(
+                    set(refit) & set(unbaked), "the fixture re-lays an unbaked layout"
+                )
+                after = self._layouts(objects)
+                for obj in unbaked:
+                    np.testing.assert_allclose(after[obj], before[obj], err_msg=obj)
+                for obj in set(refit) & set(packed):
+                    self.assertFalse(np.allclose(after[obj], before[obj]), obj)
+                self.assertEqual(UvUtils.find_uv_snapshots(objects), [])
 
     def test_a_held_destination_takes_an_adjacent_name_rather_than_the_bake(self):
         # The un-consolidated maps come out of a work dir the caller sweeps on
@@ -4111,6 +4274,40 @@ class TestLightmapPresets(unittest.TestCase):
         self.assertIs(LightmapBaker(baker=injected).adaptive, False)
         self.assertIs(LightmapBaker(baker=injected, adaptive=True).adaptive, True)
         self.assertIs(injected.adaptive, True)
+
+
+class TestBakeLeavesOutWhatMoves(MayaTkTestCase):
+    """A mesh the animation moves gets no lightmap and is out of the bake's render and its room: a production bake
+    lightmapped its doors shut, and opened in Unity each showed the cabinet's dark on its inside (2026-11-26)."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.playbackOptions(animationStartTime=1, animationEndTime=48)
+        self.door = cmds.group(empty=True, name="DOOR_GRP")
+        cmds.setKeyframe(self.door, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(self.door, attribute="rotateY", time=24, value=-70)
+        self.panel = cmds.ls(cmds.parent(cmds.polyCube(name="DOOR_PANEL")[0], self.door)[0], long=True)[0]
+        self.cabinet = cmds.ls(cmds.polyCube(name="CABINET")[0], long=True)[0]
+
+    def test_a_moving_mesh_is_no_bake_target_and_is_named(self):
+        with self.assertLogs(LightmapBaker.logger, level="INFO") as caught:
+            targets, hidden, excluded, moving = LightmapBaker._targets([self.panel, self.cabinet])
+        self.assertEqual((targets, hidden, excluded, moving), ([self.cabinet], [], [], [self.panel]))
+        self.assertTrue(any("DOOR_PANEL" in m and "probe" in m for m in caught.output), caught.output)
+        self.assertEqual(LightmapBaker.bake_targets([self.panel]), [])
+        self.assertIn("moved by the animation", LightmapBaker._nothing_to_bake([], [], [self.panel]))
+
+    def test_a_moving_mesh_is_no_part_of_the_room_the_baseline_reads(self):
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+
+        LightmapExcludeSet.define([self.panel, self.cabinet])
+        try:
+            ids = set(LightmapRecords.scene_state())
+        finally:
+            LightmapExcludeSet.clear()
+        self.assertIn(self.cabinet, ids)
+        self.assertNotIn(self.panel, ids, "what moves is no part of the room, even in the Exclude set")
+        self.assertEqual(LightmapBaker._staying([self.panel, self.cabinet]), [self.cabinet])
 
 
 class TestExcludeSet(MayaTkTestCase):
@@ -4434,6 +4631,87 @@ class TestIsolatedObjectsBakeAlone(MayaTkTestCase):
 
         cabinet_map = os.path.basename(result.maps[cabinet]).lower()
         self.assertIn(cabinet, fake.called_claims.get(cabinet_map, ()))
+
+    def _removable(self, name, parent=None):
+        """A part a step takes away (static: shown, then hidden): a group and a cube in it."""
+        holder = cmds.createNode("transform", name=f"{name}Holder", parent=parent)
+        holder = cmds.ls(holder, long=True)[0]
+        geo = cmds.parent(self._cube(f"{name}Geo"), holder)[0]
+        return holder, cmds.ls(geo, long=True)[0]
+
+    def test_an_isolated_part_that_moves_is_out_of_the_bake_as_well(self):
+        """A locker door set in a gray door was baked in passes of their own
+        (production, 2026-11-24), and opened each showed the pose it was baked
+        in (2026-11-26: the cabinet's dark on its inside). In the Isolate set or
+        not, a part that moves gets no map and is out of every render."""
+        cabinet = self._cube("isoBody")
+        gate_holder, gate = self._removable("isoGate")
+        hatch_holder, hatch = self._removable("isoHatch", parent=gate_holder)
+        other_holder, other = self._removable("isoOther")
+        for holder in (gate_holder, hatch_holder, other_holder):
+            cmds.setKeyframe(holder, attribute="rotateY", time=1, value=0)
+            cmds.setKeyframe(holder, attribute="rotateY", time=10, value=90)
+        LightmapIsolateSet.define([gate, hatch, other])
+
+        fake, result = self._bake([cabinet, gate, hatch, other])
+
+        self.assertEqual(fake.passes, [([cabinet], self._shapes(gate, hatch, other))])
+        self.assertEqual(sorted(result.moving), sorted([gate, hatch, other]))
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        self.assertFalse({gate, hatch, other} & set(LightmapRecords.scene_state()), "no part of the room a re-bake diffs")
+
+    def test_a_part_that_moves_is_out_of_the_bake_whatever_frame_the_scene_is_on(self):
+        """Measured 2026-11-25 on a production course: its doors were baked
+        swung open (the scene saved mid-course), then shut (at rest); either
+        way, opened in Unity, a door showed the pose it was baked in (2026-11-26:
+        the cabinet's dark on its inside). A door the animation moves gets no map
+        and is out of the render, at any frame; the cabinet bakes at rest, and
+        the frame is put back."""
+        cabinet = self._cube("restBody")
+        hinge, door = self._removable("restDoor")
+        cmds.playbackOptions(animationStartTime=-2, minTime=-2, maxTime=100, animationEndTime=100)
+        cmds.setKeyframe(hinge, attribute="rotateY", time=-2, value=0)
+        cmds.setKeyframe(hinge, attribute="rotateY", time=10, value=90)
+        cmds.currentTime(80)
+        fake = _FakeBaker()
+        fake.at_bake = lambda: float(cmds.currentTime(query=True))
+
+        result = LightmapBaker(resolution=64, baker=fake).bake(
+            [cabinet, door], packing="per_object", output_dir=self.tmp
+        )
+
+        self.assertEqual(result.moving, [door])
+        self.assertEqual(set(result.maps), {cabinet}, "the door has no map")
+        self.assertEqual(fake.passes, [([cabinet], self._shapes(door))], "and is out of the cabinet's render")
+        self.assertEqual(fake.seen_at_bake, -2.0, "the cabinet baked at rest")
+        self.assertEqual(cmds.currentTime(query=True), 80, "the frame it stood at, put back")
+        self.assertNotIn(door, LightmapRecords.scene_state(), "no part of the room a re-bake diffs")
+
+    def test_every_render_path_renders_at_rest_and_the_lighting_is_read_there(self):
+        """The rest pose is set where every render passes (``_lighting``), so
+        a direct ``bake_separated`` renders at rest too; and the lighting a
+        bake records -- a keyed light's -- is the rest frame's, the one it
+        rendered with, so a dry run from any frame reads no lighting change."""
+        cabinet = self._cube("restLit")
+        light = cmds.pointLight(intensity=1.0)
+        cmds.playbackOptions(animationStartTime=-2, minTime=-2, maxTime=100, animationEndTime=100)
+        cmds.setKeyframe(light, attribute="intensity", time=-2, value=1.0)
+        cmds.setKeyframe(light, attribute="intensity", time=80, value=5.0)
+        cmds.currentTime(80)
+        fake = _FakeBaker()
+        fake.at_bake = lambda: float(cmds.currentTime(query=True))
+
+        LightmapBaker(resolution=64, baker=fake).bake_separated([cabinet], output_dir=self.tmp)
+        self.assertEqual(fake.seen_at_bake, -2.0, "a direct call renders at rest")
+        self.assertEqual(cmds.currentTime(query=True), 80)
+
+        baker = LightmapBaker(resolution=64, baker=fake)
+        baker.bake([cabinet], packing="per_object", output_dir=self.tmp)
+        for frame in (80, -2):
+            cmds.currentTime(frame)
+            self.assertEqual(baker.stale_report().lighting, (), f"read at frame {frame}")
+            self.assertEqual(cmds.currentTime(query=True), frame)
 
     def test_no_isolated_target_is_one_pass_as_before(self):
         cabinet = self._cube("isoAlone")
@@ -5828,7 +6106,7 @@ class TestProbePlacement(MayaTkTestCase):
         """A cabinet with its front open and the parts that move inside it: over
         what moves at eye level is inside the cabinet, and the room's lights
         show through the opening, so it read as lit open air -- the production
-        probe (SOL_REPLACE_ASSEMBLY, 2026-10-15) was two-thirds cabinet
+        probe (a production scene, 2026-10-15) was two-thirds cabinet
         interior, and every unbaked metal in the scene reflected it dark. It
         leaves by the opening, never through a wall."""
         room = self._cube("ppRoom", 1000, 400, 1000, (0, 200, 0), inward=True)
@@ -7955,6 +8233,19 @@ class TestRebakeChanged(MayaTkTestCase):
         maps = {e["map"] for e in LightmapRecords._record().payload["objects"]}
         self.assertEqual(maps, {self.ATLAS})
         self.assertEqual(result.report.in_place, (a,))
+
+    def test_a_group_every_reader_of_which_rebakes_is_laid_out_afresh(self):
+        """User (2026-11-24): no option for what we always want. In place pays
+        only for a partial re-bake; when every object reading an atlas re-bakes,
+        every cell renders either way, so the group is laid out afresh (re-laid
+        to fill its cells), its atlas under its own name."""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        result = self._baker().rebake([a, b, c])
+        self.assertEqual(result.in_place, [])
+        self.assertIn("every object reading it re-bakes", " ".join(result.repacked.values()))
+        self.assertEqual(self._files(), [self.ATLAS], "its own name, no _1 atlas")
+        self.assertEqual(self._report().targets, ())
 
     def test_a_measurements_pack_never_writes_the_scenes_atlas(self):
         """``record=False`` writes no file the scene reads -- its two-call

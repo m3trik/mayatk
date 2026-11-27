@@ -16,6 +16,12 @@ engine's :class:`~pythontk.ShotManifest` and overrides only its scene hooks:
 - ``_discover_scene_objects`` / ``_filter_to_animated`` → animCurve walks;
 - assess seams (``_object_exists`` / ``_verify_behavior`` / ``_keyframe_range``
   / ``_audio_exists``) → ``cmds`` / audio-track queries;
+- ``_make_helper`` → the camera (a picture's) or locator (a viewpoint's, an
+  arrow's) a placing row names in ``where``, made where the scene has none, at
+  ``ptk.ManifestPlacement``'s plain first pose;
+- ``_ensure_state`` → the Emissive Groups model: the group a row's Target
+  wears gets the tool's default states where it has none, so a ``set`` row's
+  state is one the delivery carries;
 - ``apply_behaviors`` / ``_apply_one`` → :func:`behaviors.apply_to_shots` /
   ``apply_behavior`` keying fades, highlights and audio onto each shot's
   objects from the scene's effect recipe (``store.effect_recipe``);
@@ -37,6 +43,7 @@ import functools
 import logging
 from typing import Callable, Dict, List, Optional, Tuple
 
+import pythontk as ptk
 from pythontk.core_utils.engines.shots.manifest.manifest_model import (  # noqa: F401 — re-exports
     Action,
     AUDIO_PLACEHOLDER_DURATION,
@@ -105,6 +112,26 @@ class _ShotManifestInternal(object):
             log.debug("audio duration probe failed for %r: %s", obj.name, exc)
             return None
         return float(frames) if frames > 0 else None
+
+    @staticmethod
+    def _shape_bounds(node) -> Optional[Tuple[List[float], List[float]]]:
+        """The world box ``(low, high)`` of what *node* (a node, or several) shows: its
+        geometry and what is under it, not the helpers riding it (a locator or a camera
+        made for an earlier row counts in ``exactWorldBoundingBox`` of the node, and moved
+        the next one's aim); ``None`` where nothing under it has a shape."""
+        import maya.cmds as _cmds
+
+        shapes = _cmds.listRelatives(
+            node,
+            allDescendents=True,
+            fullPath=True,
+            noIntermediate=True,
+            type=("mesh", "nurbsSurface", "nurbsCurve", "subdiv"),
+        )
+        if not shapes:
+            return None
+        box = _cmds.exactWorldBoundingBox(shapes)
+        return box[:3], box[3:]
 
     @staticmethod
     def _scene_fps() -> float:
@@ -319,6 +346,126 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
 
         return Behaviors.apply_behavior(node, behavior, start, end, **kwargs)
 
+    def _ensure_state(self, target: str, state: str) -> Tuple[str, str]:
+        """Make sure the emissive groups *target* wears have the state *state*:
+        ``EmissiveGroups.ensure_state`` of the groups whose faces lie on
+        *target* or under it (``EmissiveGroups.groups_on``; the indicator's own
+        material per group) -- blendertk's twin.
+
+        Returns:
+            ``EmissiveGroups.ensure_state``'s ``(outcome, why)``, or
+            ``("skipped", why)`` where *target* is not one node of the scene.
+        """
+        import maya.cmds as _cmds
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        node, reason = self._resolve_object(target)
+        found = _cmds.ls(node, long=True) if reason == "found" else []
+        if len(found) != 1:
+            return "skipped", "it is not one node of the scene"
+        under = found + (_cmds.listRelatives(found[0], allDescendents=True, type="transform", fullPath=True) or [])
+        return EmissiveGroups.ensure_state(EmissiveGroups.groups_on(under), state)
+
+    def _make_helper(self, name: str, purpose: str, target: str, frame: Optional[float]) -> Optional[str]:
+        """A camera (a picture's) or a locator (a viewpoint's, an arrow's) named
+        *name*, made by *target* as the scene stands at *frame*.
+
+        Its first pose is ``ptk.ManifestPlacement.first_pose`` of the target's
+        and its delivery's (its top-level ancestor's) world bounds -- a target
+        with no shape under it (an empty group) a point where it stands -- over
+        rays through every mesh the scene shows at *frame*
+        (``ptk.SpotPlacement``: a picture stands where its part is seen, never
+        behind what hides it); its forward -- a locator's ``+Z``, a camera's
+        view -- is turned to the pose's aim; it is parented with that pose
+        kept, under what ``ManifestPlacement.RIDES`` says.  A camera's lens
+        gives ``ManifestPlacement.VIEW_ANGLE`` over its film's height.  The
+        selection and the playhead are left as they were, and a helper it
+        could not finish is removed.
+
+        Returns:
+            The helper's name, or ``None`` where *target* is not one node of
+            the scene.
+        """
+        import maya.cmds as _cmds
+        from mayatk.core_utils.units import Units
+        from mayatk.core_utils.mesh_rays import MeshRays
+        from mayatk.rig_utils._rig_utils import RigUtils
+
+        node, reason = self._resolve_object(target)
+        found = _cmds.ls(node, long=True) if reason == "found" else []
+        if len(found) != 1:
+            return None
+        part = found[0]
+        delivery = "|" + part.split("|")[1]
+        up = 2 if _cmds.upAxis(query=True, axis=True) == "z" else 1
+        unit = 1.0 / Units.metres_per("working")
+        was = _cmds.currentTime(query=True)
+        selected = _cmds.ls(selection=True, long=True) or []
+        made = at = None
+        try:
+            if frame is not None:
+                _cmds.currentTime(frame, update=True)
+            here = _cmds.xform(part, query=True, worldSpace=True, rotatePivot=True)
+            box = self._shape_bounds(part) or (here, here)
+            whole = self._shape_bounds(delivery) or box
+            # The floor is the scene's: the lowest point of everything it shows (a part's own group may start above it).
+            scene = self._shape_bounds([n for n in _cmds.ls(assemblies=True, long=True) or [] if n not in ("|persp", "|top", "|front", "|side")])
+            # What the scene shows at its step blocks a line of sight; the part's own meshes are what is looked at.
+            # The placement runs in Maya's internal unit, as the rays answer (``MFnMesh``: centimetres whatever the
+            # scene's unit): the bounds go in scaled, the pose comes back in the scene's unit.
+            meshes = list(dict.fromkeys(_cmds.listRelatives(_cmds.ls(type="mesh", noIntermediate=True, visible=True, long=True) or [], parent=True, fullPath=True) or []))
+            owners = [m for m in meshes if m == part or m.startswith(part + "|")]
+            k = Units.metres_per("working") / Units.INTERNAL_M
+            pose = ptk.ManifestPlacement.first_pose(
+                purpose,
+                tuple([c * k for c in corner] for corner in box),
+                tuple([c * k for c in corner] for corner in whole),
+                up=up,
+                unit=1.0 / Units.INTERNAL_M,
+                floor=scene[0][up] * k if scene else None,
+                rays=MeshRays().rays(meshes) if meshes else None,
+                owners=owners,
+            )
+            position, aim = ([c / k for c in point] for point in pose)
+            if ptk.ManifestPlacement.KINDS[purpose] == "camera":
+                # Named after it is made: `camera -name CAM_A01` makes CAM_A1 (it reads the digits as a count).
+                made = _cmds.rename(_cmds.camera()[0], name)
+                shape = _cmds.listRelatives(made, shapes=True, fullPath=True)[0]
+                film = _cmds.getAttr(shape + ".verticalFilmAperture") * 25.4  # inches, as Maya keeps a film back
+                _cmds.setAttr(shape + ".focalLength", ptk.ManifestPlacement.focal_length(film))
+                forward = (0.0, 0.0, -1.0)
+            else:
+                made = RigUtils.create_locator(name=name, size=0.1 * unit)  # 10 cm: a distance, in the scene's unit
+                forward = (0.0, 0.0, 1.0)
+            _cmds.xform(made, worldSpace=True, translation=position)
+            # Its forward to the aim; where that is straight up or down (an arrow over its part), its up lies level.
+            level = [0.0, 0.0, 0.0]
+            level[up] = 1.0
+            if all(abs(aim[i] - position[i]) < 1e-9 for i in range(3) if i != up):
+                level = list(ptk.ManifestPlacement.outer(box, whole, up))
+            at = _cmds.spaceLocator()[0]
+            _cmds.xform(at, worldSpace=True, translation=aim)
+            _cmds.delete(
+                _cmds.aimConstraint(at, made, aimVector=forward, upVector=(0.0, 1.0, 0.0), worldUpType="vector", worldUpVector=level)
+            )
+            _cmds.delete(at)
+            at = None
+            # Parented as the scene stands at its step: it rides its part from there.
+            made = _cmds.parent(made, part if ptk.ManifestPlacement.RIDES[purpose] == "target" else delivery)[0]
+        except Exception:
+            stray = [n for n in (at, made) if n and _cmds.objExists(n)]
+            if stray:
+                _cmds.delete(stray)
+            raise
+        finally:
+            _cmds.currentTime(was, update=True)
+            kept = _cmds.ls(selected, long=True) if selected else []  # what of it the scene still holds
+            if kept:
+                _cmds.select(kept, replace=True)
+            else:
+                _cmds.select(clear=True)
+        return made.split("|")[-1]
+
     # ---- scene walks (animCurve acquisition) -------------------------------
 
     def _discover_scene_objects(
@@ -335,6 +482,11 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
         custom attributes (e.g. ``audio_trigger``) are treated as
         boundary markers and excluded.
 
+        What *exclude_names* -- the step's doc names and its shot's members
+        as stored -- names is left out (``ShotStore.name_pairs`` through the
+        store's host: a bare leaf every transform of it, a path's tail those
+        it ends, a long name itself), as blendertk's twin does.
+
         The curve-to-transform mapping is built once per assess cycle and
         cached on ``self._animated_transforms`` to avoid redundant
         ``ls``/``listConnections`` calls when multiple steps are checked.
@@ -345,10 +497,11 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
             return []
 
         animated = self._transform_curve_map()
+        known = {member for _name, member in ShotStore.name_pairs(exclude_names, animated, self.store.host)}
 
         found: list = []
         for obj in sorted(animated):
-            if ShotStore.member_key(obj) in exclude_names:
+            if obj in known:
                 continue
             if any(
                 self._curve_varies_in_range(crv, start, end) for crv in animated[obj]
@@ -493,4 +646,4 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
         """
         steps = ManifestModel.parse_csv(filepath, columns, post_process=post_process)
         st = store or ShotStore.active()
-        return cls(st), steps
+        return cls(st, source=filepath), steps  # its sheet: the modes the scene keeps for it

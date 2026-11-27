@@ -880,14 +880,6 @@ class TestRecordMigration(MayaTkTestCase):
             cmds.attributeQuery("shot_metadata", node=DataNodes.EXPORT, exists=True)
         )
 
-    def test_the_shot_records_old_key_name_is_a_deprecated_alias(self):
-        """``DataNodes.SHOT_METADATA`` held the shot record's key under its
-        old name: retired, it warns and answers the declaration's.
-        Added: 2026-10-20"""
-        with self.assertWarns(DeprecationWarning):
-            key = DataNodes.SHOT_METADATA
-        self.assertEqual(key, ptk.SceneRecords.SHOTS.key)
-
 
 class TestLeftoverCarriers(MayaTkTestCase):
     """A carrier a plain import left beside the scene's own -- never merged,

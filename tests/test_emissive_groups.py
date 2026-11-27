@@ -43,6 +43,18 @@ class _GroupsCase(MayaTkTestCase):
         MatUtils.assign_mat([self.hull], self.hull_mat)
         MatUtils.assign_mat([self.panel], self.panel_mat)
 
+    PLUGINS = {"aiStandardSurface": "mtoa", "StingrayPBS": "shaderFXPlugin"}
+
+    def _available(self, node_type):
+        """Whether this instance can make *node_type* (its plug-in loaded)."""
+        plugin = self.PLUGINS.get(node_type)
+        if plugin and not cmds.pluginInfo(plugin, query=True, loaded=True):
+            try:
+                cmds.loadPlugin(plugin, quiet=True)
+            except Exception:
+                return False
+        return node_type in (cmds.allNodeTypes() or [])
+
     def wears(self, obj, index):
         """The shader face *index* of *obj* wears (whole-object membership too)."""
         long = cmds.ls(obj, long=True)[0]
@@ -108,6 +120,16 @@ class TestGroupsAreMaterials(_GroupsCase):
         self.assertTrue(EmissiveGroups.list_groups()["signal"]["keyed"])
         self.assertEqual(cmds.keyframe("hullMat.emission", query=True, keyframeCount=True), 0, "the base is not keyed")
 
+    def test_an_instanced_mesh_counts_its_faces_once(self):
+        """Review (2026-11-26): the host's face count names a face several
+        objects show once (Blender dedupes linked duplicates by mesh); Maya
+        counted each instance's faces."""
+        twin = cmds.instance(self.panel, name="panelTwin")[0]
+        EmissiveGroups.add_group("signal", [self.panel, twin])
+        worn = EmissiveGroups.HOST.material_faces("panelMat_signal")
+        self.assertEqual(len(worn), 2, f"both instances wear the copy: {worn}")
+        self.assertEqual(EmissiveGroups.list_groups()["signal"]["faces"], 6)
+
 
 class TestInStep(_GroupsCase):
     def test_a_changed_base_value_and_map_reach_the_copy_on_sync(self):
@@ -130,6 +152,43 @@ class TestInStep(_GroupsCase):
         EmissiveGroups.sync()
         self.assertAlmostEqual(cmds.getAttr("hullMat_signal.emission"), 2.0)
         self.assertAlmostEqual(EmissiveGroups.list_groups()["signal"]["weight"], 0.5)
+
+    def test_a_setting_that_is_not_keyable_is_kept_in_step(self):
+        """Reviewed 2026-11-24: only keyable attributes were compared, so
+        standardSurface's thinWalled never reached a copy."""
+        EmissiveGroups.add_group("signal", [f"{self.hull}.f[0]"])
+        cmds.setAttr(f"{self.hull_mat}.thinWalled", True)
+        found = EmissiveGroups.sync(check_only=True)
+        self.assertTrue(any("thinWalled" in f for f in found), found)
+        EmissiveGroups.sync()
+        self.assertTrue(cmds.getAttr("hullMat_signal.thinWalled"))
+
+    def test_an_arnold_base_is_compared_at_all(self):
+        """An aiStandardSurface keys 3 attributes: a changed base colour was
+        never seen."""
+        if not cmds.pluginInfo("mtoa", query=True, loaded=True):
+            try:
+                cmds.loadPlugin("mtoa", quiet=True)
+            except Exception:
+                self.skipTest("mtoa not available")
+        base = cmds.shadingNode("aiStandardSurface", asShader=True, name="arnoldMat")
+        cmds.setAttr(f"{base}.emission", 1.0)
+        MatUtils.assign_mat([self.panel], base)
+        EmissiveGroups.add_group("signal", [f"{self.panel}.f[0]"])
+        cmds.setAttr(f"{base}.baseColor", 0.9, 0.1, 0.1, type="double3")
+        found = EmissiveGroups.sync(check_only=True)
+        self.assertTrue(any("baseColorR" in f for f in found), found)
+
+    def test_the_shading_groups_displacement_is_kept_in_step(self):
+        EmissiveGroups.add_group("signal", [f"{self.hull}.f[0]"])
+        disp = cmds.shadingNode("displacementShader", asShader=True, name="bumps")
+        base_sg = cmds.listConnections(f"{self.hull_mat}.outColor", type="shadingEngine")[0]
+        cmds.connectAttr(f"{disp}.displacement", f"{base_sg}.displacementShader", force=True)
+        found = EmissiveGroups.sync(check_only=True)
+        self.assertTrue(any("displacementShader" in f for f in found), found)
+        EmissiveGroups.sync()
+        copy_sg = cmds.listConnections("hullMat_signal.outColor", type="shadingEngine")[0]
+        self.assertEqual(cmds.listConnections(f"{copy_sg}.displacementShader"), [disp])
 
 
 class TestConvertLegacy(_GroupsCase):
@@ -213,6 +272,27 @@ class _ExportCase(_GroupsCase):
         }
         verdict = ptk.ExportVerifier(fbx=fbx, sidecar=None).run(["check_fbx_render_effects"])
         return record, targets, names, played, verdict
+
+
+class TestKeyClipboard(_GroupsCase):
+    def test_staging_an_export_leaves_the_users_key_clipboard(self):
+        """Reviewed 2026-11-24: every export's proxy staging went through
+        copyKey / pasteKey, replacing whatever the user had copied."""
+        EmissiveGroups.add_group("signal", [f"{self.hull}.f[0]"])
+        EmissiveGroups.key_weight("signal", 0.0, frame=1)
+        EmissiveGroups.key_weight("signal", 1.0, frame=24)
+        mine = cmds.spaceLocator(name="mine")[0]
+        cmds.setKeyframe(mine, attribute="translateX", time=5, value=7.0)
+        cmds.copyKey(mine, attribute="translateX")
+        try:
+            EmissiveGroups.stage_export_proxies()
+        finally:
+            EmissiveGroups.remove_export_proxies()
+        target = cmds.spaceLocator(name="target")[0]
+        cmds.pasteKey(target, attribute="translateX")
+        self.assertEqual(
+            cmds.keyframe(f"{target}.translateX", query=True, valueChange=True), [7.0]
+        )
 
 
 class TestRealExport(_ExportCase):
@@ -489,18 +569,8 @@ class TestPublishedStrength(_GroupsCase):
     weight 1 -- glowing 1000 times brighter. Fixed: 2026-11-07
     (``MayaEmissiveGroups.published_strength``)."""
 
-    PLUGINS = {"aiStandardSurface": "mtoa", "StingrayPBS": "shaderFXPlugin"}
     #: Each family's emission scalar, far from 1 so a wrong rule shows.
     SCALARS = {"standardSurface": 3.0, "aiStandardSurface": 3.0, "openPBRSurface": 1000.0, "StingrayPBS": 3.0}
-
-    def _available(self, node_type):
-        plugin = self.PLUGINS.get(node_type)
-        if plugin and not cmds.pluginInfo(plugin, query=True, loaded=True):
-            try:
-                cmds.loadPlugin(plugin, quiet=True)
-            except Exception:
-                return False
-        return node_type in (cmds.allNodeTypes() or [])
 
     def test_every_weight_family_ships_its_base_glow_at_weight_1(self):
         from mayatk.env_utils.material_records import MaterialRecords
@@ -542,6 +612,215 @@ class TestPublishedStrength(_GroupsCase):
                 ran.append(node_type)
         self.assertIn("openPBRSurface", ran, "the gate family must be exercised")
         self.assertIn("standardSurface", ran)
+
+
+class TestStates(_GroupsCase):
+    """An indicator light's states in Maya: each a tint (multiplying the
+    base's emission colour, keyed per channel on the copy's colour) and a
+    weight, keyed stepped; the base colour kept on the copy, so the copy is
+    in step while tinted. Added: 2026-11-24"""
+
+    def _states(self):
+        EmissiveGroups.add_group("led", [f"{self.panel}.f[0]"])
+        EmissiveGroups.set_states("led")
+        for frame, state in ((1, "off"), (10, "green"), (20, "amber")):
+            EmissiveGroups.key_state("led", state, frame=frame)
+        return "panelMat_led"
+
+    def test_a_state_keys_the_base_colour_times_its_tint_stepped(self):
+        copy = self._states()
+        colour = lambda t: [cmds.getAttr(f"{copy}.emissionColor{c}", time=t) for c in "RGB"]
+        for have, want in zip(colour(15), [0.0, 0.6, 0.0]):
+            self.assertAlmostEqual(have, want, places=5, msg="green over the base's blue-white")
+        for have, want in zip(colour(25), [0.2, 0.3, 0.0]):
+            self.assertAlmostEqual(have, want, places=5, msg="amber")
+        self.assertAlmostEqual(cmds.getAttr(f"{copy}.emission", time=5), 0.0, msg="off")
+        self.assertAlmostEqual(cmds.getAttr(f"{copy}.emission", time=15), 1.0)
+        self.assertEqual(set(cmds.keyTangent(f"{copy}.emissionColorG", query=True, outTangentType=True)), {"step"})
+        self.assertEqual(set(cmds.keyTangent(f"{copy}.emission", query=True, outTangentType=True)), {"step"})
+        keys = EmissiveGroups.HOST.emission_tint_keys(copy)
+        self.assertEqual([k[0] for k in keys], [1.0, 10.0, 20.0])
+        for have, want in zip(keys[2][1], [1.0, 0.5, 0.0]):
+            self.assertAlmostEqual(have, want, places=5)
+        self.assertTrue(all(k[2] for k in keys))
+        for have, want in zip(EmissiveGroups.HOST.emission_color(copy), [0.2, 0.6, 1.0]):
+            self.assertAlmostEqual(have, want, places=5, msg="the base's colour, kept")
+        self.assertEqual(EmissiveGroups.HOST.emission_states(copy), EmissiveGroups.states("led"))
+        cmds.currentTime(25)
+        self.assertEqual(EmissiveGroups.list_groups()["led"]["state"], "amber")
+        self.assertEqual(EmissiveGroups.sync(check_only=True), [], "a tinted copy is in step")
+        for have, want in zip([cmds.getAttr(f"{self.panel_mat}.emissionColor{c}") for c in "RGB"], [0.2, 0.6, 1.0]):
+            self.assertAlmostEqual(have, want, places=5, msg="the base keeps its colour")
+        self.assertFalse(cmds.keyframe(self.panel_mat, query=True, keyframeCount=True), "the base is not keyed")
+
+    def test_a_changed_base_colour_rekeys_the_tint_on_sync(self):
+        copy = self._states()
+        cmds.setAttr(f"{self.panel_mat}.emissionColor", 1.0, 1.0, 1.0, type="double3")
+        (found,) = EmissiveGroups.sync(check_only=True)
+        self.assertIn("emission colour", found)
+        EmissiveGroups.sync()
+        for have, want in zip([cmds.getAttr(f"{copy}.emissionColor{c}", time=25) for c in "RGB"], [1.0, 0.5, 0.0]):
+            self.assertAlmostEqual(have, want, places=5, msg="amber, against the new colour")
+        self.assertEqual(set(cmds.keyTangent(f"{copy}.emissionColorR", query=True, outTangentType=True)), {"step"})
+        self.assertEqual(EmissiveGroups.sync(check_only=True), [])
+
+    def test_a_rested_tint_and_its_keys_removed(self):
+        EmissiveGroups.add_group("led", [f"{self.panel}.f[0]"])
+        EmissiveGroups.set_tint("led", [0.0, 1.0, 0.0])
+        for have, want in zip([cmds.getAttr(f"panelMat_led.emissionColor{c}") for c in "RGB"], [0.0, 0.6, 0.0]):
+            self.assertAlmostEqual(have, want, places=5)
+        for have, want in zip(EmissiveGroups.HOST.emission_tint("panelMat_led"), [0.0, 1.0, 0.0]):
+            self.assertAlmostEqual(have, want, places=5)
+        EmissiveGroups.key_tint("led", [1.0, 0.0, 0.0], frame=5)
+        EmissiveGroups.remove_keys("led")
+        self.assertEqual(EmissiveGroups.HOST.emission_tint_keys("panelMat_led"), [])
+        self.assertEqual(cmds.keyframe("panelMat_led", query=True, keyframeCount=True), 0)
+
+    def test_a_mapped_colour_and_a_lambert_are_refused_a_tint_by_name(self):
+        EmissiveGroups.add_group("lamp", [f"{self.hull}.f[0]"])
+        with self.assertRaises(ValueError) as raised:
+            EmissiveGroups.set_tint("lamp", [1.0, 0.0, 0.0])
+        self.assertIn("map", str(raised.exception))
+        lambert = cmds.shadingNode("lambert", asShader=True, name="lamb")
+        cmds.setAttr(f"{lambert}.incandescence", 1.0, 1.0, 1.0, type="double3")
+        MatUtils.assign_mat([self.panel], lambert)
+        EmissiveGroups.add_group("glow", [f"{self.panel}.f[0]"])
+        with self.assertRaises(ValueError) as raised:
+            EmissiveGroups.set_tint("glow", [1.0, 0.0, 0.0])
+        self.assertIn("incandescence", str(raised.exception))
+
+    def test_a_crossing_lands_the_states_and_tint_against_the_base_colour(self):
+        """Review (2026-11-24): a bridge crossing dropped the states and tint
+        keys and landed the weight's keys linear. The copy arrives as an
+        interchange file brings it -- showing the tinted colour, no tags, no
+        keys -- and lands whole, its tint against its base's colour."""
+        copy = self._states()
+        payload = EmissiveGroups.transfer_out(ptk.TransferContext())
+        cmds.currentTime(15)  # green: the colour the file carries
+        for attr in cmds.listAttr(copy, userDefined=True) or []:
+            if cmds.attributeQuery(attr, node=copy, exists=True):  # a compound's children go with it
+                cmds.deleteAttr(f"{copy}.{attr}")
+        cmds.delete(cmds.listConnections(copy, type="animCurve"))
+        EmissiveGroups.transfer_in(json.loads(json.dumps(payload)), ptk.TransferContext())
+        keys = EmissiveGroups.HOST.emission_tint_keys(copy)
+        self.assertEqual([k[0] for k in keys], [1.0, 10.0, 20.0])
+        for have, want in zip(keys[2][1], [1.0, 0.5, 0.0]):
+            self.assertAlmostEqual(have, want, places=5, msg="amber, against the base's colour")
+        for have, want in zip(EmissiveGroups.HOST.emission_color(copy), [0.2, 0.6, 1.0]):
+            self.assertAlmostEqual(have, want, places=5)
+        self.assertEqual(EmissiveGroups.HOST.stepped_emission_frames(copy), [1.0, 10.0, 20.0])
+        self.assertEqual(sorted(EmissiveGroups.HOST.emission_states(copy)), sorted(EmissiveGroups.DEFAULT_STATES))
+        self.assertEqual(EmissiveGroups.sync(check_only=True), [])
+
+    def test_a_colour_with_a_black_channel_is_refused_a_tint_and_rests_by_weight(self):
+        """Review (2026-11-24): over an amber base (1, 0.5, 0) a tint's blue
+        was stored as 0 and read back as 1, so a group showed no state and a
+        joining copy glowed cyan. No tint lights a black channel: refused by
+        name, the group's states its weight's."""
+        cmds.setAttr(f"{self.panel_mat}.emissionColor", 1.0, 0.5, 0.0, type="double3")
+        EmissiveGroups.add_group("led", [f"{self.panel}.f[0]"])
+        with self.assertRaises(ValueError) as raised:
+            EmissiveGroups.set_tint("led", [0.0, 1.0, 0.0])
+        self.assertIn("black channel", str(raised.exception))
+        self.assertEqual(sorted(EmissiveGroups.set_states("led")), ["off", "on"])
+        EmissiveGroups.set_state("led", "off")
+        self.assertEqual(EmissiveGroups.list_groups()["led"]["state"], "off")
+        self.assertAlmostEqual(cmds.getAttr("panelMat_led.emission"), 0.0)
+
+    def test_the_exports_duplicate_merge_keeps_each_groups_copy(self):
+        """Bug (production export, 2026-11-24): two LEDs' copies of one base,
+        alike at rest (both off), were merged by the Scene Exporter's
+        ``reassign_duplicate_materials`` -- one LED then shipped no copy and
+        switched with the other. Their group tags differ: never one. (A
+        texture makes them merge candidates at all, as the lenses' shared
+        cube maps did.)"""
+        albedo = cmds.shadingNode("file", asTexture=True, name="panelAlbedo")
+        cmds.setAttr(f"{albedo}.fileTextureName", "panel_albedo.png", type="string")
+        cmds.connectAttr(f"{albedo}.outColor", f"{self.panel_mat}.baseColor")
+        EmissiveGroups.add_group("led_a", [f"{self.panel}.f[0]"])
+        EmissiveGroups.add_group("led_b", [f"{self.panel}.f[1]"])
+        for group in ("led_a", "led_b"):
+            EmissiveGroups.set_states(group)
+            EmissiveGroups.set_state(group, "off")
+        copies = ["panelMat_led_a", "panelMat_led_b"]
+        self.assertEqual(MatUtils.find_duplicate_materials(copies), {})
+        MatUtils.reassign_duplicate_materials(copies, delete=True)
+        self.assertTrue(all(cmds.objExists(c) for c in copies))
+        self.assertEqual(self.wears(self.panel, 1), "panelMat_led_b")
+
+    def test_a_stingray_lens_takes_its_states(self):
+        """The game shader indicator lenses wear: its ``emissive`` colour."""
+        if not self._available("StingrayPBS"):
+            self.skipTest("shaderFXPlugin not available")
+        lens = MatUtils.create_stingray_shader("lensMat")
+        if not cmds.attributeQuery("emissive", node=lens, exists=True):
+            self.skipTest("StingrayPBS graph without an emissive colour")
+        cmds.setAttr(f"{lens}.emissive", 1.0, 1.0, 1.0, type="double3")
+        cmds.setAttr(f"{lens}.emissive_intensity", 4.0)
+        MatUtils.assign_mat([self.panel], lens)
+        EmissiveGroups.add_group("led", [f"{self.panel}.f[0]"])
+        EmissiveGroups.set_states("led")
+        EmissiveGroups.key_state("led", "off", frame=1)
+        EmissiveGroups.key_state("led", "blue", frame=10)
+        self.assertEqual([cmds.getAttr(f"lensMat_led.emissive{c}", time=12) for c in "RGB"], [0.0, 0.0, 1.0])
+        self.assertAlmostEqual(cmds.getAttr("lensMat_led.emissive_intensity", time=12), 4.0)
+        self.assertAlmostEqual(cmds.getAttr("lensMat_led.emissive_intensity", time=5), 0.0)
+        self.assertEqual(EmissiveGroups.sync(check_only=True), [])
+
+
+class TestStatesExport(_ExportCase):
+    """A group keyed through its states, exported for real: the record names
+    the tint channels, the states and the tint the delivered material shows;
+    each tint channel rides its proxy as the tint; the GLB plays weight x
+    tint on the copy's one emissiveFactor. Added: 2026-11-24"""
+
+    def test_a_states_group_ships_its_tint_and_plays_in_the_glb(self):
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        EmissiveGroups.add_group("led", [f"{self.panel}.f[0]"])
+        EmissiveGroups.set_states("led")
+        for frame, state in ((1, "off"), (12, "green"), (30, "amber")):
+            EmissiveGroups.key_state("led", state, frame=frame)
+        cmds.currentTime(1)
+        fbx = os.path.join(self.out, "states.fbx")
+        self.addCleanup(mel.eval, "FBXResetExport")
+        with FbxUtils.export_prepared(FbxUtils.export_context(), stagers=("render_effects",)):
+            staged = sorted(n.split("|")[-1] for n in cmds.ls("*.emissiveGroupProxy", objectsOnly=True, long=True))
+            FbxUtils.apply_takes([("ShotA", 1, 48)])
+            try:
+                cmds.select([self.panel, DataNodes.EXPORT], replace=True)
+                mel.eval("FBXExportInAscii -v false")
+                mel.eval(f'FBXExport -f "{fbx.replace(chr(92), "/")}" -s')
+            finally:
+                FbxUtils.reset_takes()
+        self.assertEqual(staged, [f"panelMat_led__{c}" for c in ("emission", "tint_b", "tint_g", "tint_r")])
+        record, targets, names, played, verdict = self._read(fbx)
+        (entry,) = record["materials"]
+        self.assertEqual(entry["channels"], ["emission", "tint_r", "tint_g", "tint_b"])
+        self.assertEqual([s["name"] for s in entry["states"]], ["off", "green", "blue", "amber", "red"])
+        self.assertEqual([round(c, 4) for c in entry["emission_color"]], [0.2, 0.6, 1.0])
+        self.assertEqual(entry["tint"], [1.0, 1.0, 1.0], "off shows white at frame 1")
+        self.assertTrue(verdict.ok, verdict.summary())
+        file = ptk.FbxFile.load(fbx, decode_arrays=ptk.FbxFile.CURVE_ARRAYS)
+        curves = ptk.MeshConvert.render_effect_curves(file)["ShotA"]
+        green = sorted({round(v, 3) for _t, v, _i in curves[("panelMat_led", "tint_g")]})
+        self.assertEqual(green, [0.5, 1.0], "the tint, not the colour")
+        self.assertEqual(played, {"panelMat_led"})
+        glb = fbx[:-4] + ".glb"
+        with ptk.MeshConvert.open_glb(glb) as edit:
+            gltf = edit.gltf
+        index = names.index("panelMat_led")
+        per_clip = {
+            a.get("name"): [
+                c["target"]["extensions"]["KHR_animation_pointer"]["pointer"]
+                for c in a["channels"]
+                if c["target"].get("path") == "pointer"
+            ].count(f"/materials/{index}/emissiveFactor")
+            for a in gltf["animations"]
+        }
+        # Maya's writer keeps its default take beside the split one.
+        self.assertEqual(per_clip.get("ShotA"), 1, per_clip)
+        self.assertEqual(set(per_clip.values()), {1}, f"one factor channel per clip: {per_clip}")
 
 
 class TestNamespacedExport(_ExportCase):
