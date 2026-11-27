@@ -214,7 +214,7 @@ fold); set them with **Set Limits From Pose**.
 ## What ships
 
 **The skeleton and the parts** -- ordinary node animation any engine plays. The
-controls are Maya controllers, so the export's **Exclude Rig Helpers** sweep
+controls are Maya controllers, so the export's **Exclude ▸ Rig Helpers** sweep
 drops them with their groups (`RigGraphExtractor.machinery` seeds every
 controller-tagged transform).
 

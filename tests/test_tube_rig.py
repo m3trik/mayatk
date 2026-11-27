@@ -1271,7 +1271,7 @@ def _make_plug(name="plug", body_first=True, body_y=8.5):
     """A combined multi-shell cable plug: a short 3-ring body over an 8-unit
     cable, combined so the BODY owns the lowest edge ids when *body_first*.
 
-    The production pair (SOL_REPLACE_ASSEMBLY's PLUG_UPPER/LOWER_GEO, 4 shells
+    The production pair (a production scene's PLUG_UPPER/LOWER_GEO, 4 shells
     each) differed only in shell order, and the one whose short body came
     first in id order rigged a 1-unit chain on the body instead of the cable.
 

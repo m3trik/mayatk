@@ -1835,7 +1835,8 @@ class FbxUtils(ptk.HelpMixin):
         cls, fbx_path: str, logger: Optional[logging.Logger] = None
     ) -> Optional[Dict[str, Any]]:
         """Leave *fbx_path* exactly its declared takes, each declaring what it
-        should: one per shot, or a shotless file's one take over what it holds.
+        should: the ones the shots hold, or a shotless file's one take over what
+        it holds.
 
         The one post-write step every Maya FBX write takes, last before
         anything reads the file (the Scene Exporter's, :meth:`export`'s, the
@@ -2017,7 +2018,7 @@ class FbxUtils(ptk.HelpMixin):
 
         Parameters:
             takes: Sequence of ``{"name","start","end"}`` mappings (what
-                ``ShotStore.declared_takes`` returns: one per shot) or
+                ``ShotStore.declared_takes`` returns: the ones the shots hold) or
                 ``(name, start, end)`` tuples.
             resample: Resample All for the write, whatever a preset left:
                 on, so every take carries every channel; off, so the curves
@@ -2114,9 +2115,10 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def declared_takes() -> list:
-        """The takes an export of this scene splits: one per shot the scene's
-        shot store declares, named by its clip and spanning its range
-        (``ShotStore.declared_takes``) -- what :meth:`apply_takes_from_node`
+        """The takes an export of this scene splits: the ones the scene's shots
+        hold (a shot that names none is its own), each named by its clip and
+        spanning its range (``ShotStore.declared_takes``) -- what
+        :meth:`apply_takes_from_node`
         realizes by default. The shot record states no frames (each shot's
         take holds them), so the store is the one source of the ranges at
         export time. ``[]`` when the scene has no shots: the write then ships
@@ -2365,7 +2367,10 @@ class FbxUtils(ptk.HelpMixin):
         ship none of (``withheld``: the ``"withheld_records"`` hook, the
         lightmaps record a moved lightmap set has made false). *omit* names
         nodes under the scope the write leaves out (the Scene Exporter's Most
-        Detailed Only levels): none of them ships, so no record names them."""
+        Detailed Only levels): none of them ships, so no record names them.
+        *excluded* names the records the write ships none of, by key (the
+        Scene Exporter's Exclude Audio, ``ExportRun.excluded_records``):
+        ``ptk.ExportContext.excluded``, never produced."""
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}
@@ -2805,7 +2810,7 @@ class FbxUtils(ptk.HelpMixin):
         """Realize declared takes on **every** FBX export -- shot-agnostic.
 
         Installs the shared before-export hook directly: it applies the takes
-        the scene's shots declare, one per shot (:meth:`declared_takes`), and
+        the scene's shots hold (:meth:`declared_takes`), and
         after the write drops the whole-timeline take Maya writes beside them
         (:meth:`drop_undeclared_takes`, the Scene Exporter's and the
         hand-offs' step too), so the file ships exactly the shots' takes; a

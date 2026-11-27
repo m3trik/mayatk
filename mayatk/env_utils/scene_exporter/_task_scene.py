@@ -233,6 +233,74 @@ class _SceneTasksMixin(_TaskDataMixin):
         )
         return len(changed)
 
+    def repair_orig_shapes(self):
+        """Keep every orig shape in the export set from reaching the FBX.
+
+        The auto-fix for the two orig-shape faults
+        :meth:`check_default_materials` reports (:meth:`_orig_faults` is the
+        one definition both read):
+
+        - **Ahead of the real shape**: the orig goes behind its transform's
+          real shape (``reorder -back``). Measured on the production office's
+          ``WALL_A`` (2026-11-24): its orig listed ahead of a real shape
+          instanced over 24 walls shipped WALL_A on ``Default_Material``;
+          with the orig moved back all 24 carried the authored material, the
+          history untouched. Moving the REAL shape to the front instead does
+          nothing there: ``reorder -front`` on an instanced shape's path
+          silently keeps the order, and deleting the history refuses an
+          instanced shape too.
+        - **Riding other meshes**: the orig's path under every transform whose
+          real shape it does not feed (its own is the one whose history holds
+          it) is removed; the node stays with its own mesh. An orig no
+          transform's history holds stays on every mesh it rides, for the
+          check to report -- still moved behind a real shape it leads.
+
+        Permanent scene improvement, as the name repair is: an orig behind its
+        mesh, and off meshes it never fed, is what Maya itself would have made.
+        """
+        objects = self._live_objects()
+        if not objects:
+            return
+        moved, removed, refused = [], [], []
+        for shape in NodeUtils.get_shapes(
+            objects, descend=True, type="mesh", no_intermediate=False
+        ):
+            if not NodeUtils.is_intermediate(shape) or not cmds.objExists(shape):
+                continue
+            uuid = cmds.ls(shape, uuid=True)
+            # Twice at most: an orig taken off a foreign mesh can still lead its own.
+            for _ in range(2):
+                acted = False
+                for kind, parents, _reason in self._orig_faults(
+                    cmds.ls(uuid, long=True)[0]
+                ):
+                    for parent in parents:  # none: no parent can be told apart
+                        path = self._shape_path_under(parent, uuid)
+                        if path is None:  # taken off it a moment ago
+                            continue
+                        try:
+                            if kind == self._ORIG_RIDING:
+                                cmds.parent(path, removeObject=True, shape=True)
+                                removed.append(path)
+                            else:
+                                cmds.reorder(path, back=True)
+                                moved.append(path)
+                            acted = True
+                        except RuntimeError as error:  # a referenced or locked node
+                            refused.append(f"{path} ({error})")
+                if not acted:
+                    break
+        for path in moved:
+            self.logger.info(f"Moved orig shape behind its real shape: {path}")
+        for path in removed:
+            self.logger.info(f"Took orig shape off a mesh it does not feed: {path}")
+        for entry in refused:
+            self.logger.warning(f"Orig shape left as it was: {entry}")
+        if moved:
+            self.record_kept_edit("orig shapes moved behind their meshes")
+        if removed:
+            self.record_kept_edit("orig shapes taken off meshes they do not feed")
+
     def _shear_scan_nodes(self) -> List[str]:
         """Export-set transforms plus every joint under them.
 
@@ -466,9 +534,9 @@ class _SceneTasksMixin(_TaskDataMixin):
                 catches ``hull_proxy``. A pattern with no wildcard character
                 still matches only that exact name, as before.
             case_sensitive: Match names exactly. Off by default, so ``"temp"``
-                catches ``TEMP``. The UI arms it from the Ignore row's option-box
-                toggle; a headless caller passes the pair as the dict the task
-                dispatcher unpacks -- ``{"names": "Temp", "case_sensitive": True}``
+                catches ``TEMP``. The UI arms it from the Exclude ▸ Groups row's
+                option-box toggle; a headless caller passes the pair as the dict the
+                task dispatcher unpacks -- ``{"names": "Temp", "case_sensitive": True}``
                 -- while a bare string still selects the insensitive default.
         """
         if not self.objects or not names:

@@ -111,6 +111,10 @@ for _stream in (sys.stdout, sys.stderr):
 SCRIPTS_ROOT = Path(__file__).resolve().parents[2]
 DRIVER_PATH = Path(__file__).resolve().parent / "_suite_driver.py"
 SUITE_COMPLETE_MARKER = "# SUITE COMPLETE"
+#: A run's own output folder in the ecosystem temp root (``MayaTestRunner.run_dir``):
+#: its ``TempArtifacts`` prefix, and the days a run's outputs are kept.
+RUN_PREFIX = "mayatk_runs"
+RUN_DAYS = 7
 
 #: Ecosystem package roots, pinned for both this process's ``sys.path`` and the
 #: mayapy children's PYTHONPATH (``_child_env``) -- one list so the two can't drift.
@@ -415,16 +419,23 @@ class MayaTestRunner:
         self.init_grace = 300
 
         self.test_dir = Path(__file__).parent
-        self.temp_test_dir = self.test_dir / "temp_tests"
+        import pythontk as ptk
+
+        #: This run's outputs -- its results, each chunk's and the GUI pass's
+        #: files, the suite driver's sandboxes -- in a folder of its own in the
+        #: ecosystem temp root (:class:`pythontk.TempArtifacts`), kept
+        #: ``RUN_DAYS`` for a look after the run, so ``tests/temp_tests``
+        #: stays the repo's hand-kept scratch. Made here, before the run routes
+        #: its temp dir into the throwaway sandbox root (:meth:`_isolate_temp`).
+        self.run_dir = Path(ptk.TempArtifacts(RUN_PREFIX, max_age_days=RUN_DAYS).dir_path())
         #: The mayapy chunks' working directory (:meth:`_child_cwd`).
         self._cwd_store = None
         self._cwd = None
-        self.temp_test_dir.mkdir(exist_ok=True)
 
         # Scoped by port AND runner PID: two concurrent invocations would
         # otherwise share one file and clobber each other's results.
         self.results_file = (
-            self.temp_test_dir / f"test_results_{port}_{os.getpid()}.txt"
+            self.run_dir / f"test_results_{port}_{os.getpid()}.txt"
         )
 
         #: The kept mayapys of a ``--reuse`` run, one per --jobs slot
@@ -445,34 +456,10 @@ class MayaTestRunner:
         # _record_launch_output) -- replayed in the GUI deferral report.
         self._launch_log = ""
 
-        self._sweep_stale_artifacts()
-
         try:
             self.connection = maya_connection.MayaConnection.get_instance()
         except (NameError, AttributeError):  # module missing / bound to None
             self.connection = None
-
-    def _sweep_stale_artifacts(self):
-        """Best-effort sweep of files from long-gone runs."""
-        now = time.time()
-        try:
-            for pattern, max_age in (
-                ("test_results*.txt", 7 * 86400),
-                ("chunk_*.*", 7 * 86400),
-                ("gui_*.*", 7 * 86400),
-            ):
-                for stale in self.temp_test_dir.glob(pattern):
-                    if stale != self.results_file and (
-                        now - stale.stat().st_mtime > max_age
-                    ):
-                        stale.unlink(missing_ok=True)
-            # Shots-prefs sandboxes leak when a chunk native-crashes
-            # (os._exit / segfault bypasses cleanup) — sweep older dirs.
-            for stale_dir in self.temp_test_dir.glob("shots_prefs_test_*"):
-                if stale_dir.is_dir() and (now - stale_dir.stat().st_mtime > 86400):
-                    shutil.rmtree(stale_dir, ignore_errors=True)
-        except OSError:
-            pass
 
     # ------------------------------------------------------------------
     # Connection (GUI / command-port path)
@@ -757,6 +744,10 @@ except Exception as e:
         (``TestSandbox.host_environ``) -- given the root, a later run's sweep
         deleted files from under a Maya the user was still working in.
 
+        Then the run's start ages out ``tests/temp_tests``
+        (``TestSandbox.sweep_scratch``), a step of its own: a sweep that fails
+        is said as that, never as an isolation that did not happen.
+
         Best-effort by design: an unimportable pythontk is already a failing
         run, and it must fail on its own modules rather than here.
         """
@@ -768,6 +759,10 @@ except Exception as e:
             print(f"[WARN] temp isolation unavailable ({error}); chunks use real TEMP.")
             return None
         print(f"Temp: {root}")
+        try:
+            TestSandbox.sweep_scratch(os.path.dirname(os.path.abspath(__file__)))
+        except Exception as error:  # noqa: BLE001
+            print(f"[WARN] scratch sweep failed ({error}); tests/temp_tests left as it is.")
         return root
 
     def _child_cwd(self) -> str:
@@ -1020,7 +1015,7 @@ except Exception as e:
 
         while pending:
             attempt += 1
-            base = self.temp_test_dir / f"chunk_{os.getpid()}_{idx:02d}_{attempt}"
+            base = self.run_dir / f"chunk_{os.getpid()}_{idx:02d}_{attempt}"
             cfg_path = base.with_suffix(".json")
             res_path = base.with_suffix(".txt")
             prog_path = base.with_suffix(".progress")
@@ -1031,7 +1026,7 @@ except Exception as e:
                 "module_paths": {m: module_paths[m] for m in pending},
                 "results_file": str(res_path).replace("\\", "/"),
                 "progress_file": str(prog_path).replace("\\", "/"),
-                "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
+                "temp_dir": str(self.run_dir).replace("\\", "/"),
                 "extended": extended,
                 "patterns": self.patterns,
                 "reload": False,
@@ -1419,7 +1414,7 @@ except Exception as e:
             self._defer_gui_modules(gui_modules, "GUI connection failed")
             return False
 
-        base = self.temp_test_dir / f"gui_{os.getpid()}"
+        base = self.run_dir / f"gui_{os.getpid()}"
         cfg_path = base.with_suffix(".json")
         res_path = base.with_suffix(".txt")
         # A session this runner did not launch -- the user's own, in-session
@@ -1436,7 +1431,7 @@ except Exception as e:
             "module_paths": {m: module_paths[m] for m in gui_modules},
             "results_file": str(res_path).replace("\\", "/"),
             "progress_file": str(base.with_suffix(".progress")).replace("\\", "/"),
-            "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
+            "temp_dir": str(self.run_dir).replace("\\", "/"),
             "extended": extended,
             "patterns": self.patterns,
             "reload": users_session,

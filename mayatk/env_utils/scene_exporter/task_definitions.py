@@ -47,6 +47,9 @@ class _TaskDefinitionsMixin:
     _lod_output_options: Dict[str, Any] = ptk.ExportProfile.LOD_OUTPUT_OPTIONS
     _bake_range_options: Dict[str, Any] = ptk.ExportProfile.BAKE_RANGE_OPTIONS
     _optimize_keys_options: Dict[str, Any] = ptk.ExportProfile.OPTIMIZE_KEYS_OPTIONS
+    _hierarchy_check_options: Dict[str, Any] = (
+        ptk.ExportProfile.HIERARCHY_CHECK_OPTIONS
+    )
     _secondary_max_size_options: Dict[str, Any] = (
         ptk.ExportProfile.SECONDARY_MAX_SIZE_OPTIONS
     )
@@ -158,10 +161,13 @@ class _TaskDefinitionsMixin:
                 ),
                 "setChecked": True,
             },
+            # The Exclude rows read under their section's title (the panel's
+            # Settings layout), so each names only what it leaves out; the
+            # tooltip titles keep the whole name.
             "exclude_hdr": {
                 "widget_type": "QCheckBox",
                 "panel": "settings",
-                "setText": "Exclude HDR Environment",
+                "setText": "HDR Environment",
                 "setToolTip": TooltipFormat.fmt(
                     title="Exclude HDR Environment",
                     body="Keep the Arnold HDR environment light (aiSkyDomeLight) "
@@ -182,7 +188,7 @@ class _TaskDefinitionsMixin:
             "drop_rig_apparatus": {
                 "widget_type": "QCheckBox",
                 "panel": "settings",
-                "setText": "Exclude Rig Helpers",
+                "setText": "Rig Helpers",
                 "setToolTip": TooltipFormat.fmt(
                     title="Exclude Rig Helpers",
                     body="Drop the parts of a rig that only drove the animation — "
@@ -203,6 +209,31 @@ class _TaskDefinitionsMixin:
                     ],
                 ),
                 "setChecked": True,
+            },
+            # A mode, not a task: ``ExportRun.from_tasks`` pops it; the publish
+            # leaves the audio record out (``ExportRun.excluded_records``) and
+            # the write turns the FBX plug-in's Audio include off.
+            "exclude_audio": {
+                "widget_type": "QCheckBox",
+                "panel": "settings",
+                "setText": "Audio",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Exclude Audio",
+                    body="Ship no audio: the deliverable carries none of the "
+                    "scene's sounds, nor the cues that play them.",
+                    notes=[
+                        "Leaves the <b>audio</b> record (each sound's cues, clip "
+                        "by clip) off the data_export carrier, and with it the "
+                        "sound files the FBX embeds for those cues: the FBX and "
+                        "the GLB built from it carry none.",
+                        "Also turns off the FBX plug-in's own Audio include, "
+                        "whatever the FBX preset says: it writes the Time "
+                        "Editor's audio clips into the file, by path.",
+                        "The scene is not changed: the tracks and their record "
+                        "stay for the next export.",
+                    ],
+                ),
+                "setChecked": False,
             },
             # A mode, not a task: ``ExportRun.from_tasks`` pops it and hands it to
             # ``prepare_lods``, armed on every export.
@@ -848,9 +879,8 @@ class _TaskDefinitionsMixin:
                         "Applies only when Bake Animation is enabled in the FBX "
                         "export settings; otherwise it is skipped.",
                         "Runs last, so it measures the final state of the "
-                        "curves — and every mode is widened to cover the shots' "
-                        "takes (one per shot), so no choice here can cut a take "
-                        "short of its shot.",
+                        "curves — and every mode is widened to cover the takes "
+                        "the shots hold, so no choice here can cut a take short.",
                         "The preset's range is restored after the write.",
                     ],
                 ),
@@ -886,13 +916,37 @@ class _TaskDefinitionsMixin:
                 ),
                 "setChecked": True,
             },
+            "repair_orig_shapes": {
+                "widget_type": "QCheckBox",
+                "group": "Hierarchy",
+                "setText": "Fix Orig Shapes",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Fix Orig Shapes",
+                    body="Keep modelling and deformer history's hidden orig "
+                    "shapes out of the FBX, where they put the default "
+                    "material — or the wrong geometry — on a mesh.",
+                    bullets=[
+                        "An orig shape listed ahead of its transform's real "
+                        "shape moves behind it; the history stays as it is.",
+                        "An orig shape parented under a mesh it does not feed "
+                        "is taken off that mesh; its own keeps it.",
+                    ],
+                    notes=[
+                        "Check For Default Materials reports what it could not "
+                        "fix (a referenced or locked node).",
+                        "Permanent scene change — not reverted after export.",
+                    ],
+                ),
+                "setChecked": True,
+            },
             "ignore_groups": {
                 "widget_type": "QLineEdit",
                 "panel": "settings",
-                "set_row_label": "Ignore",
-                "setPlaceholderText": "Group names to ignore (comma-separated, wildcards ok)",
+                "set_row_label": "Groups",
+                "setPlaceholderText": "Group names to leave out "
+                "(comma-separated, wildcards ok)",
                 "setToolTip": TooltipFormat.fmt(
-                    title="Ignore Groups",
+                    title="Exclude Groups",
                     body="Comma-separated name patterns of top-level groups to "
                     "drop from the export set.",
                     notes=[
@@ -992,23 +1046,36 @@ class _TaskDefinitionsMixin:
                 "setChecked": True,
             },
             "check_hierarchy_vs_existing_fbx": {
-                "widget_type": "QCheckBox",
+                "widget_type": "ComboBox",
                 "group": "Hierarchy & Naming",
-                "setText": "Check Hierarchy vs Existing FBX",
+                "set_row_label": "Hierarchy vs Previous",
                 "setToolTip": TooltipFormat.fmt(
                     title="Check Hierarchy vs Existing FBX",
-                    body="Fails the export when the hierarchy differs from the "
-                    "previous export — nodes that went missing or appeared, the "
-                    "signature of an accidental change.",
+                    body="Fails the export when the hierarchy changed since the "
+                    "previous export, the signature of an accidental change. The "
+                    "dial is how much of a change passes.",
+                    bullets=[
+                        "<b>Strict</b> — any node that went missing or appeared "
+                        "fails.",
+                        "<b>New Nodes Pass</b> — a node that went missing, was "
+                        "renamed or moved still fails: an engine that imported the "
+                        "previous export (Unity) holds each node by its path, so "
+                        "what a built project put on it breaks. A new node passes "
+                        "and is listed in the log, unless it takes the name of a "
+                        "node that shipped (that name would find two).",
+                    ],
                     notes=[
                         "The baseline is recorded on the scene at every export, "
                         "so renaming the Output Filename keeps it; no FBX "
                         "reimport is needed.",
                         "A scene saved as a copy (the source still on disk) "
                         "starts its own baseline at its first export.",
+                        "<b>OFF</b> disables the check.",
                     ],
                 ),
-                "setChecked": False,
+                # OFF, Strict (where a preset keeps the old checkbox's true),
+                # New Nodes Pass.
+                "add": self._hierarchy_check_options,
             },
             "check_hidden_geometry": {
                 "widget_type": "QCheckBox",
@@ -1092,8 +1159,8 @@ class _TaskDefinitionsMixin:
                         "leaves part of a mesh on the default is named too.",
                         "An ORIG shape (deformer / modelling history) listed "
                         "ahead of its transform's real shape ships that "
-                        "transform on 'Default_Material' in the FBX; delete "
-                        "the mesh's history to clear it.",
+                        "transform on 'Default_Material' in the FBX; Fix Orig "
+                        "Shapes repairs it before this check runs.",
                         "Assign a material, or drop the object from the export "
                         "set, to pass.",
                     ],

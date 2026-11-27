@@ -14,6 +14,7 @@ Tests for UvUtils class functionality including:
 
 import math
 import unittest
+import numpy as np
 import pythontk as ptk
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.uv_utils._uv_pack import _U3dPackInternal, _UvPackInternal
@@ -2919,29 +2920,135 @@ class TestPackUvs(MayaTkTestCase):
             self.assertGreaterEqual(min(u0, v0), -1e-4, f"{o} left the tile")
             self.assertLessEqual(max(u1, v1), 1.0 + 1e-4, f"{o} left the tile")
 
-    def test_pinched_shell_mesh_is_rejected_and_restored(self):
+    def test_a_pinched_shell_mesh_packs_with_nothing_on_anything(self):
         """A shell pinched to another at a single UV point is two EDGE-connected
-        charts to the engine, which packs them apart without duplicating the
-        shared vertex — unreproducible as a rigid per-shell move. That mesh must
-        be put back (the density pre-pass already rewrote it), not left floating
-        over the packed ones.
-        """
+        charts to the engine, which packed them apart without duplicating the
+        shared UV, so this mesh used to be refused (a production lightmap
+        layout too, shell 14). ``ptk.UvPack`` now packs such a shell by its
+        bounds: it moves as one piece, and the overlap guard holds -- no texel
+        two surface points meet in that they did not before."""
         pinched = cmds.polyPlatonicSolid(name="pk_plat", ch=False)[0]
         ordinary = cmds.polyCube(name="pk_ok", ch=False)[0]
         for o in (pinched, ordinary):
             cmds.polyAutoProjection(o, layoutMethod=0, layout=2, planes=6, ch=False)
-        before = self._bbox(pinched)
 
         result = UvUtils.pack_uvs([pinched, ordinary], map_size=1024)
 
-        self.assertEqual([n for n, _ in result.failed], ["pk_plat"])
-        self.assertIn("pinched", result.failed[0][1])
-        after = self._bbox(pinched)
-        for axis_before, axis_after in zip(before, after):
-            for b, a in zip(axis_before, axis_after):
-                self.assertAlmostEqual(b, a, places=6, msg="rejected mesh not restored")
-        # the healthy mesh still packed
+        self.assertEqual(result.failed, [], result.failed)
+        self.assertEqual(len(result.succeeded), 2)
+        self.assertEqual(
+            _UvPackInternal._island_overlaps([(pinched, None), (ordinary, None)], 1024),
+            0,
+        )
+        (u0, u1), (v0, v1) = self._bbox(pinched)
+        self.assertGreaterEqual(min(u0, v0), -1e-4)
+        self.assertLessEqual(max(u1, v1), 1.0 + 1e-4)
+
+    @staticmethod
+    def _fold_face(mesh, face=0):
+        """Fold *face*'s quad over itself: its fan's last corner moved inside
+        its first triangle. Returns the corners' UV indices (a, b, c, d)."""
+        _uvs, tris, _shells, ids, _areas = _UvPackInternal._uv_arrays(
+            mesh, [f"{mesh}.f[{face}]"]
+        )
+        a, b, c = (int(ids[i]) for i in tris[0])
+        d = int(ids[tris[1][2]])
+        corners = [cmds.polyEditUV(f"{mesh}.map[{i}]", query=True) for i in (a, b, c)]
+        u, v = (sum(p[k] for p in corners) / 3.0 for k in (0, 1))
+        cmds.polyEditUV(f"{mesh}.map[{d}]", uValue=u, vValue=v, relative=False)
+        return a, b, c, d
+
+    @staticmethod
+    def _signed_area(mesh, ids):
+        (au, av), (bu, bv), (cu, cv) = (
+            cmds.polyEditUV(f"{mesh}.map[{i}]", query=True) for i in ids
+        )
+        return (bu - au) * (cv - av) - (cu - au) * (bv - av)
+
+    def test_a_fold_inside_a_shell_is_kept_and_the_pack_succeeds(self):
+        """A fold is the shell's own: the pack moves each shell as one piece,
+        so it neither makes nor mends one. The guard used to compare every
+        overlap before and after, and the pack's scale-up enlarged a
+        production lightmap's folds (+639 texels): refused, and the restore
+        failed. It judges islands on islands only now."""
+        cube = cmds.polyCube(name="pk_fold", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)  # six shells, apart
+        a, b, c, d = self._fold_face(cube)
+        flipped = self._signed_area(cube, (a, c, d)) * self._signed_area(cube, (a, b, c))
+        self.assertLess(flipped, 0, "the fixture folds")
+
+        result = UvUtils.pack_uvs([cube], map_size=1024)
+
+        self.assertEqual(result.failed, [], result.failed)
         self.assertEqual(len(result.succeeded), 1)
+        self.assertEqual(_UvPackInternal._island_overlaps([(cube, None)], 1024), 0)
+        kept = self._signed_area(cube, (a, c, d)) * self._signed_area(cube, (a, b, c))
+        self.assertLess(kept, 0, "the fold moved with its shell")
+
+    def test_each_triangles_world_area_comes_with_its_uvs(self):
+        """What the pack evens density by: each triangle's world area, from the
+        same walk as its UVs, so they stay aligned -- past an unmapped face
+        too, whose corners take no UV row but still take vertex rows."""
+        cube = cmds.polyCube(name="pk_area", width=2, height=2, depth=2, ch=False)[0]
+        cmds.polyMapDel(f"{cube}.f[1]", ch=False)
+        _uvs, tris, _shells, _ids, areas = _UvPackInternal._uv_arrays(cube, areas=True)
+        self.assertEqual(len(areas), len(tris))
+        self.assertAlmostEqual(float(areas.sum()), 20.0, places=5)  # 5 of 6 faces
+        scoped = _UvPackInternal._uv_arrays(cube, [f"{cube}.f[4]"], areas=True)[4]
+        self.assertAlmostEqual(float(scoped.sum()), 4.0, places=5)
+        self.assertIsNone(_UvPackInternal._uv_arrays(cube)[4])
+
+    def test_each_shell_is_written_in_one_call(self):
+        """A shell's move (mirror, rotation, scale, offset) is one polyEditUV
+        call: Maya scales (a negative U scale mirrors) and rotates about the
+        pivot, then offsets, the similarity's own order. Four calls a shell
+        were a quarter of a production door's pack (5,117 calls, 4.7 s)."""
+        from unittest import mock
+
+        cube = cmds.polyCube(name="pk_calls", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)  # six shells
+        with mock.patch.object(cmds, "polyEditUV", wraps=cmds.polyEditUV) as edit:
+            result = UvUtils.pack_uvs([cube], map_size=1024)
+        self.assertEqual(result.failed, [], result.failed)
+        self.assertLessEqual(edit.call_count, 6)
+        self.assertEqual(_UvPackInternal._island_overlaps([(cube, None)], 1024), 0)
+
+    def test_islands_packed_on_each_other_are_refused_before_anything_is_written(self):
+        """The layout is checked before the write: an engine result that puts
+        one island on another writes nothing (no write, then a restore that
+        can fail on its own)."""
+        from unittest import mock
+
+        cube = cmds.polyCube(name="pk_stack", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)
+        before = self._uvs(cube)
+        real = _UvPackInternal._engine_pack
+
+        def stacking(meshes, **params):
+            packed = real(meshes, **params)
+            uvs, tris = meshes[0]
+            island = np.asarray(
+                ptk.MathUtils.connected_components(
+                    len(uvs), np.asarray(tris, dtype=np.int64)
+                )
+            )
+            first, second = np.unique(island)[:2]
+            out = packed.uvs[0]
+            out[island == second] += (
+                out[island == first].mean(axis=0) - out[island == second].mean(axis=0)
+            )
+            return packed
+
+        with mock.patch.object(
+            _UvPackInternal, "_engine_pack", staticmethod(stacking)
+        ), mock.patch.object(cmds, "polyEditUV", wraps=cmds.polyEditUV) as edit:
+            result = UvUtils.pack_uvs([cube], map_size=1024)
+
+        self.assertEqual(result.succeeded, [])
+        self.assertEqual(len(result.failed), 1)
+        self.assertIn("nothing written", result.failed[0][1])
+        edit.assert_not_called()
+        self.assertEqual(self._uvs(cube), before)
 
     def test_cut_cube_fills_a_useful_fraction_of_every_coverage_box(self):
         """User-reported regression: a cube with all edges cut filled only
@@ -3143,6 +3250,104 @@ class TestPackUvsU3d(MayaTkTestCase):
         (u0, u1), _ = self._bbox(a)
         self.assertGreaterEqual(u0, 9.0)
         self.assertLessEqual(u1, 10.0)
+
+    def test_a_mesh_u3dlayout_leaves_overlapping_is_packed_by_xatlas_instead(self):
+        """u3dLayout misjudges a folded shell's footprint and packs neighbours
+        onto it (a production door: 1,982 texels where two surface points meet,
+        from none). Any pack that adds overlap is caught (the overlap guard) and
+        that mesh packed by xatlas instead, said in ``fallbacks``. Stood in for
+        here by a u3dLayout that leaves one face's shell on another's."""
+        from unittest import mock
+
+        if not ptk.UvPack.available():
+            self.skipTest("xatlas not installed")
+        cube = cmds.polyCube(name="u3dFold", ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)  # six shells, apart
+        real = cmds.u3dLayout
+
+        def stacking(*args, **kwargs):
+            real(*args, **kwargs)
+            shell = cmds.polyListComponentConversion(f"{cube}.f[1]", toUV=True)
+            target = cmds.polyEvaluate(f"{cube}.f[0]", boundingBoxComponent2d=True)
+            mine = cmds.polyEvaluate(f"{cube}.f[1]", boundingBoxComponent2d=True)
+            cmds.polyEditUV(
+                shell,
+                uValue=target[0][0] - mine[0][0],
+                vValue=target[1][0] - mine[1][0],
+                relative=True,
+            )
+
+        with mock.patch.object(cmds, "u3dLayout", side_effect=stacking):
+            result = UvUtils.pack_uvs([cube], engine="u3d", map_size=1024)
+
+        self.assertEqual(result.failed, [], result.failed)
+        self.assertEqual([CoreUtils.short_name(m) for m in result.fallbacks], [cube])
+        self.assertRegex(result.fallback_reason, r"^u3dLayout put \d+ texel\(s\) of shells")
+        self.assertEqual(_UvPackInternal._island_overlaps([(cube, None)], 1024), 0)
+
+    def test_objects_u3dlayout_packs_on_each_other_are_all_packed_by_xatlas(self):
+        """The objects of one pack share its box, so one object's shell on
+        another's is an overlap neither shows alone: the guard judges them
+        together, and xatlas then packs them all, together."""
+        from unittest import mock
+
+        if not ptk.UvPack.available():
+            self.skipTest("xatlas not installed")
+        a = cmds.polyCube(name="u3dA", ch=False)[0]
+        b = cmds.polyCube(name="u3dB", ch=False)[0]
+        for cube in (a, b):
+            cmds.polyMapCut(f"{cube}.e[*]", ch=False)
+        real = cmds.u3dLayout
+
+        def stacking(*args, **kwargs):
+            real(*args, **kwargs)
+            shell = cmds.polyListComponentConversion(f"{b}.f[1]", toUV=True)
+            target = cmds.polyEvaluate(f"{a}.f[0]", boundingBoxComponent2d=True)
+            mine = cmds.polyEvaluate(f"{b}.f[1]", boundingBoxComponent2d=True)
+            cmds.polyEditUV(
+                shell,
+                uValue=target[0][0] - mine[0][0],
+                vValue=target[1][0] - mine[1][0],
+                relative=True,
+            )
+
+        with mock.patch.object(cmds, "u3dLayout", side_effect=stacking):
+            result = UvUtils.pack_uvs([a, b], engine="u3d", map_size=1024)
+
+        self.assertEqual(result.failed, [], result.failed)
+        self.assertEqual(
+            sorted(CoreUtils.short_name(m) for m in result.fallbacks), sorted([a, b])
+        )
+        self.assertEqual(
+            _UvPackInternal._island_overlaps([(a, None), (b, None)], 1024), 0
+        )
+
+    def test_instances_of_one_shape_are_judged_as_one_layout(self):
+        """Two transforms instancing one shape read one layout: judged once,
+        never as two copies on each other -- which "failed" every pack of
+        instances and packed them again."""
+        a = cmds.polyCube(name="u3dInstA", ch=False)[0]
+        cmds.polyMapCut(f"{a}.e[*]", ch=False)
+        b = cmds.instance(a, name="u3dInstB")[0]
+        self.assertEqual(_UvPackInternal._island_overlaps([(a, None), (b, None)], 256), 0)
+        result = UvUtils.pack_uvs([a, b], engine="u3d", map_size=1024)
+        self.assertEqual((result.failed, result.fallbacks), ([], []))
+        self.assertTrue(result.succeeded)
+
+    def test_a_group_or_a_mesh_with_no_uvs_does_not_stop_the_pack(self):
+        """The check snapshots each object before the pack: a transform with
+        no mesh of its own (a group the selection reached) or a mesh with no
+        UVs has nothing to snapshot, and is left out of it -- it used to raise
+        and stop the whole Standard pack."""
+        kept = cmds.polyCube(name="u3dKept", ch=False)[0]
+        bare = cmds.polyCube(name="u3dBare", ch=False)[0]
+        cmds.polyMapDel(f"{bare}.f[*]", ch=False)
+        group = cmds.group(kept, bare, name="u3dGroup")
+        result = UvUtils.pack_uvs([group], engine="u3d", map_size=1024)
+        self.assertEqual((result.objects, result.failed, result.fallbacks), ([group], [], []))
+        (u0, u1), (v0, v1) = self._bbox(kept)
+        self.assertGreaterEqual(min(u0, v0), 0.0)
+        self.assertLessEqual(max(u1, v1), 1.0)
 
     def test_single_mesh_failure_reports_without_probe_pass(self):
         from unittest import mock

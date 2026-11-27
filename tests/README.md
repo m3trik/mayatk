@@ -17,7 +17,7 @@ launched and keeps between runs.
 | `tests/extended/` | Needs real scene assets on disk | `run_tests.py --extended` (opt-in; skips cleanly if assets are missing) |
 | `tests/mock_tests/` | `maya.cmds` mocked, no Maya needed | plain `pytest tests/mock_tests/` |
 | `tests/*_live_e2e.py` | Gated live checks — need another DCC installed and a Maya license, and take minutes | run by hand; NOT `test_*`-named, so `run_tests.py` never picks them up. `scene_import_live_e2e.py` is the Blender→Maya pull (mirrored in blendertk); `scene_roundtrip_live_e2e.py` is the `.ma → .blend → .ma → .blend` **fixed-point** check and has ONE home, since a round trip is not a per-direction thing |
-| `tests/temp_tests/` | Gitignored scratch (repro/probe/verify scripts) | ad hoc; swept freely, never promoted without review |
+| `tests/temp_tests/` | Gitignored scratch (repro/probe/verify scripts) | ad hoc; a run's start removes what sat untouched for `TestSandbox.SCRATCH_DAYS` unless the folder's `.keep` names it; never promoted without review |
 | `tests/test_assets/` | Fixture files (images, `.fbx`, …) | read-only inputs |
 
 ## Base classes (`base_test.py`)
@@ -67,9 +67,10 @@ importable (repo roots on `PYTHONPATH`, not the bare workspace root)
 one validation test). Both paths run the same in-session harness,
 `_suite_driver.py`.
 
-Results append to `tests/temp_tests/test_results_<port>_<pid>.txt` (scoped by
-port **and** runner PID so concurrent invocations can't clobber each other;
-stale result/chunk/gui artifacts are swept after 7 days). Module statuses:
+Results append to `test_results_<port>_<pid>.txt` in the run's own folder,
+`<temp root>/mayatk_runs/mayatk_runs_<tag>/` (`MayaTestRunner.run_dir`; scoped by
+port **and** runner PID so concurrent invocations can't clobber each other; a
+run's folder is kept `RUN_DAYS` for a look after the run, then swept). Module statuses:
 PASS / FAIL / LOAD ERROR, plus NATIVE CRASH / TIMEOUT / DEFERRED (= NOT RUN).
 The `docs/README.md` test badge updates only on a full `--all` run where
 every module actually ran — scoped or partial runs never touch it

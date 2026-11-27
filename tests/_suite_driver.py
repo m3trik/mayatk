@@ -42,9 +42,7 @@ import io
 import json
 import os
 import re
-import shutil
 import sys
-import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -73,7 +71,7 @@ _REAL_MODULE_KEYS = (
     "maya.app",
 )
 
-_sandbox_dir = None  # shots-prefs sandbox; cleaned in main() (os._exit skips atexit)
+_sandbox_store = None  # shots-prefs sandbox (a session store); cleaned as a chunk ends (os._exit skips atexit)
 _qapp = None
 
 
@@ -321,23 +319,21 @@ def _sandbox_shots_prefs(temp_dir):
 
     Set AFTER any reload so the override lands on the final class object.
     """
-    global _sandbox_dir
+    global _sandbox_store
     store = previous = None
     try:
-        import atexit
-
+        import pythontk as ptk
         from pythontk.core_utils.engines.shots.shot_model import ShotStore
 
-        _sandbox_dir = tempfile.mkdtemp(
-            prefix="shots_prefs_test_", dir=temp_dir or None
-        )
+        # A session store: removed at exit (the mayapy path also as its chunk
+        # ends, since os._exit skips atexit). In the run's own folder (temp_dir),
+        # what a crashed chunk left goes with that folder, RUN_DAYS on.
+        _sandbox_store = ptk.TempArtifacts("shots_prefs_test", policy="session", dir=temp_dir or None)
+        sandbox = _sandbox_store.dir_path()
         previous = ShotStore._prefs_dir_override
-        ShotStore._prefs_dir_override = _sandbox_dir
+        ShotStore._prefs_dir_override = sandbox
         store = ShotStore
-        # atexit covers the GUI path; the mayapy path cleans up explicitly in
-        # main() because os._exit bypasses atexit.
-        atexit.register(shutil.rmtree, _sandbox_dir, ignore_errors=True)
-        print(f"[Sandbox] shots prefs -> {_sandbox_dir}")
+        print(f"[Sandbox] shots prefs -> {sandbox}")
     except Exception as e:
         print(f"[Sandbox] shots prefs override failed: {e}")
     try:
@@ -937,8 +933,8 @@ def _run_chunk(config):
     _progress(progress_file, "DONE")
     print("MAYATK_CHUNK_RESULT:" + json.dumps(totals), flush=True)
 
-    if _sandbox_dir:
-        shutil.rmtree(_sandbox_dir, ignore_errors=True)
+    if _sandbox_store is not None:
+        _sandbox_store.cleanup()
     return totals
 
 

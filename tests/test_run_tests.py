@@ -200,7 +200,7 @@ class TestChunkChildStdin(unittest.TestCase):
     def test_mayapy_chunk_gets_a_closed_stdin(self):
         runner = rt.MayaTestRunner(port=7903)
         self.addCleanup(runner.results_file.unlink, True)
-        runner.temp_test_dir.mkdir(exist_ok=True)
+        runner.run_dir.mkdir(exist_ok=True)
         calls = []
 
         def fake_popen(cmd, **kwargs):
@@ -213,7 +213,7 @@ class TestChunkChildStdin(unittest.TestCase):
                 ok, deferred = runner._run_chunk(
                     "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
                 )
-        for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+        for stale in runner.run_dir.glob(f"chunk_{os.getpid()}_00_*"):
             self.addCleanup(stale.unlink, True)
         # A refused launch defers the chunk to the GUI pass, as documented.
         self.assertEqual((ok, deferred), (True, ["test_x"]), buf.getvalue())
@@ -229,7 +229,7 @@ class TestChunkChildStdin(unittest.TestCase):
 
         runner = rt.MayaTestRunner(port=7904)
         self.addCleanup(runner.results_file.unlink, True)
-        runner.temp_test_dir.mkdir(exist_ok=True)
+        runner.run_dir.mkdir(exist_ok=True)
         calls = []
 
         def fake_popen(cmd, **kwargs):
@@ -241,7 +241,7 @@ class TestChunkChildStdin(unittest.TestCase):
                 runner._run_chunk(
                     "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
                 )
-        for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+        for stale in runner.run_dir.glob(f"chunk_{os.getpid()}_00_*"):
             self.addCleanup(stale.unlink, True)
         cwd = os.path.normcase(os.path.realpath(calls[0]["cwd"]))
         self.assertNotEqual(cwd, os.path.normcase(os.path.realpath(rt.SCRIPTS_ROOT)))
@@ -263,7 +263,7 @@ class TestChunkChildStdin(unittest.TestCase):
 
         runner = rt.MayaTestRunner(port=7903)
         self.addCleanup(runner.results_file.unlink, True)
-        runner.temp_test_dir.mkdir(exist_ok=True)
+        runner.run_dir.mkdir(exist_ok=True)
         calls = []
 
         def fake_popen(cmd, **kwargs):
@@ -277,7 +277,7 @@ class TestChunkChildStdin(unittest.TestCase):
                 runner._run_chunk(
                     "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
                 )
-        for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+        for stale in runner.run_dir.glob(f"chunk_{os.getpid()}_00_*"):
             self.addCleanup(stale.unlink, True)
         cmd, kwargs = calls[0]
         self.assertTrue(all(str(part).isascii() for part in cmd), cmd)
@@ -337,8 +337,32 @@ class TestChunkTempIsolation(unittest.TestCase):
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
+        # The isolation step also sweeps the scratch folder: never the real one here.
+        sweep = mock.patch.object(TestSandbox, "sweep_scratch", return_value=[])
+        self.sweep = sweep.start()
+        self.addCleanup(sweep.stop)
         self.runner = rt.MayaTestRunner(port=7903)
         self.addCleanup(self.runner.results_file.unlink, True)
+
+    def test_the_run_sweeps_its_scratch_folder_and_a_failed_sweep_keeps_the_isolation(self):
+        """Added: 2026-11-26. The sweep sat inside the isolation's try, so its
+        failure read "temp isolation unavailable" while TEMP was redirected."""
+        root = self.runner._isolate_temp()
+        ((tests,), _) = self.sweep.call_args
+        self.assertTrue(os.path.samefile(tests, TEST_DIR), tests)
+        self.sweep.side_effect = OSError("held")
+        self.assertEqual(self.runner._isolate_temp(), root, "the sweep failing keeps the root")
+
+    def test_a_runs_outputs_live_in_the_temp_root_never_in_the_scratch_folder(self):
+        """Added: 2026-11-26. ``tests/temp_tests`` is scratch only: a run's
+        results go to its own folder under the ecosystem temp root."""
+        import pythontk as ptk
+
+        run_dir = os.path.normcase(str(self.runner.run_dir))
+        self.assertTrue(run_dir.startswith(os.path.normcase(ptk.TempArtifacts.root())), run_dir)
+        self.assertIn(rt.RUN_PREFIX, run_dir)
+        self.assertFalse(run_dir.startswith(os.path.normcase(str(TEST_DIR / "temp_tests"))), run_dir)
+        self.assertEqual(os.path.normcase(str(self.runner.results_file.parent)), run_dir)
 
     def test_a_chunk_is_handed_the_sandbox_temp(self):
         root = self.runner._isolate_temp()
@@ -405,7 +429,7 @@ class TestTheConfigNamesALaunchedMaya(unittest.TestCase):
     def setUp(self):
         self.runner = rt.MayaTestRunner(port=7903)
         self.addCleanup(self.runner.results_file.unlink, True)
-        self.runner.temp_test_dir.mkdir(exist_ok=True)
+        self.runner.run_dir.mkdir(exist_ok=True)
 
     def _read_config(self, path):
         import json
@@ -421,10 +445,10 @@ class TestTheConfigNamesALaunchedMaya(unittest.TestCase):
             self.runner._run_chunk(
                 "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
             )
-        for stale in self.runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+        for stale in self.runner.run_dir.glob(f"chunk_{os.getpid()}_00_*"):
             self.addCleanup(stale.unlink, True)
         return self._read_config(
-            self.runner.temp_test_dir / f"chunk_{os.getpid()}_00_1.json"
+            self.runner.run_dir / f"chunk_{os.getpid()}_00_1.json"
         )
 
     def _gui_config(self, mode, reuse=False, keep_maya=False, no_wait=False):
@@ -438,7 +462,7 @@ class TestTheConfigNamesALaunchedMaya(unittest.TestCase):
             self.runner._run_via_port(
                 ["test_x"], {"test_x": "test_x.py"}, False, no_wait=no_wait
             )
-        return self._read_config(self.runner.temp_test_dir / f"gui_{os.getpid()}.json")
+        return self._read_config(self.runner.run_dir / f"gui_{os.getpid()}.json")
 
     def test_a_mayapy_chunk_is_launched(self):
         self.assertIs(self._chunk_config().get("launched"), True)
@@ -612,12 +636,12 @@ class TestReuseKeepsOnlyMayapysThisToolingLaunched(unittest.TestCase):
     def _runner(self, **kwargs):
         runner = rt.MayaTestRunner(port=7905, reuse_instance=True, **kwargs)
         self.addCleanup(runner.results_file.unlink, True)
-        runner.temp_test_dir.mkdir(exist_ok=True)
+        runner.run_dir.mkdir(exist_ok=True)
         return runner
 
     def _cleanup_chunk_files(self, runner):
         def clean():
-            for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+            for stale in runner.run_dir.glob(f"chunk_{os.getpid()}_00_*"):
                 stale.unlink(missing_ok=True)
 
         self.addCleanup(clean)
@@ -727,7 +751,7 @@ class TestReuseKeepsOnlyMayapysThisToolingLaunched(unittest.TestCase):
 
         session.run.side_effect = run
         session.host.grace = 1
-        log = Path(self._runner().temp_test_dir, f"kept_{os.getpid()}.log")
+        log = Path(self._runner().run_dir, f"kept_{os.getpid()}.log")
         self.addCleanup(log.unlink, True)
         chunk = rt._KeptChunk(session, "_driver.run_job('c', 'l')", log)
         self.assertIsNone(chunk.poll())
@@ -830,12 +854,12 @@ class TestAHungChunk(unittest.TestCase):
     def setUp(self):
         self.runner = rt.MayaTestRunner(port=7903)
         self.addCleanup(self.runner.results_file.unlink, True)
-        self.runner.temp_test_dir.mkdir(exist_ok=True)
-        self.progress = self.runner.temp_test_dir / f"chunk_{os.getpid()}_00_1.progress"
+        self.runner.run_dir.mkdir(exist_ok=True)
+        self.progress = self.runner.run_dir / f"chunk_{os.getpid()}_00_1.progress"
         self.addCleanup(self._remove_chunk_files)
 
     def _remove_chunk_files(self):
-        for stale in self.runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+        for stale in self.runner.run_dir.glob(f"chunk_{os.getpid()}_00_*"):
             stale.unlink(missing_ok=True)
 
     def _run(self, chunk):
@@ -886,8 +910,8 @@ class TestTheGuiWaitFollowsTests(unittest.TestCase):
     def setUp(self):
         self.runner = rt.MayaTestRunner(port=7904)
         self.addCleanup(self.runner.results_file.unlink, True)
-        self.runner.temp_test_dir.mkdir(exist_ok=True)
-        stem = self.runner.temp_test_dir / f"gui_wait_{os.getpid()}"
+        self.runner.run_dir.mkdir(exist_ok=True)
+        stem = self.runner.run_dir / f"gui_wait_{os.getpid()}"
         self.results = stem.with_suffix(".results")
         self.progress = stem.with_suffix(".progress")
         for path in (self.results, self.progress):

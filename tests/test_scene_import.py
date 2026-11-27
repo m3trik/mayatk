@@ -1900,7 +1900,7 @@ class TestReturnLegVisibility(MayaTkTestCase):
     keyed show/hide crosses as NOTHING. Measured on a production module: 54 objects
     carried ``hide_viewport`` keys and every one arrived in Maya static -- 39 of them
     with no animation at all, which is how the loss first read (the plug and
-    failed-component toggles, i.e. the content of the training module). The producer
+    failed-component toggles, i.e. the content of the module). The producer
     writes them to the sidecar and ``_apply_visibility_manifest`` lands them, the
     mirror of the send direction's pair.
     """
@@ -5062,8 +5062,8 @@ class TestUsdPullRouteContracts(unittest.TestCase):
         ("_as_perspective", "env_utils/usd.py", "_UsdUtilsInternal", "_as_perspective"),
         (
             "_action_fcurves",
-            "anim_utils/_anim_utils.py",
-            "_AnimUtilsInternal",
+            "core_utils/_core_utils.py",
+            "_CoreUtilsInternal",
             "_slot_fcurves",
         ),
     )

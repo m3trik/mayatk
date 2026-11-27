@@ -51,7 +51,7 @@ _FLAT_ANGLE_TOL = 1e-4
 # ...and a tangent that MOVED by less than this did not really move: the one
 # threshold of the shot system's tangent hold (``_hold_half``).  Holding a
 # half converts it to ``fixed``, so it must sit above the float noise of
-# Maya's own re-derivation -- measured 2026-10-11 over every SOL_REPLACE_ASSEMBLY
+# Maya's own re-derivation -- measured 2026-10-11 over every production-scene
 # op at gap 0 and 10, every drift the hold was asked about was 0 or under
 # 1e-12 -- and below the smallest real one: a 1-frame slide of a production
 # curve re-derived a slope by 0.003 degrees and played the shot 0.0004 off,

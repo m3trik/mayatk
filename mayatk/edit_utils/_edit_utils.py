@@ -427,9 +427,9 @@ class _EditUtilsInternal(object):
         (they ignore the transform entirely, hence the world-scale factor —
         without it a scaled copy would read as the same size).
 
-        NOT :meth:`mayatk.core_utils.CoreUtils.get_bounding_box`, which answers a
-        different question: a world axis-aligned box (or, with ``world=False``, the
-        object-space one). This returns SIZE along the object's own axes.
+        NOT ``XformUtils.get_bounding_box(obj, "box")``, which answers a
+        different question: a world axis-aligned box (or, with ``world_space=False``,
+        the object-space one). This returns SIZE along the object's own axes.
         """
         shapes = (
             cmds.listRelatives(obj, shapes=True, noIntermediate=True, fullPath=True)

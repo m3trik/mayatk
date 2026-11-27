@@ -162,6 +162,14 @@ class _DuplicatesInternal:
             elif va != vb:
                 return False
 
+        # 1b. User-defined data -- a tool's tags on the material (an Emissive
+        #     Groups copy's group and base) or a person's notes, strings and
+        #     messages included: differing, the two are not one. Two groups'
+        #     copies render alike at rest and play apart (measured 2026-11-24:
+        #     an export merged one LED's copy into another's).
+        if not cls._same_user_data(mat_a, mat_b):
+            return False
+
         # 2. Per-slot texture verification.
         if set(slots_a) != set(slots_b):
             return False
@@ -184,6 +192,32 @@ class _DuplicatesInternal:
             for (pa, ca, sa), (pb, cb, sb) in zip(profile(nodes_a), profile(nodes_b)):
                 if sa != sb or ca != cb or not cls._textures_identical(pa, pb):
                     return False
+        return True
+
+    @staticmethod
+    def _same_user_data(mat_a: str, mat_b: str) -> bool:
+        """Whether *mat_a* and *mat_b* carry the same user-defined attributes
+        with the same values (a connected one: the same sources)."""
+        names = set(cmds.listAttr(mat_a, userDefined=True) or [])
+        if names != set(cmds.listAttr(mat_b, userDefined=True) or []):
+            return False
+        for attr in sorted(names):
+            plug_a, plug_b = f"{mat_a}.{attr}", f"{mat_b}.{attr}"
+            src_a = sorted(cmds.listConnections(plug_a, source=True, destination=False) or [])
+            src_b = sorted(cmds.listConnections(plug_b, source=True, destination=False) or [])
+            if src_a != src_b:
+                return False
+            if src_a:
+                continue
+            try:
+                va, vb = cmds.getAttr(plug_a), cmds.getAttr(plug_b)
+            except Exception:
+                continue  # a message or compound parent: its children or sources say
+            if isinstance(va, (int, float)) and isinstance(vb, (int, float)):
+                if abs(va - vb) > 1e-5:
+                    return False
+            elif va != vb:
+                return False
         return True
 
     @staticmethod

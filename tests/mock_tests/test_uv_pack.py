@@ -41,7 +41,12 @@ class _U3dCase(unittest.TestCase):
                 raise RuntimeError("u3dLayout: overlapping UVs in shell")
 
         uvs = [f"{m}.map[0:3]" for m in self.meshes]
+        # The overlap check reads the scene (live: TestPackUvsU3d); here no pack
+        # leaves islands on each other.
+        guard = _uv_pack._UvPackInternal
         for target, attr, value in (
+            (guard, "_uv_positions", MagicMock(return_value=None)),
+            (guard, "_island_overlaps", MagicMock(return_value=0)),
             (_U3dPackInternal, "_resolve", MagicMock(return_value=(self.meshes, uvs))),
             (_U3dPackInternal, "distribute_to_grid", MagicMock()),
             (_uv_pack.cmds, "u3dLayout", MagicMock(side_effect=layout)),

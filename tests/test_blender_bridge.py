@@ -921,7 +921,7 @@ class TestSteppedKeysRideTheManifest(MayaTkTestCase):
     """A Maya stepped key holds in Blender (``HandoffManifest.STEPPED_KEYS``).
 
     FBX carries the key, but Blender's importer makes every key LINEAR, so a
-    hold arrived as a ramp to the next key (SOL_REPLACE_ASSEMBLY's SCREWDRIVER
+    hold arrived as a ramp to the next key (a production scene's SCREWDRIVER
     steps at 12 and holds to 731; pulled, it moved the whole way).
     ``MayaExportMixin.stepped_keys`` lists the steps off the authored curves --
     for the pull's conversion template and for the send -- and blendertk's

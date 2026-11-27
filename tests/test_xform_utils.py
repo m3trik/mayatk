@@ -87,7 +87,7 @@ class TestXformUtils(MayaTkTestCase):
         """Re-keying for a new order keeps the pose at every key, and the
         new order puts the spin axis on one channel.
 
-        Bug (SOL_REPLACE_ASSEMBLY, SOCKET_WRENCH): a locator keyed to rx=98
+        Bug (a production scene, SOCKET_WRENCH): a locator keyed to rx=98
         in "xyz" could not spin about its own Z without moving all three
         channels; changing the attribute alone would turn the prop.
         """
@@ -112,7 +112,7 @@ class TestXformUtils(MayaTkTestCase):
         self.assertAlmostEqual(r1[2], r0[2] + 15, places=4)
 
     def test_set_rotate_order_auto_reads_the_turn_axis_off_the_keys(self):
-        """Bug (SOL_REPLACE_ASSEMBLY, SOCKET_WRENCH): lifted 98 on X, then
+        """Bug (a production scene, SOCKET_WRENCH): lifted 98 on X, then
         turned about its OWN Y to undo the nut -- the Y the socket hangs on.
         zyx (the first fix) left Y in the middle, so the turn still keyed all
         three channels and wobbled. "auto" must find a Y-first order from the
@@ -3226,6 +3226,152 @@ class TestGetRotateOrder(MayaTkTestCase):
         cmds.select(clear=True)
         self.assertEqual(XformUtils.get_rotate_order(), {})
         self.assertEqual(XformUtils.get_rotate_order([]), {})
+
+
+class TestMovingAndAtRest(MayaTkTestCase):
+    """``XformUtils.moving`` (what a lightmap bake leaves out) and ``XformUtils.at_rest`` (the pose a bake and an export
+    read). A production bake lightmapped its doors shut: opened in Unity, each showed the cabinet's dark inside."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.playbackOptions(animationStartTime=1, animationEndTime=48, minTime=1, maxTime=48)
+
+    @staticmethod
+    def _cube(name, parent=None):
+        made = cmds.polyCube(name=name)[0]
+        if parent:
+            made = cmds.parent(made, parent)[0]
+        return cmds.ls(made, long=True)[0]
+
+    def test_what_the_animation_moves_is_found_by_what_drives_it_or_an_ancestor(self):
+        door = cmds.group(empty=True, name="DOOR_GRP")
+        cmds.setKeyframe(door, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(door, attribute="rotateY", time=24, value=-70)
+        panel = self._cube("DOOR_PANEL", door)  # moved by its parent's keys
+        wall = self._cube("WALL")
+        flat = self._cube("FLAT")
+        cmds.setKeyframe(flat, attribute="translateX", time=1, value=2)
+        cmds.setKeyframe(flat, attribute="translateX", time=24, value=2)  # keyed, but holds one value
+        follower = self._cube("FOLLOWER")
+        cmds.pointConstraint(panel, follower)
+        cmds.select(clear=True)
+        joint = cmds.joint(name="ARM_JNT")
+        cmds.setKeyframe(joint, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(joint, attribute="translateY", time=24, value=1)
+        skinned = self._cube("SKINNED")
+        cmds.skinCluster(joint, skinned, toSelectedBones=True)
+
+        moving = XformUtils.moving()
+        self.assertEqual(sorted(m.rsplit("|", 1)[-1] for m in moving), ["DOOR_PANEL", "FOLLOWER", "SKINNED"])
+        self.assertEqual(XformUtils.moving([wall, flat]), [], "a static mesh, and one keyed to a single value")
+        self.assertEqual(XformUtils.moving([cmds.listRelatives(panel, shapes=True, fullPath=True)[0]]), [panel], "a shape stands for its transform")
+
+    def test_an_expression_a_driven_key_and_a_compounds_child_each_move_a_part(self):
+        """Added: 2026-11-26"""
+        expressed = self._cube("EXPRESSED")
+        cmds.expression(string=f"{expressed}.translateY = frame * 0.1;", object=expressed)
+        lever = cmds.group(empty=True, name="LEVER")
+        driven = self._cube("DRIVEN")
+        cmds.setDrivenKeyframe(driven, attribute="rotateX", currentDriver=f"{lever}.translateX", driverValue=0, value=0)
+        cmds.setDrivenKeyframe(driven, attribute="rotateX", currentDriver=f"{lever}.translateX", driverValue=1, value=90)
+        sheared = self._cube("SHEARED")
+        cmds.setKeyframe(sheared, attribute="shearXY", time=1, value=0)
+        cmds.setKeyframe(sheared, attribute="shearXY", time=24, value=1)
+        pivoted = self._cube("PIVOTED")
+        cmds.setKeyframe(pivoted, attribute="rotatePivotX", time=1, value=0)
+        cmds.setKeyframe(pivoted, attribute="rotatePivotX", time=24, value=2)
+        found = XformUtils.moving([expressed, driven, sheared, pivoted])
+        self.assertEqual(sorted(m.rsplit("|", 1)[-1] for m in found), ["DRIVEN", "EXPRESSED", "PIVOTED", "SHEARED"])
+
+    def test_a_joint_stands_for_itself_and_carries_what_hangs_under_it(self):
+        """REGRESSION: a joint was taken for a shape and read as its parent. Added: 2026-11-26"""
+        root = cmds.group(empty=True, name="RIG_ROOT")
+        cmds.select(clear=True)
+        joint = cmds.ls(cmds.parent(cmds.joint(name="HINGE_JNT"), root)[0], long=True)[0]
+        cmds.setKeyframe(joint, attribute="rotateZ", time=1, value=0)
+        cmds.setKeyframe(joint, attribute="rotateZ", time=24, value=45)
+        flap = self._cube("FLAP", joint)
+        self.assertEqual(XformUtils.moving([joint, flap]), [joint, flap])
+
+    def test_a_deformer_moved_or_keyed_moves_the_mesh_under_a_static_transform(self):
+        """REGRESSION: only a skin's joints counted; a blendShape's keyed weight, a cluster's or a
+        lattice's moving handle, a bend's keyed curvature moved the points of a mesh whose transform
+        stands still, and it was baked. A deformer at rest moves nothing. Added: 2026-11-26"""
+        base, target = self._cube("BS_BASE"), self._cube("BS_TARGET")
+        blend = cmds.blendShape(target, base)[0]
+        cmds.setKeyframe(f"{blend}.w[0]", time=1, value=0)
+        cmds.setKeyframe(f"{blend}.w[0]", time=24, value=1)
+        clustered = self._cube("CLUSTERED")
+        _cluster, handle = cmds.cluster(clustered)
+        cmds.setKeyframe(handle, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(handle, attribute="translateY", time=24, value=1)
+        latticed = self._cube("LATTICED")
+        _ffd, lattice, _base = cmds.lattice(latticed)
+        cmds.setKeyframe(lattice, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(lattice, attribute="rotateY", time=24, value=30)
+        bent = self._cube("BENT")
+        bend, _bend_handle = cmds.nonLinear(bent, type="bend")
+        cmds.setKeyframe(bend, attribute="curvature", time=1, value=0)
+        cmds.setKeyframe(bend, attribute="curvature", time=24, value=90)
+        still = self._cube("STILL_CLUSTERED")
+        cmds.cluster(still)
+        held = self._cube("HELD_BS")
+        held_blend = cmds.blendShape(self._cube("HELD_TARGET"), held)[0]
+        cmds.setKeyframe(f"{held_blend}.w[0]", time=1, value=0.5)
+        found = XformUtils.moving([base, target, clustered, latticed, bent, still, held])
+        self.assertEqual(sorted(m.rsplit("|", 1)[-1] for m in found), ["BENT", "BS_BASE", "CLUSTERED", "LATTICED"])
+
+    def test_at_rest_poses_the_animations_first_frame_and_puts_the_frame_back(self):
+        cmds.currentTime(20)
+        with XformUtils.at_rest():
+            self.assertEqual(cmds.currentTime(query=True), 1.0)
+            with XformUtils.at_rest():
+                self.assertEqual(cmds.currentTime(query=True), 1.0, "nested, it stays put")
+        self.assertEqual(cmds.currentTime(query=True), 20.0)
+
+        @XformUtils.at_rest()
+        def read():
+            return cmds.currentTime(query=True)
+
+        self.assertEqual((read(), read()), (1.0, 1.0), "as a decorator, each call at rest")
+        self.assertEqual(cmds.currentTime(query=True), 20.0)
+
+    def test_at_rest_puts_a_subframe_back_and_the_frame_back_when_the_block_raises(self):
+        """Added: 2026-11-26"""
+        cmds.playbackOptions(animationStartTime=1.5, minTime=1.5)
+        cmds.currentTime(20.25)
+        with self.assertRaises(ValueError):
+            with XformUtils.at_rest():
+                self.assertEqual(cmds.currentTime(query=True), 1.5, "a fractional first frame")
+                raise ValueError("the block failed")
+        self.assertEqual(cmds.currentTime(query=True), 20.25, "the subframe it stood at, put back")
+
+    def test_at_rest_stops_a_playing_timeline_for_the_block_and_plays_it_again_after(self):
+        """A playing timeline would overwrite the rest frame on its next tick: the block holds it
+        still, then playback resumes from the frame put back (the timeline's state stood in for:
+        mayapy plays nothing). Added: 2026-11-26"""
+        from unittest import mock
+
+        events, playing = [], [True]
+        real_play, real_time = cmds.play, cmds.currentTime
+
+        def play(*args, **kwargs):
+            if kwargs.get("query"):
+                return playing[0] if (kwargs.get("state") or kwargs.get("st")) else real_play(*args, **kwargs)
+            playing[0] = bool(kwargs.get("state", kwargs.get("st", True)))
+            events.append(("play", playing[0]))
+
+        def current_time(*args, **kwargs):
+            if not kwargs.get("query"):
+                events.append(("time", args[0], playing[0]))
+            return real_time(*args, **kwargs)
+
+        cmds.currentTime(20)
+        with mock.patch.object(cmds, "play", side_effect=play), mock.patch.object(cmds, "currentTime", side_effect=current_time):
+            with XformUtils.at_rest():
+                inside = list(events)
+        self.assertEqual(inside, [("play", False), ("time", 1.0, False)], "stopped before the rest frame is set")
+        self.assertEqual(events[len(inside):], [("time", 20.0, False), ("play", True)], "the frame put back, then playing")
 
 
 if __name__ == "__main__":

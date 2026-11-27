@@ -245,7 +245,7 @@ class TestRigUtils(MayaTkTestCase):
     def test_create_locator_at_object_rotate_order_keeps_spin_on_one_channel(self):
         """A prop picked up and then spun about its own axis keys ONE channel.
 
-        Bug (SOL_REPLACE_ASSEMBLY, SOCKET_WRENCH): every locator was built in
+        Bug (a production scene, SOCKET_WRENCH): every locator was built in
         Maya's default "xyz", where only an object-space X spin stays on one
         channel. The wrench was keyed to rx=98 to lift it, then spun about its
         own Z -- and rx/ry/rz all moved. ``rotate_order`` lets the rig put the

@@ -28,9 +28,14 @@ owns](#what-it-owns)
 
 1. Browse to the sheet in the field at the top, or paste its web address and
    press Enter. The steps fill the table, each with its section, description,
-   objects and behaviors.
-2. In the header menu, set each behavior type you want keyed to **Key**. Every
-   type starts **Off**.
+   objects and behaviors. A sheet written in cells (the Linear and Interactive
+   formats) is read with the template it is written for, whatever template you
+   used last; what its own check finds wrong shows on its step at once, with
+   the cell and the fix. (A new sheet: `python -m pythontk ops apply sheet.new
+   out=<file.csv>` writes a template's starter to fill.)
+2. In the header menu, check each behavior's mode. A behavior the sheet asks
+   for by its word (`highlight`, `fade_out`) starts at **Key**; one a sentence
+   only implies starts **Off** until you choose.
 3. Click **Assess**. Each row's icon shows its worst issue; hover the row for
    the list.
 4. Click **Build**. It is enabled once Assess finds something a build would
@@ -40,9 +45,43 @@ The panel's `?` button holds the short form of this page.
 
 ## The sheet
 
-A header row names the columns, then one row per step. A row with no step ID
-adds objects to the step above, each row with its own description. The
-built-in template reads:
+A sheet is written in the **Linear** or **Interactive** format: one table with
+a row for each step itself (its ID, name and narration), then a row for each
+thing that happens in it, a word in Action (`highlight`, `fade_in`,
+`fade_out`, `use` ...) and the objects it is about in Target. Every cell holds
+one kind of thing and nothing is read from a sentence. The format is pythontk's
+[build sheets](https://github.com/m3trik/pythontk/blob/main/docs/build_sheets.md)
+guide, and each template ships a starter sheet to copy
+(`python -m pythontk ops apply sheet.new out=<file.csv>`).
+
+| Step | Step Name | Voice | Action | Target | With | Clip |
+|:---|:---|:---|:---|:---|:---|:---|
+| `B01` | Remove the filter | Remove the old filter with the wrench. | | | | |
+| | | | `use` | `FILTER` | `WRENCH` | `B01_1` |
+| | | | `fade_out` | `FILTER` | | |
+
+The panel shows each row as the sentence its cells mean ("Selecting
+LATCH_UPPER with KEY in hand plays A01_1"), keys the three words it builds
+(highlight and the two fades) and leaves every other word alone, for the tool
+that builds it. A look that names its take in Clip is keyed into that take. One
+that names none belongs to its step: a Linear sheet, played straight through,
+has it keyed into the step's shot; an Interactive one, whose steps wait on the
+user, leaves it to the tool that runs the steps, and lists its object in the
+shot with nothing keyed on it.
+What is wrong with a row is said at its cell, with its fix: the step's row
+reads *sheet issue* (its tooltip and the detail list each cell, as `row 2
+(Clip): use needs its Clip: write the take it plays`), the footer counts them
+as the sheet loads, the Build button counts the step among those that need
+you, and Export's **Sheet Issues** column carries them to the sheet's owner.
+No Build resolves one: its fix is the sheet's. A row such as `SECTION B:
+Replace the filter` starts a section, as do `INTRO`, `OUTRO` and `QUIZ` rows.
+
+### A sheet of sentences
+
+A sheet written before the format (the screenshot's) is still read, by its
+sentences: a header row names the columns, then one row per step, and a row
+with no step ID adds objects to the step above, each row with its own
+description. The tolerant `default` template reads:
 
 | Column | Headers it accepts | Holds |
 |:---|:---|:---|
@@ -52,9 +91,6 @@ built-in template reads:
 | Voice | Audio, Voice, Voice Support, VO | Narration (optional) |
 | Behaviors | Behaviors, Behavior | Behavior names, when the template reads them from a column (optional) |
 
-A row such as `SECTION B: Replace the filter` starts a section; with numbered
-IDs, `INTRO` and `OUTRO` rows do too. The rows behind the screenshot read:
-
 | Step | Description | Assets |
 |:---|:---|:---|
 | `SECTION B: Replace the filter` | | |
@@ -62,6 +98,8 @@ IDs, `INTRO` and `OUTRO` rows do too. The rows behind the screenshot read:
 | | Remove the cover bolts. The bolts fade out. | `Cover_Bolt_01` ... `Cover_Bolt_06` |
 | `B02.)` | Lift off the access cover. | `Access_Cover` |
 | `B03.)` | The filter cartridge is highlighted. Pull it out; it fades out. | `Filter_Cartridge` |
+
+### The template and its options
 
 The columns button on the field picks the mapping template and sets its
 options for the loaded sheet:
@@ -73,8 +111,27 @@ options for the loaded sheet:
   behavior ("Highlight Red Door" lists `Red_Door`).
 - **Match Shots**: by name, or by name and then timeline order, for a scene
   whose shots were named before the sheet existed.
-- **Audio**: the voice column as narration only, or a clip name derived per
-  step and keyed.
+- **Shots**: every step gets a shot, or only a step one of whose rows names
+  an animation clip (the Animation Clip Names column). A shot is its step:
+  named by the step's ID, holding its narration and its takes. A take (a clip
+  cell) is a span inside its step's shot, what one row plays and one clip of
+  an export, so a step with two takes is one shot holding two takes and none
+  is split by hand. In a scene whose takes were cut by hand as shots of their
+  own before the sheet said so, Build joins a step's take shots into the
+  step's shot, each take keeping its frames (shots another shot stands
+  between, or a locked one, are left as they are, and it says so). A step
+  with no shot
+  shows *no shot* in its Start cell; Build makes none and places nothing for
+  it. Right-click a step to **Mark as No Shot** or **Mark as a Shot**: a Local
+  Edit, drawn as a redline on the Start cell with the sheet's word in its
+  tooltip. A step that already has a shot keeps it.
+- **Audio**: the voice column as narration only, a clip name derived per
+  step and keyed, or each step's recording, else the narration rendered for
+  its line (`narration.render`), keyed at its shot's start, its track in the
+  Shot Sequencer. A step that only speaks is as long as its line. A shot
+  shorter than its line grows to hold it, as an edge drag in the Shot
+  Sequencer does: the shots after it move with their animation and audio, and
+  a take inside it stays on its keys.
 - **Auto-fill Missing Assets**: a step the sheet lists no objects for takes
   its shot's members, ready for Export to hand back to the sheet's owner.
 
@@ -85,13 +142,16 @@ opens; the panel writes the format's reference, `MAPPING_FORMAT.md`, there.
 
 | Behavior | The sheet says | Build keys |
 |:---|:---|:---|
-| Fade In | "... fades in" | The object fading in at the shot's start |
-| Fade Out | "... fades out", "fades away" | The object fading out at the shot's end |
+| Fade · in | "... fades in" | The object fading in at the shot's start |
+| Fade · out | "... fades out", "fades away" | The object fading out at the shot's end |
 | Highlight | "... is highlighted", "Highlight ..." | A highlight pulsing across the shot |
 | Set Clip | A clip name (the template's Audio option) | The step's audio clip, from the shot's start |
 
 The scene's effect recipe, kept in Render Effects, sets the fade lengths and
-the highlight's cadence and colours. Each type has a mode in the header menu:
+the highlight's cadence and colours. Fade is one behavior set two ways, its
+chips saying which (*Fade · in*, *Fade · out*); a template joins a behavior
+the same way (its `family` and `variant`). Each behavior has a mode in the
+header menu, one for both ways of a Fade:
 
 - **Key**: Build keys it.
 - **Marker**: Build keys nothing and puts a marker on the Shot Sequencer's
@@ -99,15 +159,60 @@ the highlight's cadence and colours. Each type has a mode in the header menu:
   Assess checks the marker is there.
 - **Off**: neither keyed nor marked, and not reported by Assess.
 
-The modes are kept per user, for every scene.
+The modes are kept with the scene, for its sheet: whoever builds the scene
+builds the same. A scene that keeps none starts each behavior its sheet asks
+for by its word at Key (a row in cells is an explicit ask, built where the
+sheet is read first), and the clips its Audio option gives its steps with
+them; your own Marker choice wins over that, and every other behavior is at
+your own choice, Off until you make one. The rule is pythontk's
+(`ManifestEdits.modes_in_force`), so a build from code (`ShotManifest.sync`)
+starts from the same modes as the panel's Build, and records them with the scene.
+
+### Helpers a row names
+
+A row of a word that places something (`teleport`, `indicate`, `pip`) can name
+the object it happens at in its Settings: `where=VIEW_FRONT`, `where=CAM_B02`.
+Where the scene has no object of that name, Build makes it: a camera for a
+picture, a locator for a viewpoint or an arrow's tip, under the part it is for
+(a viewpoint under the delivery's root), at a first pose found as the scene
+stands at the step's shot: on the floor where its eyes see the part, a
+picture where the part is seen whole (never behind the panel it sits on),
+an arrow beside the part in free space and never end-on. It is the one
+placement every tool uses, so Unity makes its own helpers by the same rules. It is there to be moved: frame the
+camera, stand the viewpoint where the user should be. Build never moves an
+object that exists, so a second Build leaves your framing as it is, and the
+export carries it to the tool that runs the steps, which uses it exactly as
+it stands. A row that names none gets its own, named from what it says (`CAM_B02_DOOR_GRP`: its kind, step and target), which the tool that runs the steps finds by the same name. A word turned Off places nothing.
+
+### States a row names
+
+A `set` row (`set | LED | state=amber`) switches an indicator's light by name
+as its step starts. Build makes sure the indicator has that state: the
+emissive group it wears (Emissive Groups) takes the tool's default states
+where it has none (off, green, blue, amber, red; off and on where its
+emission is a map), and keeps its own where it has them. The export carries
+them, and the tool that runs the steps switches by the same names. Build keys
+nothing for the row. An indicator that wears no emissive group is said, and
+left to that tool, which gives a plain emissive material the same default
+states itself.
 
 ## Assess
 
-Assess compares the manifest with the scene and writes nothing. A row's icon
-takes the colour of its worst issue: ✖ error (such as an object missing from
-the scene), ▲ warning, ● note, ■ locked or edited. The row's tooltip lists
-every issue. While the results show, they stay current: an edit, the sheet
-read again, a hide or a shot edited anywhere runs Assess again.
+Assess compares the manifest with the scene and writes nothing. A step row's
+icon is its state, a shape for each in that state's colour: a check when the
+row is in order, a note where Build has work for it (not built, to update), a
+warning triangle, an error cross (such as an object missing from the scene), a
+pencil for a shot edited by hand, a padlock for a locked one. A step not
+assessed yet has no icon. The **Status**
+column beside the step says that issue in a few words ("2 not in scene", "not
+built", "keys missing"), and the row's tooltip lists every issue. While the
+results show, they stay current: an edit, the sheet read again, a hide or a
+shot edited anywhere runs Assess again.
+
+The **Build** button counts the steps a build would change, "Build (3)", and
+its tooltip says the plan: how many shots it creates and updates, how many it
+keeps as a hand left them, how many are locked, and how many wait on a person
+(an object no build can supply).
 
 Above the table:
 
@@ -116,7 +221,33 @@ Above the table:
 - **Expand** / **Collapse**: every row, the rows with or without issues, those
   holding objects the sheet does not list, or the selected rows.
 - **Hide** / **Show**: the selected steps or their sections, and the steps
-  without a shot.
+  without a shot. **Steps With Nothing to Do** leaves only the rows that need
+  something (an issue, a build to do, a Local Edit, a shot the sheet lacks); it
+  is a view alone, so Assess and Build still take every step.
+- **Search**, at the row's right end (as the Unity manifest's): only the steps
+  whose words match every word typed show (a step's ID, name and status, its
+  objects' names and behaviors); a view alone, too.
+
+Under the table, the selected row's detail: its words, its behaviors' states
+and every issue its tooltips list (drag the splitter to fold it away).
+
+Each object's behaviors are chips in the Behaviors cell, as in the Unity
+manifest: each in its state's colour and led by its glyph (a note to build
+or to re-key, a warning, an error, a pencil where a Local Edit added it;
+built ones plain), a type set to Marker led by ◆, and one off or taken away
+here struck through. A behavior a sentence only implies is Off until you set
+it, so its chips start struck: click one and pick Key or Marker for Every Row
+(or set each type in the header menu's Behaviors). Each has its own tooltip and
+menu (on or off for that object while its type is keyed or marked, its Key /
+Marker / Off for every row, the page that edits it), and a
++ gives the object a behavior its kind offers that it lacks. The Key /
+Marker / Off choices are kept with the scene, for its sheet (see
+[Behaviors](#behaviors)).
+
+What a Build keys rides the delivery: each object's behavior in a shot's
+record says how it was made (`mode`: key or marker), and a Unity manifest
+built from the same sheet leaves the keyed ones to the delivery (*in the
+delivery*), building the rest. Used alone, each manifest builds all it can.
 
 Right-click a step to open its shot in the Shot Sequencer, or an object row to
 show it in the Outliner, apply its behaviors, or open Render Effects on that
@@ -127,13 +258,18 @@ object alone.
 The first Build lays the shots out in sheet order, each at the length the
 Shots settings give, with the gap between them. Type a frame into a step's
 **Start** or **End** first to place it yourself (double-click the cell); later
-steps re-flow. Solid text is a frame you typed; dim italic is filled in.
+steps re-flow. Solid text is a shot's own frame or one you typed; dim italic
+is where Build would place a new shot.
 
 Later Builds update what changed:
 
 - A step with no shot yet gets one in sheet order, after its previous step's
   shot. The shots after it move later with their keys, once you confirm how
-  many.
+  many. Until then Start / End show only frames that hold now: a shot's own
+  (its keys are there; its tooltip says where Build moves it), and a new
+  shot's where Build places it without moving another. A new shot that needs
+  room made shows *insert*; its tooltip says where it lands and how far the
+  shots after it move.
 - Behaviors an older effect recipe keyed are keyed again, and the keys of
   behaviors the sheet dropped are removed.
 - A shot's name, description and members follow the step.
@@ -143,10 +279,18 @@ Build (renamed, resized, its members or description changed) unless **Edits**
 in the header menu is set to **Rebuild Hand-Edited Shots**. It never creates,
 renames or removes a scene object, and never removes a shot.
 
+A step row leads its right-click menu with its own fix, in bold, for that row
+(or the selection's rows of its kind) alone: **Build** where a Build would
+change its built shot, **Rebuild from Sheet** where a hand edited it. Either
+way the shot gets the sheet's name, description, objects and behaviors, keeps
+its range, and no other row is built. One undo step; a locked shot stays, and
+a step with no shot yet is the Build button's to place.
+
 ## When the scene moves on
 
 Every shot lists its members; a step's shot also shows the members the step
-does not list, with no Assess needed.
+does not list, with no Assess needed. What moves inside an object the step
+lists (a group's own node, a part of it) is that object, never *not listed*.
 
 A shot no step pairs with, split off or added in the Shot Sequencer, shows as a
 *not in doc* row where the timeline has it. Right-click it to open it, reveal
@@ -164,7 +308,8 @@ Revise the manifest without touching the sheet. Double-click a step's name or
 description, or an object's name, to edit it; right-click to add a step, hide
 steps, move an object to another step, rename every row of one object, or
 revert. Edits are kept with the scene and always applied, and Build follows
-them. Edited cells are italic, and their tooltip shows the sheet's value.
+them. Edited cells read as redlines, italic and amber, and their tooltip shows
+the sheet's value.
 
 - Renaming a built step renames its shot on the next Build, and the clip it
   exports as. Renaming an object only changes which scene object the step

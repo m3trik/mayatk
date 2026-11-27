@@ -18,6 +18,7 @@ import pythontk as ptk
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.plugins._plugins import Plugins
+from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.usd import UsdUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
@@ -338,6 +339,7 @@ class SceneExporter(ptk.SceneExporterBase):
             consider_lod_visible=True,
         )
 
+    @XformUtils.at_rest()  # rest transforms as the scene rests, whatever frame it was saved on
     def perform_export(
         self,
         export_dir: str,
@@ -573,6 +575,8 @@ class SceneExporter(ptk.SceneExporterBase):
                     self._pin_glb_requirements()
             elif not usd:
                 self._apply_default_fbx_options(create_glb_enabled)
+            if run.exclude_audio and not usd:
+                self._pin_excluded_audio()
             # The settings as the preset (or the reset) left them: what this
             # run's write plan decides from, before any task writes them.
             self.task_manager.capture_write_baseline()
@@ -1132,6 +1136,14 @@ class SceneExporter(ptk.SceneExporterBase):
     #: 2026-10-05); the files the scene records name follow it in after the
     #: write (``FbxUtils.embed_dependencies``).
     _SELF_CONTAINED_FBX_OPTIONS = {"FBXExportEmbeddedTextures": True}
+    #: What Exclude Audio turns off over a loaded preset or the defaults
+    #: (:meth:`_pin_excluded_audio`): the FBX plug-in's own Audio include,
+    #: which writes the Time Editor's audio clips into the file by path --
+    #: measured 2026-11-25 (Maya 2025, FBX 2020.3.6): ``AudioLayer`` and
+    #: ``Audio`` objects naming the clip's file, and ``FBXResetExport`` turns
+    #: the include on. The Time Slider's sound and a DG ``audio`` node it
+    #: writes nothing of; those ship through the ``audio`` record alone.
+    _EXCLUDE_AUDIO_FBX_OPTIONS = {"FBXExportAudio": False}
 
     def _default_fbx_options(self, glb_deliverable: bool) -> Dict[str, Any]:
         """FBX export flags for a run that names NO preset.
@@ -1285,6 +1297,23 @@ class SceneExporter(ptk.SceneExporterBase):
             "FBX state nor silently drops instancing, smoothing or media."
         )
 
+    def _pin_fbx_options(self, options: Dict[str, Any], why: str) -> None:
+        """Pin *options* over what the run starts from -- a loaded preset or
+        the reset defaults -- and, where a loaded preset had any otherwise, say
+        which and *why*: the preset's other settings stand."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        overridden = [o for o, v in options.items() if FbxUtils.export_flag(o) != v]
+        FbxUtils.set_fbx_options(options)
+        if overridden and self.preset_file:
+            turned = ", ".join(
+                f"{o} turned {'on' if options[o] else 'off'}" for o in overridden
+            )
+            self.logger.info(
+                f"FBX preset overridden: {turned} -- {why}; the preset's other "
+                "settings stand."
+            )
+
     def _pin_self_contained(self) -> None:
         """Re-pin :attr:`_SELF_CONTAINED_FBX_OPTIONS` over a loaded preset, saying so.
 
@@ -1293,16 +1322,17 @@ class SceneExporter(ptk.SceneExporterBase):
         ship a deliverable that needs files beside it (Maya's own
         ``fbxexport`` preset leaves Embed Media off).
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
+        self._pin_fbx_options(
+            self._SELF_CONTAINED_FBX_OPTIONS, "the deliverable carries its media"
+        )
 
-        required = self._SELF_CONTAINED_FBX_OPTIONS
-        overridden = [o for o, v in required.items() if FbxUtils.export_flag(o) != v]
-        FbxUtils.set_fbx_options(required)
-        if overridden:
-            self.logger.info(
-                f"FBX preset overridden: {', '.join(overridden)} turned on -- the "
-                "deliverable carries its media; the preset's other settings stand."
-            )
+    def _pin_excluded_audio(self) -> None:
+        """Pin :attr:`_EXCLUDE_AUDIO_FBX_OPTIONS` for an Exclude Audio run,
+        saying so when a loaded preset had the include on. The record half is
+        the publish's (``ExportRun.excluded_records``)."""
+        self._pin_fbx_options(
+            self._EXCLUDE_AUDIO_FBX_OPTIONS, "Exclude Audio ships no audio"
+        )
 
     def _pin_glb_requirements(self) -> None:
         """Re-pin :attr:`_GLB_REQUIRED_FBX_OPTIONS` over a loaded preset, saying so.
@@ -1315,21 +1345,10 @@ class SceneExporter(ptk.SceneExporterBase):
         shipped without TANGENT -- reported as weak specular on the baked
         table, with nothing in the log to say the preset had done it.
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
-        required = self._GLB_REQUIRED_FBX_OPTIONS
-        overridden = [
-            option
-            for option, value in required.items()
-            if FbxUtils.export_flag(option) != value
-        ]
-        FbxUtils.set_fbx_options(required)
-        if overridden:
-            self.logger.info(
-                f"FBX preset overridden for the GLB: {', '.join(overridden)} "
-                "turned on -- a GLB needs its media embedded and its tangents "
-                "shipped; the preset's other settings stand."
-            )
+        self._pin_fbx_options(
+            self._GLB_REQUIRED_FBX_OPTIONS,
+            "a GLB needs its media embedded and its tangents shipped",
+        )
 
     def _pin_carrier_requirements(self) -> bool:
         """Write binary when the export ships the ``data_export`` carrier.

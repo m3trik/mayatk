@@ -1116,17 +1116,6 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         """Leaf name with namespace preserved: ``"|grp|ns:obj"`` -> ``"ns:obj"``."""
         return str(node).split("|")[-1]
 
-    @staticmethod
-    @ptk.Deprecation.symbol(
-        'XformUtils.get_bounding_box(node, "box", world_space=world)',
-        remove_in="0.30.0",
-        since="2026-10-25",
-    )
-    def get_bounding_box(node, world: bool = True) -> BoundingBox:
-        """Moved to ``XformUtils.get_bounding_box(node, "box", world_space=world)``,
-        the one bounding-box query (this was a second, with another signature)."""
-        return CoreUtils._bounding_box(node, world=world)
-
 
 # --------------------------------------------------------------------------------------------
 

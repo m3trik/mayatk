@@ -1237,7 +1237,7 @@ class TestReconcileStalePaths(unittest.TestCase):
         """A build stores a doc name it cannot resolve as written, pinned so
         Assess can show it missing; once the node exists the scene scan adds
         its long path beside it -- one object, two members, shipped twice
-        (SOL_REPLACE_ASSEMBLY's A01_1: ``KEYS`` and
+        (a production scene's A01_1: ``KEYS`` and
         ``|INTERACTIVE|KEYS_GRP|KEYS``).  The reconcile stores a name that
         answers to one node as that node, and the pin goes with it."""
         grp = cmds.group(empty=True, name="KEYS_GRP")
@@ -1646,7 +1646,7 @@ class TestShotManifestAssess(unittest.TestCase):
     def _build_seq(self, steps, built_ids=None):
         """Return a ShotManifest whose store contains shots for *built_ids*."""
         store = ShotStore()
-        builder = ShotManifest(store)
+        builder = ShotManifest(store, disabled_behaviors=())  # every behavior keyed: these judge the statuses
         if built_ids is None:
             built_ids = set()
         for step in steps:
@@ -3033,7 +3033,7 @@ class TestADeletedBehaviorCurveTakesItsClaims(unittest.TestCase):
     """A curve holding only behavior keys is forgotten with them when deleted.
 
     Neither the gap-hold nor the boundary pass sweeps the ``authored``
-    register, so SOL_REPLACE_ASSEMBLY (2026-10-10, fresh mayapy) held 399
+    register, so a production scene (2026-10-10, fresh mayapy) held 399
     claims on 24 highlight / fade curves its scene no longer had."""
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -3676,7 +3676,7 @@ class TestTheGapHoldPinPassIsScoped(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
 class TestTheSOLAcceptanceFindings(unittest.TestCase):
-    """Defects the SOL_REPLACE_ASSEMBLY acceptance (every shot op, gap 0 and
+    """Defects a production scene's acceptance (every shot op, gap 0 and
     gap 10, 2026-10-11) found, all older than the seam pin."""
 
     def tearDown(self):
@@ -4079,7 +4079,7 @@ class TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer(unittest.TestCase):
         """Bug: the poses agree (1 and 1), so the seam closed flush -- but the
         retime refuses a zero-width gap (it would cut or stack the key), so
         the gap's key stayed where it was and B played it.  Found on
-        SOL_REPLACE_ASSEMBLY pulled into Blender with its stepped keys: A04
+        a production scene pulled into Blender with its stepped keys: A04
         0.0012 off.  Fixed: 2026-10-12"""
         cube, crv = self._curve(((10, 0.0), (40, 1.0), (45, 5.0), (50, 1.0), (70, 3.0)))
         seq = ShotSequencer(
@@ -4156,7 +4156,7 @@ class TestExplicitPlacementsFollowTheClosingRule(unittest.TestCase):
     """The closing rule for the explicit placements too (maintainer
     2026-10-11, "ALL of them"): a band move, a slide, a Ctrl edge and Move to
     Shot's landing land a seam flush where the two poses agree and a frame
-    short where they differ, keyed or held.  Measured on SOL_REPLACE_ASSEMBLY
+    short where they differ, keyed or held.  Measured on a production scene
     at gap 10: a band move or slide dropped flush played B's opening pose on
     A's last frame (up to 71.5 apart) and, onto a held tail, ramped A01_1's
     last 10 frames 2.08; Move to Shot shoved C02's opening keys a frame."""
@@ -4819,7 +4819,7 @@ class TestMoveToShotKeepsWhatStaysInTheSource(unittest.TestCase):
 
 class TestMoveToShotCopiesASharedSeamSample(unittest.TestCase):
     """Move to Shot copies, not carries, a run's sample on a FLUSH seam: it
-    is the neighbour's pose too.  Bug (2026-10-11, SOL_REPLACE_ASSEMBLY gap
+    is the neighbour's pose too.  Bug (2026-10-11, a production scene at gap
     0): "B12"'s last run opened on B11's end, SOLENOID's first key; carried
     away, every shot before played the new first key's extrapolation --
     4.85 off over 1734 frames."""
@@ -4882,7 +4882,7 @@ class TestAReleasedHoldOtherShotsPlayStays(unittest.TestCase):
     """A gap hold written before its stop pin existed runs on to the curve's
     next key, through every shot between, and those shots play it.  Released
     when its gap closed, the restored interpolation re-timed them all:
-    SOL_REPLACE_ASSEMBLY, a respace 10 -> 0 played a held door
+    a production scene, a respace 10 -> 0 played a held door
     (``LCKR_DOOR_LOC_rotateY``) off its hold in 15 shots, up to 1.22, and
     the layout settled only on a second respace."""
 
@@ -9662,6 +9662,91 @@ class TestRespacePreservesEachShot(unittest.TestCase):
         # back (reported separately).  The shots on either side play as before.
         self.assertEqual(self._samples(loc, 0, 20), before_a, "A as before")
         self.assertEqual(self._samples(loc, 45, 65), before_b, "B as before")
+
+    def test_a_shared_cut_gap_opened_closed_and_opened_again_plays_the_same(self):
+        """Gap 0 -> 20 -> 0 -> 10 -> 0, as the Shots panel applies it: every
+        shot keeps its members and plays the same on every frame at each step,
+        and back at 0 the whole timeline plays as before -- the only new keys
+        sit on cut frames (the pins a seam gets as it opens).  Covered: a
+        smooth move keyed on every cut, a hold into a cut, a stepped jump ON a
+        cut, a member moving across cuts with no key on them, and an object
+        no shot lists.  (The user, 2026-11-22: "a gap of 0 that could be
+        adjusted to 20 then back to 0 and then to 10 without breaking any
+        shot members or animation".)  Added: 2026-11-22"""
+        length = 40
+
+        def keyed(name, attr, keys, tangent="auto"):
+            if not cmds.objExists(name):
+                cmds.spaceLocator(name=name)
+            for t, v in keys:
+                cmds.setKeyframe(name, at=attr, t=t, v=v)
+            cmds.keyTangent(name, at=attr, itt="linear" if tangent == "step" else tangent, ott=tangent)
+            return cmds.listConnections(f"{name}.{attr}", type="animCurve")[0]
+
+        crvs = {
+            ("ramp", "tx"): keyed("ramp", "translateX", [(0, 0), (40, 4), (80, 1), (120, 7), (160, 2)]),
+            ("held", "ty"): keyed("held", "translateY", [(10, 0), (30, 3), (40, 3), (70, 9), (80, 9)]),
+            ("jump", "tz"): keyed("jump", "translateZ", [(0, 0), (40, 5), (80, 5)], "step"),
+            ("cross", "rz"): keyed("cross", "rotateZ", [(10, 0), (70, 40), (150, -20)], "spline"),
+            ("loose", "tx"): keyed("loose", "translateX", [(20, 0), (60, 5), (100, 1)]),
+        }
+        members = {
+            "A": ["ramp", "held", "jump", "cross"],
+            "B": ["ramp", "held", "jump", "cross"],
+            "C": ["ramp", "cross"],
+            "D": ["ramp", "cross"],
+        }
+        seq = ShotSequencer(
+            [ShotBlock(i, n, i * length, (i + 1) * length, list(members[n])) for i, n in enumerate("ABCD")]
+        )
+        seq.store.gap = 0.0
+
+        def at(crv, frame):
+            return cmds.keyframe(crv, q=True, eval=True, time=(frame, frame))[0]
+
+        def worst(a, b):
+            """The largest difference between two ``{name: {curve: [values]}}``
+            (or ``{curve: [values]}``) samplings of the same shape."""
+            if isinstance(a, dict):
+                self.assertEqual(sorted(a, key=str), sorted(b, key=str))
+                return max((worst(a[k], b[k]) for k in a), default=0.0)
+            self.assertEqual(len(a), len(b))
+            return max((abs(x - y) for x, y in zip(a, b)), default=0.0)
+
+        def plays():
+            return {
+                s.name: {
+                    key: [at(crv, s.start + f) for f in range(length + 1)]
+                    for key, crv in crvs.items()
+                    if key[0] in s.objects or key[0] == "loose"
+                }
+                for s in seq.sorted_shots()
+            }
+
+        def timeline():
+            return {key: [at(crv, f) for f in range(4 * length + 1)] for key, crv in crvs.items()}
+
+        before, whole, keys = plays(), timeline(), {k: cmds.keyframe(c, q=True) for k, c in crvs.items()}
+        cuts = {float(length), 2.0 * length, 3.0 * length}
+        for gap in (20, 0, 10, 0):
+            with self.subTest(gap=gap):
+                seq.store.gap = float(gap)
+                seq.apply_gap(float(gap), scope="all")
+                self.assertEqual(
+                    [(s.name, s.start, s.end) for s in seq.sorted_shots()],
+                    [(n, i * (length + gap), i * (length + gap) + length) for i, n in enumerate("ABCD")],
+                )
+                self.assertEqual({s.name: sorted(s.objects) for s in seq.sorted_shots()},
+                                 {n: sorted(m) for n, m in members.items()}, "members kept")
+                # Within float noise: Maya's evaluation at a moved key's frame
+                # differs in the last bits, never by a visible amount.
+                self.assertLess(worst(plays(), before), 1e-4, "every shot plays as it did")
+                if gap == 0:
+                    self.assertLess(worst(timeline(), whole), 1e-4, "the whole timeline plays as it did")
+                    for key, crv in crvs.items():
+                        now = cmds.keyframe(crv, q=True)
+                        self.assertTrue(set(keys[key]) <= set(now), f"{key}: no key lost")
+                        self.assertTrue(set(now) - set(keys[key]) <= cuts, f"{key}: new keys only on cuts")
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")

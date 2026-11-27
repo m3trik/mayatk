@@ -727,7 +727,7 @@ class TestStaggerKeepsEachSegmentsShape(MayaTkTestCase):
         """C (40..50) ends at 5, B (20..30) starts at 10: laid C, B the seam
         holds B's 10, so C's last span arrives somewhere new -- but C's key at
         45 keeps its neighbours, and its auto slope re-derived from the new
-        value, re-shaping C's FIRST span too (measured on SOL_REPLACE_ASSEMBLY
+        value, re-shaping C's FIRST span too (measured on a production scene
         2026-10-11: SOCKET_WRENCH_translateY 0.37 off over a span two keys
         from the seam)."""
         cube = self._cube(

@@ -33,6 +33,7 @@ except ImportError:
 import pythontk as ptk
 
 from mayatk.light_utils._light_utils import LightUtils
+from mayatk.core_utils.mesh_rays import MeshRays
 from mayatk.core_utils.units import Units
 
 Vec = Tuple[float, float, float]
@@ -43,7 +44,7 @@ Box = List[List[float]]
 ProbeSite = ptk.ProbeSite
 
 
-class MayaProbeHost:
+class MayaProbeHost(MeshRays):
     """What the probe placement asks of the Maya scene
     (:class:`pythontk.ProbeHost`), and how its rays intersect Maya meshes
     (:class:`pythontk.ProbeMesh`): the shapes under each node, through
@@ -64,59 +65,6 @@ class MayaProbeHost:
     def nodes(objects: Sequence[str]) -> List[str]:
         """The transforms as given: the placement names nodes by DAG path."""
         return list(objects or ())
-
-    def rays(self, nodes: Sequence[str]) -> ptk.ProbeRays:
-        """A :class:`pythontk.ProbeRays` over the mesh shapes under *nodes*."""
-        import maya.api.OpenMaya as om
-
-        rays = ptk.ProbeRays(self)
-        for mesh in nodes:
-            for shape in (
-                cmds.listRelatives(
-                    mesh, shapes=True, noIntermediate=True, fullPath=True
-                )
-                or []
-            ):
-                if cmds.nodeType(shape) != "mesh":
-                    continue
-                sel = om.MSelectionList()
-                sel.add(shape)
-                path = sel.getDagPath(0)
-                fn = om.MFnMesh(path)
-                box = om.MFnDagNode(path).boundingBox
-                box.transformUsing(path.inclusiveMatrix())
-                rays.add(
-                    mesh,
-                    (box.min.x, box.min.y, box.min.z),
-                    (box.max.x, box.max.y, box.max.z),
-                    (fn, fn.autoUniformGridParams()),
-                )
-        return rays
-
-    @staticmethod
-    def intersect(payload, origin, direction, far):
-        import maya.api.OpenMaya as om
-
-        fn, accel = payload
-        hit = fn.closestIntersection(
-            om.MFloatPoint(*origin),
-            om.MFloatVector(*direction),
-            om.MSpace.kWorld,
-            far,
-            False,
-            accelParams=accel,
-        )
-        if not (hit and hit[2] >= 0):
-            return None
-        point = hit[0]
-        return hit[1], (point.x, point.y, point.z), hit[2]
-
-    @staticmethod
-    def normal(payload, face) -> Vec:
-        import maya.api.OpenMaya as om
-
-        normal = payload[0].getPolygonNormal(face, om.MSpace.kWorld)
-        return (normal.x, normal.y, normal.z)
 
     def lights(self) -> Tuple[List[Tuple[Vec, Optional[str]]], bool]:
         """The placed lights, ``[(world point, own mesh or None)]`` -- a mesh

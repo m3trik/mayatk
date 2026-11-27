@@ -486,8 +486,8 @@ class TestSceneSourceFamilyHasOneOwner(QuickTestCase):
     """The scene-source family had two owners: EnvUtils' copies forwarded to
     DataNodes, except ``set_scene_source``, which also armed the twin's save --
     and the flat ``mtk.set_scene_source`` reached the record-only DataNodes one
-    by module order. DataNodes owns all six; EnvUtils' names forward, with a
-    warning, until 0.30.0. Consolidated: 2026-10-25."""
+    by module order. DataNodes owns all six (consolidated 2026-10-25; EnvUtils'
+    retired doors removed 2026-11-26)."""
 
     NAMES = (
         "set_scene_source",
@@ -504,12 +504,7 @@ class TestSceneSourceFamilyHasOneOwner(QuickTestCase):
         for name in self.NAMES:
             with self.subTest(name=name):
                 self.assertEqual(getattr(mtk, name), getattr(DataNodes, name))
-
-    def test_the_retired_env_utils_doors_warn_and_forward(self):
-        with self.assertWarns(DeprecationWarning):
-            self.assertEqual(
-                EnvUtils.scene_project_root(), DataNodes.scene_project_root()
-            )
+                self.assertFalse(hasattr(EnvUtils, name))
 
 
 class TestWorkspaceManagerDefaults(QuickTestCase):

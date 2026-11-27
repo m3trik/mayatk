@@ -411,7 +411,7 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
             _make_audio_step(sid, n, source_path="")
             for sid, n in zip(["A01", "A02", "A03"], names)
         ]
-        builder = ShotManifest(self.store)
+        builder = ShotManifest(self.store, disabled_behaviors=())
         self._run_build(builder, steps, incremental=False)
 
         shots = {s.name: s for s in self.store.sorted_shots()}
@@ -445,7 +445,7 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
             _make_audio_step(sid, n, source_path="")
             for sid, n in zip(["A01", "A02"], names)
         ]
-        builder = ShotManifest(self.store)
+        builder = ShotManifest(self.store, disabled_behaviors=())
         self._run_build(builder, steps, incremental=False)
 
         before_shots = {s.name: (s.start, s.end) for s in self.store.sorted_shots()}
@@ -468,7 +468,7 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
             _make_audio_step(sid, n, source_path="")
             for sid, n in zip(["A01", "A02"], names)
         ]
-        builder = ShotManifest(self.store)
+        builder = ShotManifest(self.store, disabled_behaviors=())
 
         # First build: no audio registered yet. Shots use 30f fallback.
         self._run_build(builder, steps, incremental=False)
@@ -502,6 +502,77 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
             on, off = self._audio_keys(name)
             self.assertTrue(on and off)
             self.assertAlmostEqual(on[0], shots[sid].start, delta=0.5)
+
+    def test_a_grown_shot_moves_the_animation_of_the_shots_after_it(self):
+        """A shot grown for its clip moves the later shots WITH their keys.
+
+        A real task's rebuild grew each hand-cut shot to its narration and
+        moved every later shot off its own animation (bounds alone).
+        """
+        names = ["A01_Hello", "A02_World"]
+        for n in names:
+            _register_track(n, 1.0, "ride_before")  # 24f each
+        steps = [
+            _make_audio_step(sid, n, source_path="")
+            for sid, n in zip(["A01", "A02"], names)
+        ]
+        builder = ShotManifest(self.store, disabled_behaviors=())
+        self._run_build(builder, steps, incremental=False)
+        a02 = self.store.shot_by_name("A02")
+        cube = cmds.polyCube(name="ride_cube")[0]
+        cmds.setKeyframe(cube, attribute="tx", time=a02.start, value=0)
+        cmds.setKeyframe(cube, attribute="tx", time=a02.start + 10, value=5)
+        start, keys = a02.start, cmds.keyframe(cube, query=True, timeChange=True)
+
+        _register_track(names[0], 2.0, "ride_after")  # A01's clip: 48f
+        self._run_build(builder, steps, incremental=True)
+
+        delta = self.store.shot_by_name("A02").start - start
+        self.assertGreater(delta, 0, "A02 moved out of the grown A01's way")
+        self.assertEqual(
+            cmds.keyframe(cube, query=True, timeChange=True),
+            [t + delta for t in keys],
+            "A02's animation moved with it",
+        )
+
+    def test_a_shot_a_grow_moved_keeps_its_animated_member(self):
+        """Hand-cut shots keep their animated members through a grow.
+
+        A build reads a curve's keys once; a grow moved them, and a later
+        shot whose member the same curve animates, read where its keys used
+        to be, dropped it (the real task: a door that moves in two steps).
+        """
+        names = ["A01_Hello", "A02_World", "A03_Bye"]
+        for n in names:
+            _register_track(n, 1.0, "member")  # 24f each
+        _register_track(names[1], 2.0, "member_long")  # A02's: 48f
+        door = cmds.ls(cmds.polyCube(name="member_door")[0], long=True)[0]
+        for i, sid in enumerate(["A01", "A02", "A03"]):
+            start = 1.0 + i * 40.0
+            if sid != "A02":  # the door moves in A01 and again in A03
+                cmds.setKeyframe(door, attribute="ty", time=start, value=0)
+                cmds.setKeyframe(door, attribute="ty", time=start + 10, value=3)
+            self.store.define_shot(
+                name=sid, start=start, end=start + 30.0, objects=[door]
+            )
+        cmds.group(empty=True, name="member_door_grp")  # what each row is about
+        steps = [
+            _make_audio_step(sid, n, source_path="")
+            for sid, n in zip(["A01", "A02", "A03"], names)
+        ]
+        for step in steps:
+            step.objects.append(BuilderObject(name="member_door_grp"))
+        self._run_build(ShotManifest(self.store, disabled_behaviors=()), steps, incremental=True)
+
+        a01, a02, a03 = (self.store.shot_by_name(s) for s in ("A01", "A02", "A03"))
+        self.assertGreaterEqual(a02.end - a02.start, 47.0, "A02 grew to its clip")
+        self.assertEqual(
+            cmds.keyframe(door, query=True, timeChange=True, time=(a03.start, a03.end)),
+            [a03.start, a03.start + 10.0],
+            "A03's keys moved with it (the grow holds the door's pose at A02's edges)",
+        )
+        self.assertIn(door, a01.objects)
+        self.assertIn(door, a03.objects, "A03 kept the door it animates")
 
 
 if __name__ == "__main__":

@@ -621,6 +621,13 @@ class MayaShotsHost(_MayaShotsHostInternal):
         return _MayaShotsHostInternal._member_nodes(name)
 
     @staticmethod
+    def member_lineage(member: str) -> List[str]:
+        """The names of *member*'s node from its top level down: a member is
+        stored as its long DAG path, which is its lineage
+        (``ptk.ShotStore.names_member``)."""
+        return str(member).split("|")
+
+    @staticmethod
     def existing_objects(store, names) -> set:
         """Which of *names* the scene still holds (``ptk.ShotStore.stale_shots``).
 

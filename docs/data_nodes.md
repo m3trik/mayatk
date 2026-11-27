@@ -94,7 +94,7 @@ deliverable's fields, in the FBX and the GLB:
 | `lods` | 1 | derived | LODs | -- | unity | -- | LOD groups: per group its node name, its level nodes (LOD0, the most detailed, first) and each level's switch height, a fraction of the screen's height, the last the cull |
 | `articulation` | 2 | authored | Articulated Rig | -- | unity, glb | v2 | articulated rigs: per rig its joints (node name, parent joint, rest translate and rotation, the anchor frame its channels turn and slide in, rotate order, channels with limits and grab weights) and the parts a hand grabs, each with the joint it rides -- in metres |
 | `render_effects` | 2 | derived | Render Effects | `animation` | unity, glb, verifier | v2 | which nodes carry an animated render effect -- 'visibility', 'opacity', 'highlight' with its colour stops 'highlight_color' and 'highlight_color_dim' -- and which materials an animated 'emission'; each curve rides the file's animated-value transport, per clip |
-| `handoff` | 3 | derived | Export | -- | glb | -- | the standalone-reader contract: the approved scene part by part and the lighting it was approved under |
+| `handoff` | 3 | derived | Export | -- | glb, unity | -- | the standalone-reader contract: the approved scene part by part and the lighting it was approved under |
 
 **`data_internal`** -- the private records:
 
@@ -104,7 +104,7 @@ deliverable's fields, in the FBX and the GLB:
 | `key_stash` | 1 (bare) | Key Stash | domain merge | the clip manifest of parked keys: per clip its id, label, objects, parked curves, source shot and metadata |
 | `smart_bake_sessions` | 2 (bare) | SmartBake | unites | LIFO stack of bake-session restore manifests, oldest first, each under its 'id': what the bake replaced, to put it back |
 | `hierarchy_baseline` | 1 (bare) | Hierarchy check | keeps its own | the export hierarchy baseline (a HierarchyBaseline record): the exported node paths, their hash and count, and the scene file that recorded them |
-| `emissive_registry` | 2 (bare) | Emissive Groups | unites, hand-off | what crosses a hand-off for the emissive groups: per group copy its group, base material, emission strength and emission keys (the old tool's slot registry, version 1, is converted and removed) |
+| `emissive_registry` | 2 (bare) | Emissive Groups | unites, hand-off | what crosses a hand-off for the emissive groups: per group copy its group, base material, emission strength and emission keys (the held ones' frames), and its named states, tint and tint keys where it has them (the old tool's slot registry, version 1, is converted and removed) |
 | `render_effects_bindings` | 1 (bare) | Render Effects | unites | legacy, Maya only: the bindings the retired viewport material mode left, per material channel its object and the authored values -- read to restore them, then cleared |
 | `texture_combine` | 1 (bare) | Texture Combine | unites | texture combines by name: per mesh its original UVs and face materials, the source maps read, the settings and overrides |
 | `light_rigs` | 1 (bare) | Light Rigs | unites | light rigs by group: the rig applied, its fingerprint, the plugs it overrides and the rig a swap replaced |
