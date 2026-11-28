@@ -62,7 +62,7 @@ from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
 def _make_steps(*names, behaviors=None):
     """Create a list of BuilderSteps with one object each."""
     if behaviors is None:
-        behaviors = ["fade_in", "fade_out"]
+        behaviors = ["show", "hide"]
     steps = []
     for name in names:
         step = BuilderStep(
@@ -87,20 +87,20 @@ def _fresh_store():
 
 
 class TestDetectBehaviors(unittest.TestCase):
-    def test_fade_in(self):
+    def test_show(self):
         self.assertEqual(
-            ManifestModel.detect_behaviors("Object fades in from black"), ["fade_in"]
+            ManifestModel.detect_behaviors("Object fades in from black"), ["show"]
         )
 
-    def test_fade_out(self):
+    def test_hide(self):
         self.assertEqual(
-            ManifestModel.detect_behaviors("Object fades out slowly"), ["fade_out"]
+            ManifestModel.detect_behaviors("Object fades out slowly"), ["hide"]
         )
 
-    def test_fade_in_and_out(self):
+    def test_show_and_hide(self):
         self.assertEqual(
             ManifestModel.detect_behaviors("Fades in then fades out"),
-            ["fade_in", "fade_out"],
+            ["show", "hide"],
         )
 
     def test_no_behavior(self):
@@ -1542,17 +1542,17 @@ class TestDefaultBehaviors(unittest.TestCase):
     def test_appends_to_existing_behaviors(self):
         """New behaviors are appended alongside existing ones."""
         proc = Mapping._build_default_behaviors({"audio": ["set_clip"]})
-        obj = BuilderObject(name="clip", kind="audio", behaviors=["fade_in"])
+        obj = BuilderObject(name="clip", kind="audio", behaviors=["show"])
         step = self._step(obj)
         proc(step)
-        self.assertEqual(obj.behaviors, ["fade_in", "set_clip"])
+        self.assertEqual(obj.behaviors, ["show", "set_clip"])
 
     def test_multiple_kinds(self):
         """Config can target multiple kinds simultaneously."""
         proc = Mapping._build_default_behaviors(
             {
                 "audio": ["set_clip"],
-                "scene": ["fade_in"],
+                "scene": ["show"],
             }
         )
         audio = BuilderObject(name="clip", kind="audio")
@@ -1560,7 +1560,7 @@ class TestDefaultBehaviors(unittest.TestCase):
         step = self._step(audio, scene)
         proc(step)
         self.assertEqual(audio.behaviors, ["set_clip"])
-        self.assertEqual(scene.behaviors, ["fade_in"])
+        self.assertEqual(scene.behaviors, ["show"])
 
     def test_empty_config_is_noop(self):
         """Empty config dict leaves objects unchanged."""

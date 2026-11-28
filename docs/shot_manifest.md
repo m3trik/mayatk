@@ -34,7 +34,7 @@ owns](#what-it-owns)
    the cell and the fix. (A new sheet: `python -m pythontk ops apply sheet.new
    out=<file.csv>` writes a template's starter to fill.)
 2. In the header menu, check each behavior's mode. A behavior the sheet asks
-   for by its word (`highlight`, `fade_out`) starts at **Key**; one a sentence
+   for by its word (`highlight`, `hide`) starts at **Key**; one a sentence
    only implies starts **Off** until you choose.
 3. Click **Assess**. Each row's icon shows its worst issue; hover the row for
    the list.
@@ -47,8 +47,8 @@ The panel's `?` button holds the short form of this page.
 
 A sheet is written in the **Linear** or **Interactive** format: one table with
 a row for each step itself (its ID, name and narration), then a row for each
-thing that happens in it, a word in Action (`highlight`, `fade_in`,
-`fade_out`, `use` ...) and the objects it is about in Target. Every cell holds
+thing that happens in it, a word in Action (`highlight`, `show`,
+`hide`, `use` ...) and the objects it is about in Target. Every cell holds
 one kind of thing and nothing is read from a sentence. The format is pythontk's
 [build sheets](https://github.com/m3trik/pythontk/blob/main/docs/build_sheets.md)
 guide, and each template ships a starter sheet to copy
@@ -58,11 +58,11 @@ guide, and each template ships a starter sheet to copy
 |:---|:---|:---|:---|:---|:---|:---|
 | `B01` | Remove the filter | Remove the old filter with the wrench. | | | | |
 | | | | `use` | `FILTER` | `WRENCH` | `B01_1` |
-| | | | `fade_out` | `FILTER` | | |
+| | | | `hide` | `FILTER` | | |
 
 The panel shows each row as the sentence its cells mean ("Selecting
 LATCH_UPPER with KEY in hand plays A01_1"), keys the three words it builds
-(highlight and the two fades) and leaves every other word alone, for the tool
+(`highlight`, `show` and `hide`) and leaves every other word alone, for the tool
 that builds it. A look that names its take in Clip is keyed into that take. One
 that names none belongs to its step: a Linear sheet, played straight through,
 has it keyed into the step's shot; an Interactive one, whose steps wait on the
@@ -142,16 +142,16 @@ opens; the panel writes the format's reference, `MAPPING_FORMAT.md`, there.
 
 | Behavior | The sheet says | Build keys |
 |:---|:---|:---|
-| Fade · in | "... fades in" | The object fading in at the shot's start |
-| Fade · out | "... fades out", "fades away" | The object fading out at the shot's end |
+| Visibility · show | "... fades in" | The object fading in at the shot's start |
+| Visibility · hide | "... fades out", "fades away" | The object fading out at the shot's end |
 | Highlight | "... is highlighted", "Highlight ..." | A highlight pulsing across the shot |
 | Set Clip | A clip name (the template's Audio option) | The step's audio clip, from the shot's start |
 
 The scene's effect recipe, kept in Render Effects, sets the fade lengths and
-the highlight's cadence and colours. Fade is one behavior set two ways, its
-chips saying which (*Fade · in*, *Fade · out*); a template joins a behavior
+the highlight's cadence and colours. Visibility is one behavior set two ways, its
+chips saying which (*Visibility · show*, *Visibility · hide*); a template joins a behavior
 the same way (its `family` and `variant`). Each behavior has a mode in the
-header menu, one for both ways of a Fade:
+header menu, one for both ways of Visibility:
 
 - **Key**: Build keys it.
 - **Marker**: Build keys nothing and puts a marker on the Shot Sequencer's
@@ -170,14 +170,14 @@ starts from the same modes as the panel's Build, and records them with the scene
 
 ### Helpers a row names
 
-A row of a word that places something (`teleport`, `indicate`, `pip`) can name
+A row of a word that places something (`travel`, `indicate`, `picture`) can name
 the object it happens at in its Settings: `where=VIEW_FRONT`, `where=CAM_B02`.
 Where the scene has no object of that name, Build makes it: a camera for a
-picture, a locator for a viewpoint or an arrow's tip, under the part it is for
+picture, a locator for a viewpoint or a pointer's tip, under the part it is for
 (a viewpoint under the delivery's root), at a first pose found as the scene
 stands at the step's shot: on the floor where its eyes see the part, a
 picture where the part is seen whole (never behind the panel it sits on),
-an arrow beside the part in free space and never end-on. It is the one
+a pointer's tip beside the part in free space and never end-on. It is the one
 placement every tool uses, so Unity makes its own helpers by the same rules. It is there to be moved: frame the
 camera, stand the viewpoint where the user should be. Build never moves an
 object that exists, so a second Build leaves your framing as it is, and the

@@ -2200,7 +2200,7 @@ class TestAnimUtils(MayaTkTestCase):
         store = mtk.ShotStore()
         led = store.edit_ledger
         obj, crv = self._keyed_tx("claims_align", [(10, 1.0), (20, 2.0), (30, 3.0)])
-        led.record_authored(crv, 20.0, 0, "fade_in", obj)
+        led.record_authored(crv, 20.0, 0, "show", obj)
         led.record_step(crv, 20.0, "auto", "auto")
         cmds.select(obj)
         self._select_tx_keys(10, obj=obj)
@@ -2224,7 +2224,7 @@ class TestAnimUtils(MayaTkTestCase):
         obj, crv = self._keyed_tx(
             "claims_invert", [(10, 1.0), (15, 5.0), (20, 2.0), (25, 4.0)]
         )
-        led.record_authored(crv, 20.0, 0, "fade_in", obj)
+        led.record_authored(crv, 20.0, 0, "show", obj)
         cmds.select(obj)
         self._select_tx_keys(10, 15, 25, obj=obj)  # over [10, 25]: 15 lands on 20
 
@@ -2286,7 +2286,7 @@ class TestAnimUtils(MayaTkTestCase):
         obj, crv = self._keyed_tx(
             "claims_moved", [(10, 1.0), (15, 2.0), (25, 3.0), (30, 4.0)]
         )
-        led.record_authored(crv, 15.0, 0, "fade_in", obj)
+        led.record_authored(crv, 15.0, 0, "show", obj)
         cmds.select(obj)
         cmds.selectKey(clear=True)
 
@@ -2305,7 +2305,7 @@ class TestAnimUtils(MayaTkTestCase):
         store = mtk.ShotStore()
         led = store.edit_ledger
         obj, crv = self._keyed_tx("claims_aligned", [(10, 1.0), (30, 3.0)])
-        led.record_authored(crv, 10.0, 0, "fade_in", obj)
+        led.record_authored(crv, 10.0, 0, "show", obj)
         cmds.select(obj)
         self._select_tx_keys(10, obj=obj)
 
@@ -2413,8 +2413,8 @@ class TestAnimUtils(MayaTkTestCase):
         obj, crv = self._keyed_tx(
             "claims_spacing", [(1, 0.0), (6, 3.0), (8, 7.0), (10, 10.0)]
         )
-        led.record_authored(crv, 6.0, 0, "fade_in", obj)
-        led.record_authored(crv, 8.0, 0, "fade_out", obj)
+        led.record_authored(crv, 6.0, 0, "show", obj)
+        led.record_authored(crv, 8.0, 0, "hide", obj)
         cmds.selectKey(clear=True)
 
         AnimUtils.adjust_key_spacing(
@@ -3107,7 +3107,7 @@ class TestAnimUtils(MayaTkTestCase):
         # Add opacity attribute to trigger the visibility mirror path
         cmds.addAttr(self.cube, ln="opacity", at="float", min=0, max=1, dv=1, k=True)
 
-        Behaviors.apply_behavior(str(self.cube), "fade_in", start=1, end=30)
+        Behaviors.apply_behavior(str(self.cube), "show", start=1, end=30)
 
         vis_keys = cmds.keyframe(f"{self.cube}.visibility", q=True, timeChange=True)
         self.assertTrue(vis_keys, "Visibility should have keys from mirror")

@@ -20,8 +20,6 @@ from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 from mayatk.mat_utils.render_opacity.material_mode import OpacityMaterialMode
 from mayatk.mat_utils.render_opacity.channels import (
     CHANNELS,
-    HIGHLIGHT,
-    OPACITY,
     PRESENCE,
     ChannelSpec,
 )
@@ -855,9 +853,6 @@ class RenderEffects(ptk.LoggingMixin):
         except Exception:
             return ptk.EffectRecipe()
 
-    #: The channel each recipe effect keys.
-    EFFECT_CHANNELS = {"fade_in": OPACITY, "fade_out": OPACITY, "pulse": HIGHLIGHT}
-
     @classmethod
     def apply_effect(
         cls,
@@ -880,9 +875,15 @@ class RenderEffects(ptk.LoggingMixin):
         writes the recipe's colours only on a channel it creates, so a revised
         object keeps its colours through a rebuild.
 
+        The effect is declared once, in ``ptk.EffectRecipe.EFFECTS``: the
+        channel it keys (``EffectRecipe.channel_of``, the name a row of
+        :data:`CHANNELS` answers) and where it goes in the range when *place*
+        is omitted (``EffectRecipe.place_of``).
+
         Parameters:
             obj: The node to key.
-            effect: ``"fade_in"``, ``"fade_out"`` or ``"pulse"``.
+            effect: A recipe effect that keys a render channel (``"fade_in"``,
+                ``"fade_out"``, ``"pulse"``).
             start: The range's first frame (a shot's start).
             end: Its last frame.
             recipe: The effect recipe; the scene's when omitted.
@@ -895,15 +896,16 @@ class RenderEffects(ptk.LoggingMixin):
             ``(anim curve, time)`` for every key written.
 
         Raises:
-            ValueError: An effect with no channel (``"clip"`` keys audio).
+            ValueError: An effect the recipe does not know, or one with no
+                render channel (``"clip"`` keys audio).
         """
-        spec = cls.EFFECT_CHANNELS.get(effect)
+        spec = CHANNELS.get(ptk.EffectRecipe.channel_of(effect))
         if spec is None:
             raise ValueError(f"The {effect!r} effect keys no render channel.")
         recipe = recipe or cls.scene_recipe()
         fps = float(fps or cls._scene_fps() or recipe.REFERENCE_FPS)
         if place is None:
-            place = "end" if effect == "fade_out" else "start"
+            place = ptk.EffectRecipe.place_of(effect)
         plan = recipe.plan(
             effect, *recipe.window(effect, start, end, place, anchor), fps
         )

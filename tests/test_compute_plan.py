@@ -78,8 +78,8 @@ class TestComputePlan(MayaTkTestCase):
     def test_plan_new_shots_sequential(self):
         """New shots get sequential positions from cursor."""
         steps = [
-            _step("S1", objects=["cube1"], behaviors=["fade_in"]),
-            _step("S2", objects=["cube2"], behaviors=["fade_out"]),
+            _step("S1", objects=["cube1"], behaviors=["show"]),
+            _step("S2", objects=["cube2"], behaviors=["hide"]),
         ]
         plan = self.manifest._compute_plan(steps)
         creates = [p for p in plan if p.action == "created"]
@@ -155,7 +155,7 @@ class TestComputePlan(MayaTkTestCase):
                 "behaviors": [
                     {
                         "name": "cube1",
-                        "behavior": "fade_in",
+                        "behavior": "show",
                         "kind": "scene",
                         "source_path": "",
                     }
@@ -163,7 +163,7 @@ class TestComputePlan(MayaTkTestCase):
             },
             description="test step",
         )
-        steps = [_step("S1", objects=["cube1"], behaviors=["fade_in"])]
+        steps = [_step("S1", objects=["cube1"], behaviors=["show"])]
         plan = self.manifest._compute_plan(steps)
         non_removed = [p for p in plan if p.action != "removed"]
         self.assertEqual(non_removed[0].action, "skipped")
@@ -447,42 +447,42 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
     Fixed: 2026-04-20
     """
 
-    def test_single_fade_in(self):
-        """One object with fade_in → 15 frames."""
-        objs = [BuilderObject(name="A", behaviors=["fade_in"])]
+    def test_single_show(self):
+        """One object with show → 15 frames."""
+        objs = [BuilderObject(name="A", behaviors=["show"])]
         self.assertEqual(Behaviors.compute_duration(objs), 15.0)
 
-    def test_single_fade_out(self):
-        """One object with fade_out → 15 frames."""
-        objs = [BuilderObject(name="A", behaviors=["fade_out"])]
+    def test_single_hide(self):
+        """One object with hide → 15 frames."""
+        objs = [BuilderObject(name="A", behaviors=["hide"])]
         self.assertEqual(Behaviors.compute_duration(objs), 15.0)
 
     def test_same_object_both_phases(self):
-        """One object with fade_in + fade_out → 30 frames (sum)."""
-        objs = [BuilderObject(name="A", behaviors=["fade_in", "fade_out"])]
+        """One object with show + hide → 30 frames (sum)."""
+        objs = [BuilderObject(name="A", behaviors=["show", "hide"])]
         self.assertEqual(Behaviors.compute_duration(objs), 30.0)
 
     def test_different_objects_opposite_phases(self):
-        """Object A: fade_in, Object B: fade_out → 30 frames (not 15).
+        """Object A: show, Object B: hide → 30 frames (not 15).
 
-        Bug: previously returned max(15, 15) = 15, causing the fade_out
-        to collide with the fade_in at the start of the shot.
+        Bug: previously returned max(15, 15) = 15, causing the hide
+        to collide with the show at the start of the shot.
         """
         objs = [
-            BuilderObject(name="A", behaviors=["fade_in"]),
-            BuilderObject(name="B", behaviors=["fade_out"]),
+            BuilderObject(name="A", behaviors=["show"]),
+            BuilderObject(name="B", behaviors=["hide"]),
         ]
         dur = Behaviors.compute_duration(objs)
         self.assertEqual(dur, 30.0, "Shot must fit in-phase (15) + out-phase (15)")
 
     def test_multiple_objects_mixed_phases(self):
-        """Object A: fade_in+fade_out (30), B: fade_in (15) → 30 frames.
+        """Object A: show+hide (30), B: show (15) → 30 frames.
 
         A already needs 30 so the phase-layout floor doesn't increase it.
         """
         objs = [
-            BuilderObject(name="A", behaviors=["fade_in", "fade_out"]),
-            BuilderObject(name="B", behaviors=["fade_in"]),
+            BuilderObject(name="A", behaviors=["show", "hide"]),
+            BuilderObject(name="B", behaviors=["show"]),
         ]
         self.assertEqual(Behaviors.compute_duration(objs), 30.0)
 
@@ -494,8 +494,8 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
         """
         objs = [
             BuilderObject(name="REGGIE", behaviors=[]),
-            BuilderObject(name="ARROW_A", behaviors=["fade_out"]),
-            BuilderObject(name="ARROW_B", behaviors=["fade_in"]),
+            BuilderObject(name="ARROW_A", behaviors=["hide"]),
+            BuilderObject(name="ARROW_B", behaviors=["show"]),
         ]
         # Only the behavior objects matter: in=15 + out=15 = 30
         self.assertEqual(Behaviors.compute_duration(objs), 30.0)
@@ -505,7 +505,7 @@ class TestComputeDurationPhaseLayout(MayaTkTestCase):
         objs = [
             BuilderObject(name="A", behaviors=[]),
             BuilderObject(name="B", behaviors=[]),
-            BuilderObject(name="C", behaviors=["fade_in"]),
+            BuilderObject(name="C", behaviors=["show"]),
         ]
         self.assertEqual(Behaviors.compute_duration(objs), 15.0)
 
@@ -523,7 +523,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
     """Test apply_to_shots uses template anchors for single-behavior objects.
 
     Bug: single-behavior objects always got anchor_override=0.0, forcing
-    fade_out to the start of the shot instead of the end.
+    hide to the start of the shot instead of the end.
     Fixed: 2026-04-20
     """
 
@@ -533,14 +533,14 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
         self.store = ShotStore()
         self.manifest = ShotManifest(self.store)
 
-    def test_fade_out_placed_at_end(self):
-        """A fade_out on a single-behavior object must key at the END."""
+    def test_hide_placed_at_end(self):
+        """A hide on a single-behavior object must key at the END."""
         from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         # Create a scene object
         cube = cmds.polyCube(name="test_cube")[0]
 
-        # Build a shot with one fade_out behavior
+        # Build a shot with one hide behavior
         self.store.define_shot(
             name="S1",
             start=1,
@@ -550,7 +550,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
                 "behaviors": [
                     {
                         "name": cube,
-                        "behavior": "fade_out",
+                        "behavior": "hide",
                         "kind": "scene",
                         "source_path": "",
                     },
@@ -572,15 +572,15 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
         self.assertTrue(len(keys) > 0, "Expected visibility keyframes")
         # The last key should be at shot.end (31)
         self.assertAlmostEqual(
-            max(keys), 31.0, places=1, msg="fade_out last key must be at shot end"
+            max(keys), 31.0, places=1, msg="hide last key must be at shot end"
         )
         # The first key of the behavior should NOT be at shot start (1)
         self.assertGreater(
-            min(keys), 1.0, msg="fade_out keys must not start at frame 1"
+            min(keys), 1.0, msg="hide keys must not start at frame 1"
         )
 
-    def test_fade_in_still_at_start(self):
-        """A fade_in on a single-behavior object remains at the START."""
+    def test_show_still_at_start(self):
+        """A show on a single-behavior object remains at the START."""
         from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         cube = cmds.polyCube(name="test_cube_in")[0]
@@ -594,7 +594,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
                 "behaviors": [
                     {
                         "name": cube,
-                        "behavior": "fade_in",
+                        "behavior": "show",
                         "kind": "scene",
                         "source_path": "",
                     },
@@ -612,7 +612,7 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
         )
         self.assertTrue(len(keys) > 0, "Expected visibility keyframes")
         self.assertAlmostEqual(
-            min(keys), 1.0, places=1, msg="fade_in first key must be at shot start"
+            min(keys), 1.0, places=1, msg="show first key must be at shot start"
         )
 
     def test_multi_behavior_object_still_distributed(self):
@@ -630,13 +630,13 @@ class TestAnchorSingleBehavior(MayaTkTestCase):
                 "behaviors": [
                     {
                         "name": cube,
-                        "behavior": "fade_in",
+                        "behavior": "show",
                         "kind": "scene",
                         "source_path": "",
                     },
                     {
                         "name": cube,
-                        "behavior": "fade_out",
+                        "behavior": "hide",
                         "kind": "scene",
                         "source_path": "",
                     },
@@ -677,7 +677,7 @@ class TestBuildDurationEncompasses(MayaTkTestCase):
     """End-to-end: build must produce shots that fully encompass
     all member behaviors (in-phase and out-phase) without overlap.
 
-    Bug: steps with fade_in on one object and fade_out on another
+    Bug: steps with show on one object and hide on another
     got 15-frame shots, causing overlapping behavior keyframes.
     Fixed: 2026-04-20
     """
@@ -691,7 +691,7 @@ class TestBuildDurationEncompasses(MayaTkTestCase):
     def test_mixed_phase_objects_chain_correctly(self):
         """Two steps with opposite-phase behaviors chain sequentially."""
         steps = [
-            _step("S1", objects={"obj_a": ["fade_in"], "obj_b": ["fade_out"]}),
+            _step("S1", objects={"obj_a": ["show"], "obj_b": ["hide"]}),
             _step("S2"),
         ]
 
@@ -700,7 +700,7 @@ class TestBuildDurationEncompasses(MayaTkTestCase):
         self.manifest.update(steps, fit_mode="fit_contents")
         shots = self.store.sorted_shots()
 
-        # S1 should be 30 frames (fade_in=15 + fade_out=15)
+        # S1 should be 30 frames (show=15 + hide=15)
         s1 = shots[0]
         self.assertAlmostEqual(
             s1.end - s1.start, 30.0, msg="S1 must be 30 frames for both phases"
@@ -713,8 +713,8 @@ class TestBuildDurationEncompasses(MayaTkTestCase):
     def test_three_sequential_shots_ripple(self):
         """Three steps with varying durations chain correctly."""
         steps = [
-            _step("S1", objects=["a"], behaviors=["fade_in"]),  # 15 frames
-            _step("S2", objects={"x": ["fade_in"], "y": ["fade_out"]}),  # 30 frames
+            _step("S1", objects=["a"], behaviors=["show"]),  # 15 frames
+            _step("S2", objects={"x": ["show"], "y": ["hide"]}),  # 30 frames
             _step("S3", objects=["b", "c"]),  # no behaviors -> 30 fallback
         ]
 

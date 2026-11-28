@@ -333,7 +333,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         )
 
     def test_behavior_dual_keys_both_channels(self):
-        """apply_behavior with a fade_in template on an opacity object
+        """apply_behavior with the show template on an opacity object
         must key both opacity and visibility in the FBX.
 
         This tests the behavior auto-redirect: the YAML targets
@@ -344,8 +344,8 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
 
         RenderEffects.create(objects=[self.cube], mode="attribute")
 
-        # Apply the fade_in behavior (template targets 'visibility')
-        Behaviors.apply_behavior(self.cube, "fade_in", start=1, end=30)
+        # Apply the show behavior (its fade_in effect targets 'visibility')
+        Behaviors.apply_behavior(self.cube, "show", start=1, end=30)
 
         # Verify both channels are keyed in Maya
         opacity_keys = cmds.keyframe(self.cube, attribute="opacity", q=True, tc=True)
@@ -390,7 +390,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
             cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
         )
 
-        Behaviors.apply_behavior(self.cube, "fade_in", start=1, end=30)
+        Behaviors.apply_behavior(self.cube, "show", start=1, end=30)
 
         # Auto-promotion must have occurred
         self.assertTrue(

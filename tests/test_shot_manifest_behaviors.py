@@ -33,7 +33,7 @@ from mayatk.audio_utils._audio_utils import AudioUtils
 
 class BehaviorSpecTest(unittest.TestCase):
     def test_shipped_behaviors_validate_clean(self):
-        for name in ("fade_in", "fade_out", "set_clip"):
+        for name in ("show", "hide", "set_clip"):
             res = BehaviorSpec.validate(Behaviors.load_behavior(name))
             self.assertTrue(res.ok, f"{name}: errors={res.errors}")
 
@@ -56,13 +56,13 @@ class BehaviorSpecTest(unittest.TestCase):
 class BehaviorDiscoveryTest(unittest.TestCase):
     def test_list_includes_builtins(self):
         names = Behaviors.list_behaviors()
-        for n in ("fade_in", "fade_out", "set_clip"):
+        for n in ("show", "hide", "set_clip"):
             self.assertIn(n, names)
 
     def test_kind_filter(self):
         self.assertIn("set_clip", Behaviors.list_behaviors(kind="audio"))
-        self.assertNotIn("fade_in", Behaviors.list_behaviors(kind="audio"))
-        self.assertIn("fade_in", Behaviors.list_behaviors(kind="scene"))
+        self.assertNotIn("show", Behaviors.list_behaviors(kind="audio"))
+        self.assertIn("show", Behaviors.list_behaviors(kind="scene"))
 
     def test_search_path_override_is_single_tier(self):
         with tempfile.TemporaryDirectory() as d:
@@ -98,12 +98,12 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
             calls.append((obj, behavior, start, end))
 
         result = Behaviors.apply_to_shots(
-            [self._shot([{"name": "cube", "behavior": "fade_in"}])],
+            [self._shot([{"name": "cube", "behavior": "show"}])],
             apply_fn,
             exists_fn=lambda name: True,
             has_keys_fn=lambda name, s, e: False,
         )
-        self.assertEqual(calls, [("cube", "fade_in", 0, 30)])
+        self.assertEqual(calls, [("cube", "show", 0, 30)])
         self.assertEqual(len(result["applied"]), 1)
         self.assertEqual(result["failed"], [])
 
@@ -124,9 +124,9 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
                 self._shot(
                     [
                         {"name": "door", "behavior": "highlight"},
-                        {"name": "door", "behavior": "fade_out"},
-                        {"name": "lid", "behavior": "fade_in"},
-                        {"name": "lid", "behavior": "fade_out"},
+                        {"name": "door", "behavior": "hide"},
+                        {"name": "lid", "behavior": "show"},
+                        {"name": "lid", "behavior": "hide"},
                     ]
                 )
             ],
@@ -138,9 +138,9 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
             anchors,
             {
                 ("door", "highlight"): None,
-                ("door", "fade_out"): None,
-                ("lid", "fade_in"): 0.0,
-                ("lid", "fade_out"): 1.0,
+                ("door", "hide"): None,
+                ("lid", "show"): 0.0,
+                ("lid", "hide"): 1.0,
             },
         )
 
@@ -210,7 +210,7 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
 
         with self.assertRaises(TypeError) as ctx:
             Behaviors.apply_to_shots(
-                [self._shot([{"name": "cube", "behavior": "fade_in"}])],
+                [self._shot([{"name": "cube", "behavior": "show"}])],
                 lambda o, b, s, e: None,
                 exists_fn=exists_fn,
                 has_keys_fn=lambda name, s, e: False,
@@ -286,12 +286,12 @@ class RecipeRoundTripTest(MayaTkTestCase):
         self.assertEqual(self._keys("highlight"), self._pulse_plan())
 
     def test_a_behavior_the_doc_drops_takes_its_keys(self):
-        self._build(self._steps(("door", ["highlight", "fade_in"], "scene")))
+        self._build(self._steps(("door", ["highlight", "show"], "scene")))
         self.assertTrue(self._keys("highlight"))
         # The animator's key on the same channel is not the manifest's.
         cmds.setKeyframe(f"{self.door}.highlight", time=1000, value=0.5)
 
-        steps = self._steps(("door", ["fade_in"], "scene"))
+        steps = self._steps(("door", ["show"], "scene"))
         dropped = ShotManifest(self.store, disabled_behaviors=()).assess(steps)
         self.assertEqual(dropped[0].dropped_behaviors, [["door", "highlight"]])
         self.assertTrue(dropped[0].needs_build)
@@ -308,7 +308,7 @@ class RecipeRoundTripTest(MayaTkTestCase):
         a key at 1000, past the shot. Measured before: all but the fade read
         as unused (the keys of an object with a behavior were never read).
         Fixed: 2026-11-08"""
-        steps = self._steps(("door", ["fade_in"], "scene"))
+        steps = self._steps(("door", ["show"], "scene"))
         self._build(steps)
         for frame, value in ((0, 0.0), (130, 5.0), (1000, 5.0)):
             cmds.setKeyframe(f"{self.door}.translateX", time=frame, value=value)
@@ -325,16 +325,16 @@ class RecipeRoundTripTest(MayaTkTestCase):
 
         OpacityAttributeMode.create([self.door])
         cmds.setKeyframe(f"{self.door}.opacity", time=100, value=0.5)
-        steps = self._steps(("door", ["fade_in"], "scene"))
+        steps = self._steps(("door", ["show"], "scene"))
 
         _, beh, built = self._build(steps)
         self.assertEqual(
             [(r["object"], r["behavior"]) for r in beh["skipped"]],
-            [("door", "fade_in")],
+            [("door", "show")],
         )
         self.assertEqual(beh["applied"], [])
         self.assertEqual(self._keys("opacity"), [(100.0, 0.5)])
-        self.assertFalse(self.store.edit_ledger.authored(behavior="fade_in"))
+        self.assertFalse(self.store.edit_ledger.authored(behavior="show"))
         # Unverified over keys the animator owns: a conflict, not a fix.
         self.assertEqual(built[0].objects[0].status, "behavior_conflict")
 
@@ -360,9 +360,9 @@ class RecipeRoundTripTest(MayaTkTestCase):
 
 class PlacingHelpersTest(MayaTkTestCase):
     """A build makes the helper a placing row names in ``where`` where the
-    scene has none: a camera for a picture, a locator for a viewpoint or an
-    arrow, at ``ptk.ManifestPlacement``'s plain first pose, riding what it is
-    for.  The real task's viewpoints, its arrow and its pictures' cameras were
+    scene has none: a camera for a picture, a locator for a viewpoint or a
+    pointer's tip, at ``ptk.ManifestPlacement``'s plain first pose, riding what it is
+    for.  The real task's viewpoints, its pointer and its pictures' cameras were
     made by hand, each by a script of its own."""
 
     def setUp(self):
@@ -385,10 +385,10 @@ class PlacingHelpersTest(MayaTkTestCase):
     @staticmethod
     def _steps():
         rows = [
-            {"word": "teleport", "places": "stand", "assets": ["BODY"], "settings": {"where": "VIEW_A01"}},
-            {"word": "indicate", "places": "point", "assets": ["LATCH"], "settings": {"where": "ARROW_LATCH"}},
-            {"word": "pip", "places": "view", "assets": ["LATCH"], "settings": {"where": "CAM_A01"}},
-            {"word": "pip", "places": "view", "assets": ["NO_SUCH_PART"], "settings": {"where": "CAM_NONE"}},
+            {"word": "travel", "places": "stand", "assets": ["BODY"], "settings": {"where": "VIEW_A01"}},
+            {"word": "indicate", "places": "point", "assets": ["LATCH"], "settings": {"where": "POINT_LATCH"}},
+            {"word": "picture", "places": "view", "assets": ["LATCH"], "settings": {"where": "CAM_A01"}},
+            {"word": "picture", "places": "view", "assets": ["NO_SUCH_PART"], "settings": {"where": "CAM_NONE"}},
         ]
         return [BuilderStep("A01", "A", "t", "", rows=rows)]
 
@@ -405,7 +405,7 @@ class PlacingHelpersTest(MayaTkTestCase):
 
         mani = ShotManifest(self.store)
         placed = mani.place_helpers(self._steps())
-        self.assertEqual(placed["made"], ["VIEW_A01", "ARROW_LATCH", "CAM_A01"])
+        self.assertEqual(placed["made"], ["VIEW_A01", "POINT_LATCH", "CAM_A01"])
         self.assertEqual([name for name, _ in placed["skipped"]], ["CAM_NONE"], "a part the scene lacks: said, nothing made")
 
         # A viewpoint: a locator on the floor, the stand-off out of the delivery's middle... the body IS the middle, so +Z.
@@ -418,7 +418,7 @@ class PlacingHelpersTest(MayaTkTestCase):
         cmds.delete(view)
         cmds.xform(self.root, translation=(0, 24, 0))
         cmds.xform(cmds.polyCube(name="ROOM_FLOOR", width=1000, height=2, depth=1000)[0], translation=(0, -1, 0))
-        mani.place_helpers([BuilderStep("A02", "A", "t", "", rows=[{"word": "teleport", "places": "stand", "assets": ["BODY"], "settings": {"where": "VIEW_A02"}}])])
+        mani.place_helpers([BuilderStep("A02", "A", "t", "", rows=[{"word": "travel", "places": "stand", "assets": ["BODY"], "settings": {"where": "VIEW_A02"}}])])
         self.assertAlmostEqual(cmds.xform("VIEW_A02", query=True, worldSpace=True, translation=True)[1], 0.0, places=3,
                                msg="on the floor slab's top")
         cmds.delete("VIEW_A02", "ROOM_FLOOR")
@@ -429,15 +429,15 @@ class PlacingHelpersTest(MayaTkTestCase):
         self.assertAlmostEqual(at[2], 30.0 + ManifestPlacement.STAND_OFF * 100.0, delta=1.0, msg="1.5 m outside its front")
         self.assertLess(self._forward(view, (0, 0, 1))[2], -0.99, "its +Z, the way the user faces, turned to the cabinet")
 
-        # An arrow's tip: a locator by the latch, its +Z pointing at it, riding the latch. Not straight above it: the
-        # cabinet's face is closer than an arrow's room to turn, so it leans out toward the eyes.
-        arrow = cmds.ls("ARROW_LATCH", long=True)[0]
-        self.assertEqual(arrow, "|DELIVERY|LATCH|ARROW_LATCH")
-        tip = cmds.xform(arrow, query=True, worldSpace=True, translation=True)
+        # A pointer's tip: a locator by the latch, its +Z pointing at it, riding the latch. Not straight above it: the
+        # cabinet's face is closer than a pointer's room to turn, so it leans out toward the eyes.
+        pointer = cmds.ls("POINT_LATCH", long=True)[0]
+        self.assertEqual(pointer, "|DELIVERY|LATCH|POINT_LATCH")
+        tip = cmds.xform(pointer, query=True, worldSpace=True, translation=True)
         to = [c - t for c, t in zip((20.0, 110.0, 32.0), tip)]
         far = sum(x * x for x in to) ** 0.5
-        self.assertGreater(sum(a * b / far for a, b in zip(self._forward(arrow, (0, 0, 1)), to)), 0.999, "it points at the latch")
-        self.assertGreater(tip[2], 30.0 + ManifestPlacement.ARROW * 30.0, "clear of the cabinet's face by its room")
+        self.assertGreater(sum(a * b / far for a, b in zip(self._forward(pointer, (0, 0, 1)), to)), 0.999, "it points at the latch")
+        self.assertGreater(tip[2], 30.0 + ManifestPlacement.POINTER * 30.0, "clear of the cabinet's face by its room")
 
         # A picture's camera: looking at the latch from its outer side, far enough to frame it, with the picture's lens.
         cam = cmds.ls("CAM_A01", long=True)[0]
@@ -459,7 +459,7 @@ class PlacingHelpersTest(MayaTkTestCase):
         # A helper is the truth once made: moved by hand, a second build neither makes nor moves it.
         cmds.xform(cam, worldSpace=True, translation=(60.0, 120.0, 90.0))
         again = mani.place_helpers(self._steps())
-        self.assertEqual((again["made"], sorted(again["kept"])), ([], ["ARROW_LATCH", "CAM_A01", "VIEW_A01"]))
+        self.assertEqual((again["made"], sorted(again["kept"])), ([], ["POINT_LATCH", "CAM_A01", "VIEW_A01"]))
         self.assertEqual([round(x, 3) for x in cmds.xform(cam, query=True, worldSpace=True, translation=True)], [60.0, 120.0, 90.0])
 
     def test_a_helper_is_placed_as_the_scene_stands_at_its_steps_shot_and_rides_its_part(self):
@@ -469,7 +469,7 @@ class PlacingHelpersTest(MayaTkTestCase):
         self.store.define_shot("A01", 100, 200, metadata={"step": "A01"})
         cmds.currentTime(0)
         mani = ShotManifest(self.store)
-        rows = [{"word": "pip", "places": "view", "assets": ["LATCH"], "settings": {"where": "CAM_A01"}}]
+        rows = [{"word": "picture", "places": "view", "assets": ["LATCH"], "settings": {"where": "CAM_A01"}}]
         placed = mani.place_helpers([BuilderStep("A01", "A", "t", "", rows=rows)])
         self.assertEqual(placed["made"], ["CAM_A01"])
         self.assertEqual(cmds.currentTime(query=True), 0.0, "the playhead is left where it was")
@@ -500,7 +500,7 @@ class PlacingHelpersTest(MayaTkTestCase):
                     cmds.parent(made, root)
                 reach = cmds.curve(degree=1, point=[(-300 * scale, 0, -600 * scale), (300 * scale, 250 * scale, -60 * scale)])
                 cmds.parent(reach, root)  # a curve: it spans the delivery's bounds, and no ray stops at it
-                rows = [{"word": "pip", "places": "view", "assets": ["DIALS"], "settings": {"where": "CAM_D01"}}]
+                rows = [{"word": "picture", "places": "view", "assets": ["DIALS"], "settings": {"where": "CAM_D01"}}]
                 made = ShotManifest(ShotStore()).place_helpers([BuilderStep("D01", "D", "t", "", rows=rows)])["made"]
                 self.assertEqual(made, ["CAM_D01"])
                 eye = cmds.xform("CAM_D01", query=True, worldSpace=True, translation=True)
@@ -518,7 +518,7 @@ class PlacingHelpersTest(MayaTkTestCase):
         both place it by its world position."""
         mark = cmds.group(empty=True, name="MARK", parent=self.root)
         cmds.xform(mark, worldSpace=True, translation=(20.0, 150.0, 32.0))
-        rows = [{"word": "pip", "places": "view", "assets": ["MARK"], "settings": {"where": "CAM_MARK"}}]
+        rows = [{"word": "picture", "places": "view", "assets": ["MARK"], "settings": {"where": "CAM_MARK"}}]
         placed = ShotManifest(self.store).place_helpers([BuilderStep("A01", "A", "t", "", rows=rows)])
         self.assertEqual(placed["made"], ["CAM_MARK"])
         self.assertEqual(cmds.ls("CAM_MARK", long=True), ["|DELIVERY|MARK|CAM_MARK"])
@@ -535,7 +535,7 @@ class PlacingHelpersTest(MayaTkTestCase):
         for linear, size in (("cm", 10.0), ("m", 0.1)):
             with self.subTest(linear):
                 cmds.currentUnit(linear=linear)
-                rows = [{"word": "teleport", "places": "stand", "assets": ["BODY"], "settings": {"where": "VIEW_" + linear}}]
+                rows = [{"word": "travel", "places": "stand", "assets": ["BODY"], "settings": {"where": "VIEW_" + linear}}]
                 ShotManifest(ShotStore()).place_helpers([BuilderStep("A01", "A", "t", "", rows=rows)])
                 shape = cmds.listRelatives("VIEW_" + linear, shapes=True, fullPath=True)[0]
                 self.assertEqual(cmds.nodeType(shape), "locator")
@@ -554,7 +554,7 @@ class PlacingHelpersTest(MayaTkTestCase):
         self.assertEqual(cmds.ls(selection=True, long=True), ["|DELIVERY|LATCH"], "the user's selection, kept")
         top = set(cmds.ls(assemblies=True, long=True))
         self.assertEqual(top, {"|DELIVERY", "|persp", "|top", "|front", "|side"}, "no stray node")
-        rows = [{"word": "pip", "places": "view", "assets": ["BODY"], "settings": {"where": "CAM_FAIL"}}]
+        rows = [{"word": "picture", "places": "view", "assets": ["BODY"], "settings": {"where": "CAM_FAIL"}}]
         with mock.patch.object(cmds, "aimConstraint", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 mani.place_helpers([BuilderStep("A02", "A", "t", "", rows=rows)])
@@ -683,7 +683,7 @@ class MemberResolutionTest(MayaTkTestCase):
         step = BuilderStep(
             step_id="A01", section="A", section_title="Sec", description="d"
         )
-        step.objects.append(BuilderObject(name=name, behaviors=["fade_in"]))
+        step.objects.append(BuilderObject(name=name, behaviors=["show"]))
         return ShotManifest(self.store, disabled_behaviors=()).sync([step], ranges=self.RANGE)
 
     def test_a_name_is_found_exactly_then_in_a_namespace(self):

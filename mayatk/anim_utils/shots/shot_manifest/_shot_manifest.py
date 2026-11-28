@@ -16,8 +16,8 @@ engine's :class:`~pythontk.ShotManifest` and overrides only its scene hooks:
 - ``_discover_scene_objects`` / ``_filter_to_animated`` → animCurve walks;
 - assess seams (``_object_exists`` / ``_verify_behavior`` / ``_keyframe_range``
   / ``_audio_exists``) → ``cmds`` / audio-track queries;
-- ``_make_helper`` → the camera (a picture's) or locator (a viewpoint's, an
-  arrow's) a placing row names in ``where``, made where the scene has none, at
+- ``_make_helper`` → the camera (a picture's) or locator (a viewpoint's, a
+  pointer's) a placing row names in ``where``, made where the scene has none, at
   ``ptk.ManifestPlacement``'s plain first pose;
 - ``_ensure_state`` → the Emissive Groups model: the group a row's Target
   wears gets the tool's default states where it has none, so a ``set`` row's
@@ -367,7 +367,7 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
         return EmissiveGroups.ensure_state(EmissiveGroups.groups_on(under), state)
 
     def _make_helper(self, name: str, purpose: str, target: str, frame: Optional[float]) -> Optional[str]:
-        """A camera (a picture's) or a locator (a viewpoint's, an arrow's) named
+        """A camera (a picture's) or a locator (a viewpoint's, a pointer's) named
         *name*, made by *target* as the scene stands at *frame*.
 
         Its first pose is ``ptk.ManifestPlacement.first_pose`` of the target's
@@ -438,7 +438,7 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
                 made = RigUtils.create_locator(name=name, size=0.1 * unit)  # 10 cm: a distance, in the scene's unit
                 forward = (0.0, 0.0, 1.0)
             _cmds.xform(made, worldSpace=True, translation=position)
-            # Its forward to the aim; where that is straight up or down (an arrow over its part), its up lies level.
+            # Its forward to the aim; where that is straight up or down (a pointer over its part), its up lies level.
             level = [0.0, 0.0, 0.0]
             level[up] = 1.0
             if all(abs(aim[i] - position[i]) < 1e-9 for i in range(3) if i != up):

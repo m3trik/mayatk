@@ -1578,7 +1578,7 @@ class TestScaleKeysClaimHooks(MayaTkTestCase):
                 cmds.setKeyframe(obj, attribute="translateX", time=t, value=v)
         crv2 = cmds.keyframe(c2, attribute="translateX", query=True, name=True)[0]
         store = mtk.ShotStore()
-        store.edit_ledger.record_authored(crv2, 25.0, 0, "fade_out", c2)
+        store.edit_ledger.record_authored(crv2, 25.0, 0, "hide", c2)
 
         ScaleKeys.scale_keys(
             objects=[c1, c2],

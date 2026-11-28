@@ -764,7 +764,7 @@ class TestStaggerClaimHooks(MayaTkTestCase):
                 cmds.setKeyframe(obj, attribute="translateX", time=t, value=t)
         crv_b = cmds.keyframe(b, attribute="translateX", query=True, name=True)[0]
         store = mtk.ShotStore()
-        store.edit_ledger.record_authored(crv_b, 10.0, 0, "fade_out", b)
+        store.edit_ledger.record_authored(crv_b, 10.0, 0, "hide", b)
         cmds.selectKey(clear=True)
 
         StaggerKeys.stagger_keys([a, b], on_move=store.remap_moved([a, b]))
@@ -807,8 +807,8 @@ class TestStaggerClaimHooks(MayaTkTestCase):
             cmds.setKeyframe(cube, attribute="translateX", time=t, value=v)
         crv = cmds.keyframe(cube, attribute="translateX", query=True, name=True)[0]
         store = mtk.ShotStore()
-        store.edit_ledger.record_authored(crv, 10.0, 0, "fade_in", cube)
-        store.edit_ledger.record_authored(crv, 30.0, 0, "fade_out", cube)
+        store.edit_ledger.record_authored(crv, 10.0, 0, "show", cube)
+        store.edit_ledger.record_authored(crv, 30.0, 0, "hide", cube)
         cmds.selectKey(clear=True)
         on_replace, on_move = store.claim_hooks([cube])
 
@@ -821,7 +821,7 @@ class TestStaggerClaimHooks(MayaTkTestCase):
         )
 
         self.assertEqual(store.edit_ledger.authored(), [(crv, 20.0)])
-        self.assertEqual(store.edit_ledger.authored(behavior="fade_in"), [(crv, 20.0)])
+        self.assertEqual(store.edit_ledger.authored(behavior="show"), [(crv, 20.0)])
 
 
 if __name__ == "__main__":

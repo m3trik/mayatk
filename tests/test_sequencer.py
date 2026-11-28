@@ -264,15 +264,15 @@ class TestLoadBehavior(unittest.TestCase):
     goes (the scene's recipe keys it), and reads as one visibility phase to
     every reader that sizes or verifies it (``Behaviors.keyed``)."""
 
-    def test_load_fade_in(self):
-        t = Behaviors.load_behavior("fade_in")
+    def test_load_show(self):
+        t = Behaviors.load_behavior("show")
         self.assertEqual((t["effect"], t["place"]), ("fade_in", "start"))
         vis = Behaviors.keyed(t)["attributes"]["visibility"]
         self.assertIn("in", vis)
         self.assertEqual(vis["in"]["values"], [0.0, 1.0])
 
-    def test_load_fade_out(self):
-        t = Behaviors.load_behavior("fade_out")
+    def test_load_hide(self):
+        t = Behaviors.load_behavior("hide")
         self.assertEqual((t["effect"], t["place"]), ("fade_out", "end"))
         vis = Behaviors.keyed(t)["attributes"]["visibility"]
         self.assertIn("out", vis)
@@ -492,7 +492,7 @@ class TestSequencerMaya(unittest.TestCase):
     def test_apply_behavior_sets_keys(self):
         """apply_behavior should create keyframes on the object."""
         cube = self._create_animated_cube("obj", {0: 0, 100: 10})
-        Behaviors.apply_behavior(str(cube), "fade_in", 0, 100, attrs=["visibility"])
+        Behaviors.apply_behavior(str(cube), "show", 0, 100, attrs=["visibility"])
 
         # Visibility should now have keyframes
         vis_keys = cmds.keyframe(cube, attribute="visibility", query=True)
@@ -1304,18 +1304,18 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
 class TestDetectBehaviors(unittest.TestCase):
     """Test behavior auto-detection from step-contents text."""
 
-    def test_fade_in(self):
-        self.assertEqual(ManifestModel.detect_behaviors("Arrow fades in."), ["fade_in"])
+    def test_show(self):
+        self.assertEqual(ManifestModel.detect_behaviors("Arrow fades in."), ["show"])
 
-    def test_fade_out(self):
+    def test_hide(self):
         self.assertEqual(
-            ManifestModel.detect_behaviors("Checklist fades out."), ["fade_out"]
+            ManifestModel.detect_behaviors("Checklist fades out."), ["hide"]
         )
 
-    def test_fade_in_and_out(self):
+    def test_show_and_hide(self):
         self.assertEqual(
             ManifestModel.detect_behaviors("Arrow fades in, then fades out."),
-            ["fade_in", "fade_out"],
+            ["show", "hide"],
         )
 
     def test_no_behavior(self):
@@ -1402,13 +1402,13 @@ class TestParseCSV(unittest.TestCase):
         """Continuation-row objects inherit the parent step's behavior."""
         steps = ManifestModel.parse_csv(self._csv_path)
         a01 = steps[0]
-        self.assertEqual(a01.objects[0].behaviors, ["fade_in"])
-        self.assertEqual(a01.objects[1].behaviors, ["fade_in"])  # inherited
+        self.assertEqual(a01.objects[0].behaviors, ["show"])
+        self.assertEqual(a01.objects[1].behaviors, ["show"])  # inherited
 
     def test_behavior_detected(self):
         steps = ManifestModel.parse_csv(self._csv_path)
-        self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
-        self.assertEqual(steps[1].objects[0].behaviors, ["fade_out"])
+        self.assertEqual(steps[0].objects[0].behaviors, ["show"])
+        self.assertEqual(steps[1].objects[0].behaviors, ["hide"])
 
     def test_na_objects_excluded(self):
         steps = ManifestModel.parse_csv(self._csv_path)
@@ -1490,9 +1490,9 @@ class TestParseCSV(unittest.TestCase):
             self.assertEqual(len(steps), 2)
             self.assertEqual(steps[0].objects[0].name, "ARROW_01")
             self.assertEqual(steps[0].objects[1].name, "ARROW_02")
-            self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
+            self.assertEqual(steps[0].objects[0].behaviors, ["show"])
             self.assertEqual(steps[1].objects[0].name, "CHECK_01")
-            self.assertEqual(steps[1].objects[0].behaviors, ["fade_out"])
+            self.assertEqual(steps[1].objects[0].behaviors, ["hide"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1568,8 +1568,8 @@ class TestShotManifestPure(unittest.TestCase):
                 "SEC A",
                 "Arrow fades in.",
                 [
-                    BuilderObject("ARROW_01", ["fade_in"]),
-                    BuilderObject("ARROW_02", ["fade_in"]),
+                    BuilderObject("ARROW_01", ["show"]),
+                    BuilderObject("ARROW_02", ["show"]),
                 ],
             ),
             BuilderStep(
@@ -1578,7 +1578,7 @@ class TestShotManifestPure(unittest.TestCase):
                 "SEC A",
                 "Checklist fades out.",
                 [
-                    BuilderObject("CHECK_01", ["fade_out"]),
+                    BuilderObject("CHECK_01", ["hide"]),
                 ],
             ),
         ]
@@ -1592,7 +1592,7 @@ class TestShotManifestPure(unittest.TestCase):
         self.assertEqual(len(store.shots), 2)
         self.assertEqual(store.shots[0].name, "A01")
         self.assertAlmostEqual(store.shots[0].start, 1)
-        # fade_in = 15f content-driven duration
+        # show = 15f content-driven duration
         self.assertAlmostEqual(store.shots[0].end, 16)
         self.assertEqual(actions["A01"], "created")
         self.assertEqual(actions["A02"], "created")
@@ -1630,8 +1630,8 @@ class TestShotManifestAssess(unittest.TestCase):
                 "SEC A",
                 "Arrow fades in.",
                 [
-                    BuilderObject("ARROW_01", ["fade_in"]),
-                    BuilderObject("ARROW_02", ["fade_in"]),
+                    BuilderObject("ARROW_01", ["show"]),
+                    BuilderObject("ARROW_02", ["show"]),
                 ],
             ),
             BuilderStep(
@@ -1639,7 +1639,7 @@ class TestShotManifestAssess(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Checklist fades out.",
-                [BuilderObject("CHECK_01", ["fade_out"])],
+                [BuilderObject("CHECK_01", ["hide"])],
             ),
         ]
 
@@ -1826,23 +1826,23 @@ class TestBehaviorYAMLAnchors(unittest.TestCase):
     """The shipped fades key with explicit anchors (``Behaviors.keyed``: the
     templates name their effect and placement; the recipe states the phase)."""
 
-    def test_fade_in_has_anchor(self):
-        vis = Behaviors.keyed("fade_in")["attributes"]["visibility"]
+    def test_show_has_anchor(self):
+        vis = Behaviors.keyed("show")["attributes"]["visibility"]
         self.assertEqual(vis["in"]["anchor"], "start")
 
-    def test_fade_out_has_anchor(self):
-        vis = Behaviors.keyed("fade_out")["attributes"]["visibility"]
+    def test_hide_has_anchor(self):
+        vis = Behaviors.keyed("hide")["attributes"]["visibility"]
         self.assertEqual(vis["out"]["anchor"], "end")
 
-    def test_fade_in_template_exists(self):
-        """fade_in keys only the 'in' phase."""
-        vis = Behaviors.keyed("fade_in")["attributes"]["visibility"]
+    def test_show_template_exists(self):
+        """show keys only the 'in' phase."""
+        vis = Behaviors.keyed("show")["attributes"]["visibility"]
         self.assertIn("in", vis)
         self.assertNotIn("out", vis)
 
-    def test_fade_out_template_exists(self):
-        """fade_out keys only the 'out' phase."""
-        vis = Behaviors.keyed("fade_out")["attributes"]["visibility"]
+    def test_hide_template_exists(self):
+        """hide keys only the 'out' phase."""
+        vis = Behaviors.keyed("hide")["attributes"]["visibility"]
         self.assertNotIn("in", vis)
         self.assertIn("out", vis)
 
@@ -1850,15 +1850,15 @@ class TestBehaviorYAMLAnchors(unittest.TestCase):
 class TestContentDrivenDuration(unittest.TestCase):
     """Test compute_duration and content-driven layout."""
 
-    def test_fade_in_duration(self):
-        """Step with fade_in objects: duration = 15f (template phase)."""
-        entries = [BuilderObject("OBJ", ["fade_in"])]
+    def test_show_duration(self):
+        """Step with show objects: duration = 15f (template phase)."""
+        entries = [BuilderObject("OBJ", ["show"])]
         dur = Behaviors.compute_duration(entries, fallback=30)
         self.assertEqual(dur, 15)
 
-    def test_fade_in_and_out_duration(self):
-        """Step with fade_in + fade_out: duration = 15 + 15 = 30f."""
-        entries = [BuilderObject("OBJ", ["fade_in", "fade_out"])]
+    def test_show_and_hide_duration(self):
+        """Step with show + hide: duration = 15 + 15 = 30f."""
+        entries = [BuilderObject("OBJ", ["show", "hide"])]
         dur = Behaviors.compute_duration(entries, fallback=30)
         self.assertEqual(dur, 30)
 
@@ -1875,10 +1875,10 @@ class TestContentDrivenDuration(unittest.TestCase):
         self.assertEqual(dur, 50)
 
     def test_mixed_behaviors_takes_max(self):
-        """Max across objects: fade_in+fade_out (30) > fade_in (15)."""
+        """Max across objects: show+hide (30) > show (15)."""
         entries = [
-            BuilderObject("A", ["fade_in"]),
-            BuilderObject("B", ["fade_in", "fade_out"]),
+            BuilderObject("A", ["show"]),
+            BuilderObject("B", ["show", "hide"]),
         ]
         dur = Behaviors.compute_duration(entries, fallback=30)
         self.assertEqual(dur, 30)
@@ -1891,16 +1891,16 @@ class TestContentDrivenDuration(unittest.TestCase):
         ``extend_only`` which floors to 200f.
         """
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("X", ["fade_in"])]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("X", ["show"])]),
             BuilderStep(
-                "A02", "A", "", "", [BuilderObject("Y", ["fade_in", "fade_out"])]
+                "A02", "A", "", "", [BuilderObject("Y", ["show", "hide"])]
             ),
         ]
         store = ShotStore()
         builder = ShotManifest(store)
         builder.update(steps, fit_mode="fit_contents")
         shots = store.sorted_shots()
-        # A01: fade_in=15f, A02: fade_in+fade_out=30f
+        # A01: show=15f, A02: show+hide=30f
         self.assertAlmostEqual(shots[0].end - shots[0].start, 15)
         self.assertAlmostEqual(shots[1].end - shots[1].start, 30)
 
@@ -1915,14 +1915,14 @@ class TestSelectiveRebuild(unittest.TestCase):
                 "A",
                 "SEC A",
                 "fades in",
-                [BuilderObject("ARROW_01", ["fade_in"])],
+                [BuilderObject("ARROW_01", ["show"])],
             ),
             BuilderStep(
                 "A02",
                 "A",
                 "SEC A",
                 "fades out",
-                [BuilderObject("CHECK_01", ["fade_out"])],
+                [BuilderObject("CHECK_01", ["hide"])],
             ),
         ]
 
@@ -1951,7 +1951,7 @@ class TestSelectiveRebuild(unittest.TestCase):
         steps = self._make_steps()
         builder.update(steps)
         # Add a new object to A01
-        steps[0].objects.append(BuilderObject("ARROW_02", ["fade_in"]))
+        steps[0].objects.append(BuilderObject("ARROW_02", ["show"]))
         actions = builder.update(steps)
         self.assertEqual(actions["A01"], "patched")
         # Shot should now have both objects
@@ -1999,7 +1999,7 @@ class TestAssessUserAnimated(unittest.TestCase):
                 "static",
                 [
                     BuilderObject("BOX_01"),  # no behavior = user-animated
-                    BuilderObject("ARROW_01", ["fade_in"]),
+                    BuilderObject("ARROW_01", ["show"]),
                 ],
             ),
         ]
@@ -2041,7 +2041,7 @@ class TestAssessUserAnimated(unittest.TestCase):
         store.define_shot(name="A01", start=1, end=16, objects=["ARROW_01"])
         builder = ShotManifest(store)
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("ARROW_01", ["fade_in"])])
+            BuilderStep("A01", "A", "", "", [BuilderObject("ARROW_01", ["show"])])
         ]
         results = builder.assess(
             steps,
@@ -6157,15 +6157,15 @@ class TestReconciliation(unittest.TestCase):
         store = ShotStore()
         builder = ShotManifest(store)
         steps_v1 = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
-            BuilderStep("A02", "A", "", "", [BuilderObject("OBJ2", ["fade_out"])]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["show"])]),
+            BuilderStep("A02", "A", "", "", [BuilderObject("OBJ2", ["hide"])]),
         ]
         builder.update(steps_v1)
         self.assertEqual(len(store.shots), 2)
 
         # V2 of CSV removes A02
         steps_v2 = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["show"])]),
         ]
         actions = builder.update(steps_v2)
         self.assertEqual(actions["A01"], "skipped")
@@ -6181,7 +6181,7 @@ class TestReconciliation(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Arrow fades in.",
-                [BuilderObject("ARROW_01", ["fade_in"])],
+                [BuilderObject("ARROW_01", ["show"])],
             ),
         ]
         builder.update(steps)
@@ -6189,7 +6189,7 @@ class TestReconciliation(unittest.TestCase):
         self.assertIn("section", shot.metadata)
         self.assertEqual(shot.metadata["section"], "A")
         self.assertIn("behaviors", shot.metadata)
-        self.assertEqual(shot.metadata["behaviors"][0]["behavior"], "fade_in")
+        self.assertEqual(shot.metadata["behaviors"][0]["behavior"], "show")
 
     def test_skipped_shot_refreshes_metadata(self):
         """Metadata should be refreshed even when a shot is skipped."""
@@ -6201,7 +6201,7 @@ class TestReconciliation(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Original content.",
-                [BuilderObject("OBJ1", ["fade_in"])],
+                [BuilderObject("OBJ1", ["show"])],
             ),
         ]
         builder.update(steps_v1)
@@ -6214,7 +6214,7 @@ class TestReconciliation(unittest.TestCase):
                 "A",
                 "SEC A",
                 "Updated content.",
-                [BuilderObject("OBJ1", ["fade_in"])],
+                [BuilderObject("OBJ1", ["show"])],
             ),
         ]
         actions = builder.update(steps_v2)
@@ -6237,7 +6237,7 @@ class TestLockedAssess(unittest.TestCase):
         )
         builder = ShotManifest(store)
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["show"])]),
         ]
         call_log = []
         results = builder.assess(
@@ -6262,7 +6262,7 @@ class TestLockedAssess(unittest.TestCase):
         )
         builder = ShotManifest(store)
         steps = [
-            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["fade_in"])]),
+            BuilderStep("A01", "A", "", "", [BuilderObject("OBJ1", ["show"])]),
         ]
         results = builder.assess(
             steps,
@@ -6382,7 +6382,7 @@ class TestApplyBehaviors(unittest.TestCase):
             end=16,
             objects=["ARROW_01"],
             metadata={
-                "behaviors": [{"name": "ARROW_01", "behavior": "fade_in"}],
+                "behaviors": [{"name": "ARROW_01", "behavior": "show"}],
             },
         )
 
@@ -6414,7 +6414,7 @@ class TestApplyBehaviors(unittest.TestCase):
             end=16,
             objects=["ARROW_01"],
             metadata={
-                "behaviors": [{"name": "ARROW_01", "behavior": "fade_in"}],
+                "behaviors": [{"name": "ARROW_01", "behavior": "show"}],
             },
         )
 
@@ -6440,7 +6440,7 @@ class TestApplyBehaviors(unittest.TestCase):
             end=16,
             objects=["ARROW_01"],
             metadata={
-                "behaviors": [{"name": "ARROW_01", "behavior": "fade_in"}],
+                "behaviors": [{"name": "ARROW_01", "behavior": "show"}],
             },
             locked=True,
         )
@@ -6468,7 +6468,7 @@ class TestApplyBehaviors(unittest.TestCase):
             end=16,
             objects=["ARROW_01"],
             metadata={
-                "behaviors": [{"name": "ARROW_01", "behavior": "fade_in"}],
+                "behaviors": [{"name": "ARROW_01", "behavior": "show"}],
             },
         )
 
@@ -6509,7 +6509,7 @@ class TestApplyBehaviors(unittest.TestCase):
             end=16,
             objects=["OBJ"],
             metadata={
-                "behaviors": [{"name": "OBJ", "behavior": "fade_in"}],
+                "behaviors": [{"name": "OBJ", "behavior": "show"}],
             },
         )
         with self.assertRaises(TypeError):
@@ -6532,7 +6532,7 @@ class TestApplyBehaviors(unittest.TestCase):
             end=100,
             objects=["OBJ"],
             metadata={
-                "behaviors": [{"name": "OBJ", "behavior": "fade_in"}],
+                "behaviors": [{"name": "OBJ", "behavior": "show"}],
             },
         )
         mock_apply = MagicMock()
@@ -7105,7 +7105,7 @@ class TestColumnMap(unittest.TestCase):
             self.assertEqual(steps[0].audio, "Welcome to training.")
             self.assertEqual(steps[0].description, "Arrow fades in.")
             # Behavior detection still from description
-            self.assertEqual(steps[0].objects[0].behaviors, ["fade_in"])
+            self.assertEqual(steps[0].objects[0].behaviors, ["show"])
 
             # A02: display_text = description ("N/A")
             self.assertEqual(steps[1].display_text, "N/A")
@@ -9029,7 +9029,7 @@ class TestTheStoreFollowsMayasUndo(unittest.TestCase):
             cmds.setKeyframe(self.loc, at="translateX", t=t, v=float(t))
         self.crv = cmds.keyframe(self.loc, at="translateX", q=True, name=True)[0]
         for t in (3.0, 10.0):
-            self.store.edit_ledger.record_authored(self.crv, t, 0, "fade_in", self.loc)
+            self.store.edit_ledger.record_authored(self.crv, t, 0, "show", self.loc)
         cmds.select(self.loc, replace=True)
 
     def _claims(self):
@@ -11440,7 +11440,7 @@ class TestLandingOnOccupiedFrames(unittest.TestCase):
         obj = self._make([(0, 0.0), (10, 5.0), (20, 9.0)])
         crv = self._curve(obj)
         led = ptk.ShotEditLedger()
-        led.record_authored(crv, 10.0, 0, "fade_in", obj, "stamp")
+        led.record_authored(crv, 10.0, 0, "show", obj, "stamp")
         led.record_step(crv, 10.0, "spline", "spline")
 
         ShotSequencer.move_curve_keys(crv, [0.0, 20.0], 10.0, ledger=led)
@@ -11457,7 +11457,7 @@ class TestLandingOnOccupiedFrames(unittest.TestCase):
         obj = self._make([(0, 0.0), (10, 5.0), (20, 9.0)])
         crv = self._curve(obj)
         seq = ShotSequencer()
-        seq.ledger.record_authored(crv, 10.0, 0, "fade_in", obj, "stamp")
+        seq.ledger.record_authored(crv, 10.0, 0, "show", obj, "stamp")
         seq.ledger.record_step(crv, 10.0, "spline", "spline")
 
         seq.move_stepped_keys(obj, 20.0, 10.0, attr_name="translateX")
